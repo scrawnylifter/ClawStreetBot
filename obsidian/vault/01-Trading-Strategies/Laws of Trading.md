@@ -28,7 +28,7 @@ No more than 20% of capital in any single position to start. Acknowledged: reali
 
 ## Law 5: No Short-Dated Options
 
-I don't play anything with an expiration shorter than 3 months. Most of my call options are between 3 to 6 months out. A couple over a year out. This also means **never touch 0DTE**. I also don't play earnings.
+Nothing under 30 DTE — theta decay kills anything shorter. Most of my call options are between 1 to 6 months out. A couple over a year out. This also means **never touch 0DTE**. I also don't play earnings. 90 DTE is fine but the premiums are steep — 30+ DTE balances cost vs. time.
 
 ## Law 6: Know the Difference Between Luck and Skill
 
@@ -54,7 +54,7 @@ These laws translate into hard constraints in the trading system:
 | Law 2 | If position P&L variance triggers emotional threshold, auto-suggest size reduction |
 | Law 3 | `max_position_size = 0.20 * portfolio_value` — hard cap, no override |
 | Law 4 | Auto-generate take-profit orders at 30% and 50% gain levels (1/3 each, let remainder ride) |
-| Law 5 | `min_dte = 90` — hard filter on all option scans, reject any entry < 90 DTE |
+| Law 5 | `min_dte = 30` — hard filter on all option scans, reject any entry < 30 DTE |
 | Law 6 | Track win rate vs. expected return — flag when performance exceeds statistical expectation |
 | Law 7 | Never enter a trade outside defined entry criteria — no "close enough" setups |
 | Law 8 | All trade entries must include a research record (thesis, data sources, Greeks analysis for options) |
