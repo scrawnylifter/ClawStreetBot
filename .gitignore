@@ -5,6 +5,9 @@ obsidian/config/
 .env
 .env.*
 !.env.*.example
+
+# Docker volumes (persistent DB data — managed by Docker)
+db/data/
 *.key
 *.pem
 *.p12
