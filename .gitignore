@@ -1,0 +1,56 @@
+# Secrets & credentials
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+secrets.yaml
+secrets.yml
+.token
+
+# API keys / tokens
+*api_key*
+*apikey*
+*access_token*
+*secret_key*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+.venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# OS
+Thumbs.db
