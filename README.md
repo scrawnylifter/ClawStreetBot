@@ -28,25 +28,14 @@ Autonomous stock screening, alerts, and trading.
 └──────────┴───────────┴──────────┴──────────┴────────────┘
 ```
 
-## Watchlist (15 stocks)
+## Watchlist
 
-| Symbol | Name | Sector | Industry |
-|--------|------|--------|----------|
-| NVDA | NVIDIA | Technology | Semiconductors |
-| AMD | AMD | Technology | Semiconductors |
-| MU | Micron | Technology | Semiconductors |
-| WDC | Western Digital | Technology | Data Storage |
-| STX | Seagate | Technology | Data Storage |
-| APLD | Applied Digital | Technology | Data Centers / Cloud |
-| IREN | IREN Limited | Technology | Data Centers / Cloud |
-| NBIS | Nebius Group | Technology | Data Centers / Cloud |
-| CIFR | Cipher Digital | Technology | Data Centers / Cloud |
-| RDDT | Reddit | Technology | Social Media |
-| SERV | Serve Robotics | Technology | Robotics |
-| RKLB | Rocket Lab | Industrials | Aerospace & Defense |
-| ASTS | AST SpaceMobile | Comm Services | Satellite |
-| OKLO | Oklo | Energy | Nuclear |
-| NVO | Novo-Nordisk | Healthcare | Pharmaceuticals |
+ClawStreetBot tracks a configurable watchlist stored in both Alpaca and Postgres (with sector/industry tags for heat maps). Run the setup script and add your own picks:
+
+```bash
+# Edit SYMBOLS in scripts/setup_watchlist.py, then:
+python scripts/setup_watchlist.py
+```
 
 ## Databases
 
