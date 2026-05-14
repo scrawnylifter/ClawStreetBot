@@ -8,23 +8,23 @@ tags: [watchlist, mOC]
 
 ## Current Holdings (15 stocks)
 
-| Symbol | Name | Exchange | Added |
-|--------|------|----------|-------|
-| WDC | Western Digital Corporation | NASDAQ | 2026-05-14 |
-| IREN | IREN Limited (Bitcoin mining) | NASDAQ | 2026-05-14 |
-| APLD | Applied Digital Corporation | NASDAQ | 2026-05-14 |
-| SERV | Serve Robotics Inc. | NASDAQ | 2026-05-14 |
-| RKLB | Rocket Lab Corporation | NASDAQ | 2026-05-14 |
-| ASTS | AST SpaceMobile Inc. | NASDAQ | 2026-05-14 |
-| CIFR | Cipher Digital Inc. | NASDAQ | 2026-05-14 |
-| NVDA | NVIDIA Corporation | NASDAQ | 2026-05-14 |
-| AMD | Advanced Micro Devices | NASDAQ | 2026-05-14 |
-| NBIS | Nebius Group N.V. | NASDAQ | 2026-05-14 |
-| RDDT | Reddit, Inc. | NYSE | 2026-05-14 |
-| OKLO | Oklo Inc. (nuclear energy) | NYSE | 2026-05-14 |
-| NVO | Novo-Nordisk A/S (GLP-1 drugs) | NYSE | 2026-05-14 |
-| MU | Micron Technology | NASDAQ | 2026-05-14 |
-| STX | Seagate Technology Holdings | NASDAQ | 2026-05-14 |
+| Symbol | Name | Sector | Industry | Exchange |
+|--------|------|--------|----------|----------|
+| NVDA | NVIDIA Corporation | Technology | Semiconductors | NASDAQ |
+| AMD | Advanced Micro Devices | Technology | Semiconductors | NASDAQ |
+| MU | Micron Technology | Technology | Semiconductors | NASDAQ |
+| WDC | Western Digital | Technology | Data Storage | NASDAQ |
+| STX | Seagate Technology | Technology | Data Storage | NASDAQ |
+| APLD | Applied Digital | Technology | Data Centers / Cloud | NASDAQ |
+| IREN | IREN Limited | Technology | Data Centers / Cloud | NASDAQ |
+| NBIS | Nebius Group | Technology | Data Centers / Cloud | NASDAQ |
+| CIFR | Cipher Digital | Technology | Data Centers / Cloud | NASDAQ |
+| RDDT | Reddit | Technology | Social Media | NYSE |
+| SERV | Serve Robotics | Technology | Robotics | NASDAQ |
+| RKLB | Rocket Lab | Industrials | Aerospace and Defense | NASDAQ |
+| ASTS | AST SpaceMobile | Communication Services | Satellite | NASDAQ |
+| OKLO | Oklo | Energy | Nuclear | NYSE |
+| NVO | Novo-Nordisk | Healthcare | Pharmaceuticals | NYSE |
 
 ## Sector Breakdown
 
