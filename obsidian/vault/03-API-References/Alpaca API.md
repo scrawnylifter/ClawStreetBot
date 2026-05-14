@@ -266,3 +266,15 @@ print(f"Market open: {clock.is_open}")
 - [[Alpaca Data Pipeline]] — Our ingestion scripts
 - [[Trading Strategies]] — Strategy implementation
 - [[Risk Framework]] — Position sizing and limits
+
+## API Quirks & Gotchas
+
+These are things we discovered that weren't obvious from the docs:
+
+- **NewsRequest.symbols** takes a **string**, not a list. Use `symbols="AAPL"` not `symbols=["AAPL"]`
+- **Snapshot attributes**: Use `previous_daily_bar` (not `prev_daily_bar`), `daily_bar`, `latest_trade`, `latest_quote`
+- **NewsClient** returns a `NewsSet` — access articles via `result.data.get("news", [])`
+- **DataFeed.IEX** is the free tier (15-min delayed). Use `DataFeed.SIP` for real-time (paid)
+- **Pydantic warning** on `MostActivesRequest` is benign (enum serialization)
+- **Asset listing** returns 13,000+ active US equities — always filter by `tradable=True`
+- **Paper account** starts with $100,000 equity and $200,000 buying power

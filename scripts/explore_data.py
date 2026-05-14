@@ -31,11 +31,11 @@ from alpaca.data.requests import (
     NewsRequest,
     MarketMoversRequest,
     MostActivesRequest,
-    GetAssetsRequest,
 )
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import DataFeed, MarketType
 from alpaca.trading.enums import AssetClass, AssetStatus
+from alpaca.trading.requests import GetAssetsRequest
 
 API_KEY = os.environ.get("ALPACA_PAPER_API_KEY", "")
 SECRET_KEY = os.environ.get("ALPACA_PAPER_SECRET_KEY", "")
@@ -130,7 +130,11 @@ try:
         feed=DataFeed.IEX,
     ))
     for sym, snap in snapshots.items():
-        print(f"  {sym}: last_trade=${snap.latest_trade.price:.2f}  bid={snap.latest_bid.price:.2f}  ask={snap.latest_ask.price:.2f}  prev_close={snap.prev_daily_bar.close:.2f}")
+        trade_p = getattr(snap.latest_trade, 'price', 'N/A')
+        prev_c = getattr(snap.previous_daily_bar, 'close', 'N/A')
+        daily_c = getattr(snap.daily_bar, 'close', 'N/A')
+        daily_v = getattr(snap.daily_bar, 'volume', 'N/A')
+        print(f"  {sym}: last={trade_p}  prev_close={prev_c}  daily_close={daily_c}  vol={daily_v}")
 except Exception as e:
     print(f"  Error: {e}")
 
@@ -157,13 +161,15 @@ except Exception as e:
 print("\n📰 NEWS (recent, AAPL-related)")
 print("-" * 40)
 try:
-    news = news_client.get_news(NewsRequest(
-        symbols=["AAPL"],
+    news_result = news_client.get_news(NewsRequest(
+        symbols="AAPL",
         limit=5,
     ))
-    for n in news:
-        headline = (n.headline or "")[:60]
-        print(f"  [{n.created_at.strftime('%Y-%m-%d')}] {headline}...")
+    news_items = news_result.data.get("news", []) if hasattr(news_result, "data") else []
+    for n in news_items[:5]:
+        headline = getattr(n, "headline", "No title")[:60]
+        created = getattr(n, "created_at", "").strftime("%Y-%m-%d") if hasattr(n, "created_at") else ""
+        print(f"  [{created}] {headline}...")
 except Exception as e:
     print(f"  Error: {e}")
 
