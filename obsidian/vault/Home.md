@@ -22,7 +22,7 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 
 | Folder | Purpose |
 |--------|---------|
-| [[01-Trading-Strategies]] | Trading strategies, backtests, signal logic |
+| [[01-Trading-Strategies]] | Trading strategies, backtests, **[[Laws of Trading]]**, **[[Signal Framework]]** |
 | [[02-Market-Research]] | Market research, asset analysis, **[[Watchlist]]** |
 | [[03-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** |
 | [[04-Risk-Management]] | Position sizing, stop-loss rules, risk frameworks |
@@ -43,18 +43,19 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 **Phase 1 — Foundation** ✅
 - [x] Project setup (repo, gitignore, Obsidian vault)
 - [x] Docker stack (Postgres, Redis, Obsidian)
-- [x] Database schema (market, scraper, trading)
 - [x] Alpaca Paper Trading connected
 - [x] Watchlist configured (15 stocks)
-- [x] Data explorer working (bars, snapshots, news, movers)
+- [x] Data explorer working (stocks, options, news)
+- [x] Laws of Trading documented
+- [x] Signal Framework defined
 
-**Phase 2 — Data Pipeline** 🔜
-- [ ] Build scraping pipeline (RSS, news, social)
-- [ ] Ingest historical bars for watchlist
-- [ ] Set up scheduled data collection (cron)
-- [ ] News sentiment analysis
+**Phase 2 — Data Ingestion & Signals** 🔜
+- [ ] RSS/News + Reddit scraper pipeline
+- [ ] Technical analysis engine (EMA, MACD, RSI, VWAP, ATR, ORB)
+- [ ] Options flow scanner (unusual activity, IV rank)
+- [ ] Composite signal scoring & Laws compliance check
+- [ ] Telegram alerts + Obsidian trade journal
 
-**Phase 3 — Strategy Engine** 🔜
-- [ ] Signal generation framework
-- [ ] Backtesting engine
-- [ ] Paper trading mode
+**Phase 3 — Strategy & Backtesting** 🔜
+- [ ] Backtesting engine + 30-day paper trading
+- [ ] Position sizing & stop-loss automation
