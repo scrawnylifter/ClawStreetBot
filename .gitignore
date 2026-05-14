@@ -60,4 +60,4 @@ logs/
 *.sqlite3
 
 # OS
-Thumbs.db
+Thumbs.db.venv/
