@@ -1,6 +1,10 @@
+# Obsidian runtime / config (vault content is tracked separately if needed)
+obsidian/config/
+
 # Secrets & credentials
 .env
 .env.*
+!.env.*.example
 *.key
 *.pem
 *.p12

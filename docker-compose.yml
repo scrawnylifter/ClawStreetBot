@@ -1,0 +1,12 @@
+services:
+  obsidian:
+    image: lscr.io/linuxserver/obsidian:latest
+    container_name: obsidian
+    env_file:
+      - .env.obsidian
+    volumes:
+      - ./obsidian/config:/config
+      - ./obsidian/vault:/vault
+    ports:
+      - "3110:3000"
+    restart: unless-stopped
