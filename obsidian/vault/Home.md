@@ -21,7 +21,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 | Folder | Purpose |
 |--------|---------|
 | [[01-Fundamentals]] | **[[Laws of Trading]]** + **[[Trade Entry Criteria]]** — rules & triggers |
-| [[02-Strategies]] | **[[Strategies]]** — step-by-step playbooks (the "how") |
+| [[02-Strategies]] | **[[Swing Trading]]** · **[[Long-Term Holding]]** · [[EMA Crossover]] · [[ORB]] · [[Buy the 5% Dip]] |
 | [[03-Market-Research]] | Market research, asset analysis, **[[Watchlist]]** |
 | [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** |
 | [[05-Risk-Management]] | Position sizing, stop-loss rules, risk frameworks |

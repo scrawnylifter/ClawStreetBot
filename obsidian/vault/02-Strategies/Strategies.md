@@ -6,41 +6,42 @@ tags: [strategy, playbook, mOC]
 
 # Strategies — Trade Playbooks
 
-This folder contains the **"how"** — step-by-step playbooks for executing each trade type.
+The **"how"** — step-by-step playbooks for executing each trade type.
 
-The distinction is important:
-- **Fundamentals** (`01-Fundamentals/`) = The rules (Laws of Trading) + when/why to look (Trade Entry Criteria)
-- **Strategies** (`02-Strategies/`) = The playbooks — exactly how to enter, size, stop, and exit
+**Logic flow:** [[Laws of Trading]] (rules) → [[Trade Entry Criteria]] (why/when) → **Strategies** (how) → Execution
 
-Every strategy doc here must comply with the [[Laws of Trading]] and be triggered by [[Trade Entry Criteria]].
-
-## Strategy Index
-
-| Strategy | Status | Description |
-|----------|--------|-------------|
-| *None yet* | 🔜 Draft | Add playbooks here as we backtest and validate them |
+Every strategy must comply with the [[Laws of Trading]] and be triggered by [[Trade Entry Criteria]].
 
 ---
 
-## What a Strategy Document Contains
+## Swing Trading
+Hold periods: days to weeks. Quick in, quick out, defined risk.
 
-Each playbook follows the same structure:
+| Strategy | Status | Description |
+|----------|--------|-------------|
+| [[EMA Crossover]] | Draft | 9/21 EMA crossover with volume + momentum confirmation |
+| [[ORB — Opening Range Breakout]] | Draft | 15/30-min opening range breakout on watchlist stocks |
 
-1. **Trigger** — Which entry criteria signals fired (from Trade Entry Criteria)
-2. **Setup** — Exact conditions that must be met before entry
-3. **Entry** — Order type, timing, and execution steps
-4. **Position Sizing** — Share count / contract count formula (Law 3: ≤20% capital)
-5. **Stop-Loss** — Where and why (Law 2: defined before entry)
-6. **Take-Profit** — Scale-out plan (Law 4: 1/3 at +30%, 1/3 at +50%, rest rides)
-7. **DTE Requirement** — Options must be ≥30 DTE (Law 5)
-8. **Research Checklist** — Thesis, data sources, Greeks for options (Law 8)
-9. **Risk/Reward** — Expected R:R, probability estimate
-10. **Invalidation** — What makes this trade wrong, exit immediately
+See [[Swing Trading]] for category overview.
 
-## When Strategies Get Promoted
+## Long-Term Holding
+Hold periods: months to years. Accumulate conviction stocks on weakness.
 
-A strategy moves from **Draft → Paper → Validated**:
+| Strategy | Status | Description |
+|----------|--------|-------------|
+| [[Buy the 5% Dip]] | Draft | Accumulate watchlist stocks on ≥5% pullbacks (3-tranche entry) |
+
+See [[Long-Term Holding]] for category overview.
+
+---
+
+## Strategy Lifecycle
 
 - **Draft** — Idea documented, not tested
 - **Paper** — Running on Alpaca Paper Trading for ≥30 days (Law 9)
 - **Validated** — Paper results prove positive expected value, ready for live capital
+
+## See Also
+
+- [[Laws of Trading]] — Non-negotiable rules
+- [[Trade Entry Criteria]] — What triggers a trade consideration

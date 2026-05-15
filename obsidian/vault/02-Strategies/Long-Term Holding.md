@@ -1,0 +1,29 @@
+---
+created: 2026-05-14
+updated: 2026-05-14
+tags: [strategy, long-term, mOC]
+---
+
+# Long-Term Holding Strategies
+
+Hold periods: months to years. Building positions over time.
+
+These are my conviction plays. I believe in the thesis, so I accumulate on weakness.
+
+## Core Rule
+
+**Buy the 5% dip.** Every time a conviction stock pulls back 5% from a recent high, add to the position. This is not averaging down on a losing trade (Law 7 forbids that for swing trades) — this is deliberate accumulation of a long-term holding you already believe in.
+
+The distinction matters:
+- **Averaging down** = adding to a swing trade that's going against you = ❌ Law 7 violation
+- **Buying the 5% dip** = accumulating a long-term position at better prices = ✅ different strategy entirely
+
+## Strategies
+
+| Strategy | Status | Description |
+|----------|--------|-------------|
+| [[Buy the 5% Dip]] | Draft | Accumulate conviction stocks on 5% pullbacks |
+
+---
+
+See also: [[Laws of Trading]] | [[Trade Entry Criteria]] | [[Swing Trading Strategies]]
