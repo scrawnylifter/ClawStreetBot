@@ -1,16 +1,12 @@
 ---
 created: 2026-05-14
 updated: 2026-05-14
-tags: [strategy, signals, roadmap, mOC]
+tags: [fundamentals, trade-entry, signals, mOC]
 ---
 
-# Signal Framework — The "Why" Behind Every Trade
+# Trade Entry Criteria — When & Why We Enter Trades
 
-## Problem
-
-We have the **what** (watchlist), the **how** (Alpaca API, options chains), and the **rules** (Laws of Trading). But we're missing the **why** — what triggers us to consider a position in the first place?
-
-A trade without a signal is just a guess. This document defines every signal source we'll build, what triggers consideration, and the pipeline architecture.
+This is separate from [[Laws of Trading]] (the rules). Laws are **non-negotiable constraints**. This document defines **what triggers a trade consideration** — the signals and conditions that make us look at a position in the first place.
 
 ---
 
@@ -207,7 +203,6 @@ These weights define how much each signal category influences the final trade de
 
 ## See Also
 
-- [[Laws of Trading]] — Hard constraints for every trade
+- [[Laws of Trading]] — Non-negotiable rules
+- [[Trade Entry Criteria]] — What triggers every trade
 - [[Watchlist]] — Current tracked assets
-- [[Alpaca API]] — Data endpoints available
-- [[Database Architecture]] — Postgres schemas for signal storage

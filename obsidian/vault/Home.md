@@ -22,7 +22,7 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 
 | Folder | Purpose |
 |--------|---------|
-| [[01-Trading-Strategies]] | Trading strategies, backtests, **[[Laws of Trading]]**, **[[Signal Framework]]** |
+| [[01-Fundamentals]] | Trading rules, **[[Laws of Trading]]**, **[[Trade Entry Criteria]]** |
 | [[02-Market-Research]] | Market research, asset analysis, **[[Watchlist]]** |
 | [[03-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** |
 | [[04-Risk-Management]] | Position sizing, stop-loss rules, risk frameworks |
@@ -47,7 +47,7 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 - [x] Watchlist configured (15 stocks)
 - [x] Data explorer working (stocks, options, news)
 - [x] Laws of Trading documented
-- [x] Signal Framework defined
+- [x] Trade Entry Criteria documented
 
 **Phase 2 — Data Ingestion & Signals** 🔜
 - [ ] RSS/News + Reddit scraper pipeline

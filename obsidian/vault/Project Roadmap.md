@@ -15,7 +15,7 @@ tags: [roadmap, mOC]
 - [x] Data explorer working (bars, snapshots, news, movers)
 - [x] Options chain data confirmed (greeks, IV, full chain)
 - [x] Laws of Trading documented and enforced via skill
-- [x] Signal Framework defined — the "why" behind every trade
+- [x] Trade Entry Criteria documented — the "why" behind every trade
 
 ## Phase 2 — Data Ingestion & Signals
 - [ ] 2a: RSS/News scraper (Seeking Alpha, MarketWatch, Reuters)
@@ -55,6 +55,6 @@ tags: [roadmap, mOC]
 
 ## See Also
 - [[Laws of Trading]] — Non-negotiable rules
-- [[Signal Framework]] — What triggers every trade
+- [[Trade Entry Criteria]] — When and why we enter trades
 - [[Watchlist]] — Current tracked assets
 - [[Database Architecture]] — Storage design
