@@ -80,6 +80,8 @@ ClawStreetBot/
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
+│   # docker-socket-proxy (wollomatic/socket-proxy) is pulled directly,
+│   # configured inline in docker-compose.yml — no Dockerfile needed.
 ├── n8n/
 │   └── workflows/              # Source-of-truth JSON for n8n workflows
 │       ├── watchlist_sync.json
@@ -140,9 +142,10 @@ cp .env.alpaca.example .env.alpaca
 cp .env.polygon.example .env.polygon
 cp .env.n8n.example .env.n8n
 # Edit each with real passwords/keys.
-# For .env.n8n, set DOCKER_GID to `stat -c '%g' /var/run/docker.sock`.
+# For .env.n8n, set DOCKER_GID to `stat -c '%g' /var/run/docker.sock`
+# (used by docker-proxy, not n8n itself).
 
-# Launch all services (Postgres, Redis, Obsidian, worker, n8n)
+# Launch all services (Postgres, Redis, Obsidian, worker, docker-proxy, n8n)
 docker compose up -d
 
 # Install Python dependencies for the local venv
@@ -183,7 +186,20 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 
 n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
 
-Import + activate workflows once the n8n owner account is set up:
+### Docker socket isolation
+
+n8n does **not** mount the host Docker socket. It talks to a dedicated `docker-proxy` service (`wollomatic/socket-proxy`) on `tcp://docker-proxy:2375`. The proxy uses per-endpoint regex allowlists pinned to the worker container only:
+
+| Method | Allowed path                                                            |
+|--------|--------------------------------------------------------------------------|
+| GET    | `/_ping`, `/version`, `/containers/clawstreet-worker/json`               |
+| POST   | `/containers/clawstreet-worker/exec`, `/exec/{hex-id}/(start\|resize)`   |
+
+Everything else is denied — n8n cannot `docker ps`, `stop`, `rm`, `run`, mount the host filesystem, or exec into any container other than `clawstreet-worker`. The proxy itself runs read-only, with all capabilities dropped, `no-new-privileges`, and as an unprivileged user in the host's `docker` group (set `DOCKER_GID` in `.env.n8n` to `stat -c '%g' /var/run/docker.sock`).
+
+### Importing workflows
+
+Once the n8n owner account is set up:
 
 ```bash
 docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows
