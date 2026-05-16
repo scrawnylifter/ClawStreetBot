@@ -1,0 +1,23 @@
+# RSS / Reddit feed configuration for the news scanner.
+#
+# Schema:
+#   rss:     list of {name, url}     — parsed via feedparser → scraper.articles
+#   reddit:  list of subreddit names — pulled from JSON API → scraper.posts
+#
+# scraper.sources rows are upserted on first run; the script handles inserts.
+
+rss:
+  - name: seeking-alpha
+    url: https://seekingalpha.com/market_currents.xml
+  - name: marketwatch
+    url: https://feeds.content.dowjones.io/public/rss/mw_topstories
+  - name: benzinga
+    url: https://www.benzinga.com/feed
+  - name: yahoo-finance-rss
+    url: https://finance.yahoo.com/news/rssindex
+
+reddit:
+  - options
+  - wallstreetbets
+  - thestreet
+  - stocks
