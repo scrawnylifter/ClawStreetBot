@@ -26,6 +26,17 @@ each workflow individually (import leaves them inactive).
 
 All execute via `docker exec clawstreet-worker python /app/scripts/<name>.py …`.
 
+## Docker socket isolation
+
+The `docker` CLI inside the n8n container is pointed at `tcp://docker-proxy:2375` (set via `DOCKER_HOST` in `docker-compose.yml`), **not** at the host Docker socket. The `docker-proxy` service (`wollomatic/socket-proxy`) only whitelists the exec endpoints for `clawstreet-worker`:
+
+| Method | Path                                                                    |
+|--------|--------------------------------------------------------------------------|
+| GET    | `/_ping`, `/version`, `/containers/clawstreet-worker/json`               |
+| POST   | `/containers/clawstreet-worker/exec`, `/exec/{hex-id}/(start\|resize)`   |
+
+`docker ps`, `docker run`, `docker stop`, `docker rm`, host volume mounts, and exec into any other container are all denied at the proxy. If you add a workflow that needs to exec into a different container, extend the `-allowGET=`/`-allowPOST=` regex on the `docker-proxy` service in `docker-compose.yml`.
+
 ## After editing a workflow in the UI
 
 Export it back into this directory to keep git in sync:
