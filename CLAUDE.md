@@ -63,6 +63,7 @@ Key tables (see `db/init/` for full DDL):
 - `market.iv_outliers` — 3σ z-score IV outlier flags (sparse, only flagged rows)
 - `market.fundamentals` — quarterly financials: revenue, net_income, eps, market_cap (98 periods)
 - `market.regime` — daily market regime classification: bull/bear/transition via SPY SMA crossover + VIX proxy + breadth (501 days)
+- `market.trend_status` — multi-timeframe trend: micro/intermediate/primary direction + strength + score (4,400 rows)
 - `scraper.sources` — RSS/social/news sources (8 sources)
 - `scraper.articles` — scraped articles with sentiment + symbol arrays (69 articles)
 - `scraper.posts` — social media posts (75 posts)
@@ -198,7 +199,8 @@ ClawStreetBot/
 │   └── 06_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
 │   └── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
 │   ├── 08_backtest.sql           ← Backtest engine tables (runs, trades, metrics)
-│   └── 09_regime.sql             ← Regime classification + weights + factor analysis
+│   ├── 09_regime.sql             ← Regime classification + weights + factor analysis
+│   └── 10_trend.sql              ← Trend status table (micro/intermediate/primary)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -214,6 +216,7 @@ ClawStreetBot/
 │       ├── rss_news_scanner.json   ← Mon-Fri every 30m 9:30-16:00 ET
 │       ├── signals_daily.json      ← Mon-Fri 19:30 ET (includes daily backtest)
 │       ├── intraday_signal_5m.json ← Mon-Fri every 5 min 9:30-16:00 ET
+│       ├── trend_daily.json        ← Mon-Fri 18:00 ET (trend detection + status)
 │       └── regime_weekly.json      ← Sat 11:00 ET (classify + optimize + compare)
 ├── scripts/
 │   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
@@ -234,6 +237,9 @@ ClawStreetBot/
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
 │   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
+│   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
+│   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
+│   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
 │   ├── backtest.py                    ← Phase 3: Backtesting engine
 │   └── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
 └── obsidian/vault/         ← knowledge base (24 notes across 8 folders)
@@ -253,7 +259,7 @@ ClawStreetBot/
 
 Phase 1 (foundation) and Phase 2 (analytics) are complete. Phase 3 (backtesting) is complete:
 
-All phases 1-3 complete. Operational pipeline running daily/weekly.
+All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline running daily/weekly.
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
 - [x] Options data explorers working
@@ -271,7 +277,7 @@ All phases 1-3 complete. Operational pipeline running daily/weekly.
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (11 workflows + wollomatic socket-proxy)
+- [x] n8n scheduler (12 workflows + wollomatic socket-proxy)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Secrets management skill (NEVER hardcode API keys)
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
@@ -279,7 +285,17 @@ All phases 1-3 complete. Operational pipeline running daily/weekly.
 - [x] 5-minute intraday signal refresh (re-scores tech from 5m bars, threshold alerts)
 - [x] Market regime classifier (bull/bear/transition via SPY SMA + VIX + breadth, 501 days)
 - [x] Regime-conditional factor analysis (per-regime factor-to-return correlations)
-- [x] Dynamic weight optimizer (regime-specific scoring weights, outperforms static by 17pp)
+- [x] Dynamic weight optimizer (regime-specific scoring weights)
+- [x] Multi-timeframe trend detection (micro/intermediate/primary via EMA+ADX+price structure)
+- [x] Historical signal backfill (7,908 signals across 501 days)
+- [x] Trend-aware intraday adjustments (signal + aligned trend = boost, counter-trend = penalty)
+
+### Remaining Items
+- [ ] Telegram alert system (signals exist but no push notifications)
+- [ ] Order execution engine (still paper-only)
+- [ ] Position sizing calculator (backtest has it, no standalone tool)
+- [ ] Monitoring/dashboards (no visibility beyond raw DB queries)
+- [ ] Regime optimizer needs more diverse data (underperforms static with full history — not a code fix)
 
 ## Security Architecture
 
