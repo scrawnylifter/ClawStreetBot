@@ -57,10 +57,11 @@ Key tables (see `db/init/` for full DDL):
 - `market.technical_indicators` — EMA/RSI/MACD/ATR/VWAP/Bollinger per symbol/date (4,125 rows)
 - `market.greeks_filter` — IV regime + per-contract filter results (19,976 rows, 543 passing)
 - `market.iv_outliers` — 3σ z-score IV outlier flags (sparse, only flagged rows)
-- `scraper.sources` — RSS/social/news sources
-- `scraper.articles` — scraped articles with sentiment + symbol arrays
-- `scraper.posts` — social media posts
-- `trading.signals` — generated trading signals
+- `market.fundamentals` — quarterly financials: revenue, net_income, eps, market_cap (98 periods)
+- `scraper.sources` — RSS/social/news sources (8 sources)
+- `scraper.articles` — scraped articles with sentiment + symbol arrays (69 articles)
+- `scraper.posts` — social media posts (75 posts)
+- `trading.signals` — generated trading signals with 6-factor composite scoring (0-100)
 - `trading.positions` — open/closed positions
 
 ## Watchlist (15 stocks)
@@ -176,13 +177,16 @@ ClawStreetBot/
 ├── .env.*                  ← gitignored credentials
 ├── .venv/                  ← gitignored Python venv
 ├── config/
+│   ├── rss_feeds.yml           ← RSS feeds + Reddit subs for scraper
 │   └── watchlist.yml           ← YAML source-of-truth for tracked symbols
 ├── db/init/
 │   ├── 01_init_databases.sql
 │   ├── 02_create_tables.sql
 │   ├── 03_polygon_tables.sql   ← Options, greeks, IV rank, fundamentals, ingest_state
 │   ├── 04_rv_gex_tables.sql    ← Realized volatility, GEX/DEX tables
-│   └── 05_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
+│   ├── 05_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
+│   └── 06_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
+│   └── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -193,7 +197,10 @@ ClawStreetBot/
 │       ├── ohlcv_daily.json        ← Mon-Fri 18:00 ET
 │       ├── ohlcv_intraday.json     ← Mon-Fri hourly :05
 │       ├── options_daily.json      ← Mon-Fri 17:55 ET
-│       └── derived_daily.json      ← Mon-Fri 18:30 ET (RV → IV-rank → GEX → TechInd → GreeksFilter → IVOutliers)
+│       ├── derived_daily.json      ← Mon-Fri 18:30 ET (7 nodes)
+│       ├── fundamentals_daily.json ← Mon-Fri 19:00 ET
+│       ├── rss_news_scanner.json   ← Mon-Fri every 30m 9:30-16:00 ET
+│       └── signals_daily.json      ← Mon-Fri 19:30 ET
 ├── scripts/
 │   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
 │   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
@@ -203,6 +210,7 @@ ClawStreetBot/
 │   ├── ingest_polygon_ohlcv.py        ← Phase 2: Polygon data ingestion
 │   ├── ingest_polygon_options.py      ← Phase 2: Options + greeks ingestion
 │   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion
+│   ├── ingest_rss_news.py              ← Phase 2: RSS + Reddit scraper
 │   ├── compute_iv_rank.py             ← Phase 2: IV rank calculation
 │   ├── compute_realized_vol.py        ← Phase 2: Realized volatility (20d/5d + IV-RV spread)
 │   ├── compute_gex_dex.py             ← Phase 2: GEX/DEX computation (strike/expiry + overview)
@@ -210,6 +218,7 @@ ClawStreetBot/
 │   ├── compute_greeks_filter.py        ← Phase 2: IV regime + delta/theta-budget gating per contract
 │   ├── compute_iv_outliers.py          ← Phase 2: 3σ z-score IV outlier flags
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
+│   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
 │   └── backtest.py                    ← Phase 3: Backtesting engine
 └── obsidian/vault/         ← knowledge base (24 notes across 8 folders)
     ├── Home.md
@@ -241,12 +250,14 @@ Phase 1 (foundation) is complete. Phase 2 in progress:
 - [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
 - [x] Greeks filtering engine (IV regime, delta, theta-budget per contract)
 - [x] IV outlier detection (3σ z-score)
-- [x] n8n scheduler (7 nodes across 6 workflows + wollomatic socket-proxy)
+- [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
+- [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
+- [x] Composite signal scoring engine (6-factor, 0-100)
+- [x] n8n scheduler (9 workflows + wollomatic socket-proxy)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
+- [x] Secrets management skill (NEVER hardcode API keys)
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
-- [x] n8n scheduler (6 workflows + wollomatic socket-proxy for secure docker exec)
-- [ ] RSS/News scraper pipeline
-- [ ] Signal generation engine
+- [ ] Backtesting engine (Phase 3)
 
 ## Security Architecture
 
