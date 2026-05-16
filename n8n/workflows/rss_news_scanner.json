@@ -1,0 +1,58 @@
+{
+  "name": "rss_news_scanner",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 9-16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every 30m market hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_rss_news.py"
+      },
+      "id": "run",
+      "name": "ingest rss + reddit",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30m market hours": {
+      "main": [
+        [
+          {
+            "node": "ingest rss + reddit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/New_York"
+  },
+  "active": true
+}
