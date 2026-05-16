@@ -1,0 +1,31 @@
+{
+  "name": "trend_daily",
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300},
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "0 18 * * 1-5"
+      },
+      "id": "trigger",
+      "name": "Mon-Fri 18:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /app && python scripts/compute_trend.py --backfill --days 400"
+      },
+      "id": "trend",
+      "name": "Compute Trend Status",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 300]
+    }
+  ],
+  "connections": {
+    "Mon-Fri 18:00 UC": {
+      "main": [[{"node": "Compute Trend Status", "type": "main", "index": 0}]]
+    }
+  }
+}

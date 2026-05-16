@@ -386,6 +386,34 @@ def fetch_active_symbols(conn) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def fetch_trend_status(conn, symbol: str, asof: date) -> dict[str, Any]:
+    """Pull the latest trend status for swing trade validation."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT trend_score, intermediate_trend, primary_trend,
+                   micro_trend, adx, ema_stack, price_structure, trend_strength
+            FROM market.trend_status
+            WHERE symbol = %s AND date <= %s
+            ORDER BY date DESC LIMIT 1
+            """,
+            (symbol, asof),
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "trend_score": float(row["trend_score"]) if row["trend_score"] else 50.0,
+                "intermediate_trend": row["intermediate_trend"] or "neutral",
+                "primary_trend": row["primary_trend"] or "neutral",
+                "micro_trend": row["micro_trend"] or "neutral",
+                "adx": float(row["adx"]) if row["adx"] else None,
+                "ema_stack": row["ema_stack"] or "partial",
+                "price_structure": row["price_structure"] or "mixed",
+                "trend_strength": row["trend_strength"] or "no_trend",
+            }
+    return {"trend_score": 50.0, "intermediate_trend": "neutral"}
+
+
 def signal_type_for(composite: float) -> str:
     if composite > 55:
         return "bullish"
@@ -492,13 +520,39 @@ def main() -> int:
         # Fetch the 5 daily factor scores
         daily = fetch_daily_factors(conn, sym, today)
 
+        # Fetch trend status for swing trade validation
+        trend_info = fetch_trend_status(conn, sym, today)
+        trend_score = trend_info.get("trend_score", 50.0)
+        intermediate_trend = trend_info.get("intermediate_trend", "neutral")
+
         # Recompute composite: replace tech_score with intraday version
         iv_regime_pts = float(daily.get("iv_regime_score") or 0)
         iv_rv_pts = float(daily.get("iv_rv_score") or 0)
         gex_pts = float(daily.get("gex_score") or 0)
         sentiment_pts = float(daily.get("sentiment_score") or 0)
         outlier_pts = float(daily.get("iv_outlier_score") or 0)
-        composite = iv_regime_pts + iv_rv_pts + gex_pts + tech_score + sentiment_pts + outlier_pts
+        raw_composite = iv_regime_pts + iv_rv_pts + gex_pts + tech_score + sentiment_pts + outlier_pts
+
+        # Trend-aware adjustment: penalize counter-trend signals, boost alignment
+        # Trend score 0-100 where <30 = strong bearish trend, >70 = strong bullish
+        # If composite is bullish but trend is bearish → reduce confidence
+        # If composite and trend agree → boost slightly
+        if raw_composite >= 55:  # bullish signal
+            if intermediate_trend == "bull":
+                composite = min(100.0, raw_composite * 1.05)  # +5% trend alignment bonus
+            elif intermediate_trend == "bear":
+                composite = raw_composite * 0.80  # -20% counter-trend penalty
+            else:
+                composite = raw_composite  # neutral trend = no adjustment
+        elif raw_composite <= 30:  # bearish signal
+            if intermediate_trend == "bear":
+                composite = raw_composite  # bear signal in bear trend = stay as-is (not buying)
+            elif intermediate_trend == "bull":
+                composite = max(0.0, raw_composite * 0.90)  # less bearish in bull trend
+            else:
+                composite = raw_composite
+        else:
+            composite = raw_composite
 
         daily_comp = daily.get("daily_composite")
         delta = None
@@ -516,6 +570,10 @@ def main() -> int:
             "atr_daily": atr,
             "daily_composite": float(daily_comp) if daily_comp else None,
             "delta_from_daily": round(delta, 2) if delta is not None else None,
+            "raw_composite": round(raw_composite, 2),
+            "trend_adjustment": round(composite - raw_composite, 2),
+            "trend_score": trend_score,
+            "intermediate_trend": intermediate_trend,
         }
 
         # Write updated signal
@@ -526,10 +584,13 @@ def main() -> int:
 
         if not args.quiet:
             delta_str = f" ({delta:+.1f} vs daily)" if delta is not None else ""
+            trend_adj = round(composite - raw_composite, 1)
+            trend_str = f" trend={intermediate_trend[:4]}({trend_score:.0f})"
+            adj_str = f" adj={trend_adj:+.1f}" if trend_adj != 0 else ""
             print(
                 f"  {sym:6s}  composite={composite:5.1f}  "
                 f"tech_5m={tech_score:4.1f}  rsi={rsi:5.1f}  "
-                f"vwap_ratio={vwap_ratio:.3f}  "
+                f"vwap={vwap_ratio:.3f}{trend_str}{adj_str}  "
                 f"price={price:.2f}{delta_str}"
             )
 
