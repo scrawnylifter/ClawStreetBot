@@ -24,3 +24,4 @@ symbols:
   - {ticker: ASTS, sector: "Communication Services", industry: "Space / Satellite"}
   - {ticker: OKLO, sector: "Utilities",       industry: "Nuclear / SMR"}
   - {ticker: NVO,  sector: Healthcare,        industry: Pharmaceuticals}
+  - {ticker: SPY,  sector: "ETF",              industry: "Broad Market", notes: "Market regime reference — SPY 50/200 SMA + breadth"}
