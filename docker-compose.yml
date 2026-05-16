@@ -80,8 +80,43 @@ services:
       - clawnet
     restart: unless-stopped
 
-  # Workflow scheduler. Workflows under ./n8n/workflows are checked in;
-  # runtime state (executions, encrypted creds) lives in the n8n_data volume.
+  # Per-endpoint allowlisting socket proxy. Unlike tecnativa's section-level
+  # flags (which let CONTAINERS=1 also enable stop/kill/delete of arbitrary
+  # containers), wollomatic/socket-proxy matches each HTTP method against a
+  # single regex. We only allow:
+  #   - GET  /_ping, /version                           (docker CLI handshake)
+  #   - GET  /containers/clawstreet-worker/json         (inspect by name)
+  #   - POST /containers/clawstreet-worker/exec         (create exec)
+  #   - POST /exec/{hex-id}/(start|resize)              (run exec)
+  # `-allowfrom` restricts the source to the n8n container by name. Every
+  # other endpoint (create, delete, stop, kill, restart, images, volumes,
+  # build, swarm, network, system, etc.) is denied.
+  docker-proxy:
+    image: wollomatic/socket-proxy:1
+    container_name: clawstreet-docker-proxy
+    command:
+      - -loglevel=info
+      - -listenip=0.0.0.0
+      - -socketpath=/var/run/docker.sock
+      - -allowfrom=clawstreet-n8n
+      # $$ is the docker-compose escape for a literal $ (regex end-anchor).
+      - -allowGET=^/(v[\d.]+/)?(_ping|version|containers/clawstreet-worker/json)$$
+      - -allowPOST=^/(v[\d.]+/)?(containers/clawstreet-worker/exec|exec/[a-f0-9]+/(start|resize))$$
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:${DOCKER_GID:-988}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - clawnet
+    restart: unless-stopped
+
+  # n8n reaches the Docker engine ONLY through docker-proxy. No direct
+  # /var/run/docker.sock mount, so n8n cannot spawn new containers, mount
+  # host paths, pull images, etc. — only `exec` into existing ones the
+  # proxy whitelists.
   n8n:
     build:
       context: .
@@ -96,18 +131,16 @@ services:
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
       - N8N_SECURE_COOKIE=false
+      # Routes the docker CLI inside this container through the proxy.
+      - DOCKER_HOST=tcp://docker-proxy:2375
     ports:
       - "${N8N_HOST_PORT:-5678}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/workflows:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    # GID of the host's docker group — lets the non-root `node` user use the socket.
-    # Override in .env.n8n if your host uses a different GID (e.g. 999 on Debian).
-    group_add:
-      - "${DOCKER_GID:-988}"
     depends_on:
       - worker
+      - docker-proxy
     networks:
       - clawnet
     restart: unless-stopped
