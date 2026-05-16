@@ -242,7 +242,7 @@ ClawStreetBot/
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
 │   ├── backtest.py                    ← Phase 3: Backtesting engine
 │   └── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
-└── obsidian/vault/         ← knowledge base (24 notes across 8 folders)
+└── obsidian/vault/         ← knowledge base (27 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
     ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria
@@ -251,7 +251,7 @@ ClawStreetBot/
     ├── 04-API-References/   ← Alpaca API, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
     ├── 06-Indicators/       ← (empty, ready for TA docs)
-    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler
+    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System, Order Execution Engine, Monitoring & Dashboards
     └── 08-Templates/
 ```
 
