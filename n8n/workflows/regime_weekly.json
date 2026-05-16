@@ -1,0 +1,31 @@
+{
+  "name": "regime_weekly",
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800},
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "0 15 * * 6"
+      },
+      "id": "trigger",
+      "name": "Saturday 15:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /app && python scripts/regime_backtest.py all --start 2024-05-01 --end $(date -d '-1 day' +%Y-%m-%d) --mode swing"
+      },
+      "id": "classify",
+      "name": "Classify + Analyze + Optimize + Compare",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 300]
+    }
+  ],
+  "connections": {
+    "Saturday 15:00 UTC": {
+      "main": [[{"node": "Classify + Analyze + Optimize + Compare", "type": "main", "index": 0}]]
+    }
+  }
+}
