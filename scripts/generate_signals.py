@@ -409,6 +409,24 @@ def write_signal(
                 %s, %s, %s,
                 %s, %s, %s
             )
+            ON CONFLICT (symbol, signal_date) DO UPDATE SET
+                signal_type = EXCLUDED.signal_type,
+                strategy = EXCLUDED.strategy,
+                confidence = EXCLUDED.confidence,
+                price_at_signal = EXCLUDED.price_at_signal,
+                metadata = EXCLUDED.metadata,
+                composite_score = EXCLUDED.composite_score,
+                iv_regime = EXCLUDED.iv_regime,
+                iv_regime_score = EXCLUDED.iv_regime_score,
+                iv_rv_spread = EXCLUDED.iv_rv_spread,
+                iv_rv_score = EXCLUDED.iv_rv_score,
+                gex_score = EXCLUDED.gex_score,
+                tech_score = EXCLUDED.tech_score,
+                sentiment_score = EXCLUDED.sentiment_score,
+                iv_outlier_flag = EXCLUDED.iv_outlier_flag,
+                iv_outlier_score = EXCLUDED.iv_outlier_score,
+                recommended_strategy = EXCLUDED.recommended_strategy,
+                details = EXCLUDED.details
             """,
             (
                 inputs["asset_id"],

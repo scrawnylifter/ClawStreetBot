@@ -19,6 +19,8 @@ ALTER TABLE trading.signals
     ADD COLUMN IF NOT EXISTS details             JSONB,
     ADD COLUMN IF NOT EXISTS signal_date         DATE;
 
+CREATE UNIQUE INDEX IF NOT EXISTS signals_symbol_date_uniq
+    ON trading.signals(symbol, signal_date);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_date
     ON trading.signals(symbol, signal_date DESC);
 CREATE INDEX IF NOT EXISTS idx_signals_composite
