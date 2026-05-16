@@ -1,0 +1,106 @@
+{
+  "name": "derived_daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 18 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Weekdays 18:30 ET",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_realized_vol.py"
+      },
+      "id": "rv",
+      "name": "compute realized vol",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_iv_rank.py"
+      },
+      "id": "ivr",
+      "name": "compute iv rank",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_gex_dex.py"
+      },
+      "id": "gex",
+      "name": "compute gex/dex",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        920,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Weekdays 18:30 ET": {
+      "main": [
+        [
+          {
+            "node": "compute realized vol",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute realized vol": {
+      "main": [
+        [
+          {
+            "node": "compute iv rank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute iv rank": {
+      "main": [
+        [
+          {
+            "node": "compute gex/dex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/New_York"
+  },
+  "active": true
+}
