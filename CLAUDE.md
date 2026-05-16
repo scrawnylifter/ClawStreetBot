@@ -16,10 +16,11 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Key Commands
 
-- `docker compose up -d` — start all services
+- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy)
 - `docker exec -it clawstreet-db psql -U clawstreet -d clawstreet` — Postgres shell
 - `source .venv/bin/activate` — activate Python venv
-- `python scripts/setup_watchlist.py` — sync watchlist to Alpaca + Postgres
+- `python scripts/setup_watchlist.py` — sync watchlist YAML → Alpaca + Postgres
+- `python scripts/backfill_symbol.py TSLA` — full ingestion chain for one symbol
 - `python scripts/explore_data.py` — explore Alpaca data
 - `python scripts/explore_options.py` — explore options chains
 - `python scripts/options_analysis.py` — options greeks/IV analysis
@@ -136,13 +137,31 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 ClawStreetBot/
 ├── CLAUDE.md              ← this file
 ├── docker-compose.yml
+├── requirements.txt            ← Python deps for worker image + local venv
 ├── .env.*                  ← gitignored credentials
 ├── .venv/                  ← gitignored Python venv
+├── config/
+│   └── watchlist.yml           ← YAML source-of-truth for tracked symbols
 ├── db/init/
 │   ├── 01_init_databases.sql
-│   └── 02_create_tables.sql
+│   ├── 02_create_tables.sql
+│   ├── 03_polygon_tables.sql   ← Options, greeks, IV rank, fundamentals, ingest_state
+│   ├── 04_rv_gex_tables.sql    ← Realized volatility, GEX/DEX tables
+│   └── 05_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
+├── docker/
+│   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
+│   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
+├── n8n/
+│   └── workflows/              ← Source-of-truth JSON for n8n workflows
+│       ├── watchlist_sync.json     ← every 5 min
+│       ├── backfill_pending.json   ← every 5 min (picks pending symbols)
+│       ├── ohlcv_daily.json        ← Mon-Fri 18:00 ET
+│       ├── ohlcv_intraday.json     ← Mon-Fri hourly :05
+│       ├── options_daily.json      ← Mon-Fri 17:55 ET
+│       └── derived_daily.json      ← Mon-Fri 18:30 ET (RV → IV-rank → GEX)
 ├── scripts/
-│   ├── setup_watchlist.py
+│   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
+│   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
 │   ├── explore_data.py
 │   ├── explore_options.py
 │   ├── options_analysis.py
@@ -150,6 +169,8 @@ ClawStreetBot/
 │   ├── ingest_polygon_options.py      ← Phase 2: Options + greeks ingestion
 │   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion
 │   ├── compute_iv_rank.py             ← Phase 2: IV rank calculation
+│   ├── compute_realized_vol.py        ← Phase 2: Realized volatility (20d/5d + IV-RV spread)
+│   ├── compute_gex_dex.py             ← Phase 2: GEX/DEX computation (strike/expiry + overview)
 │   └── backtest.py                    ← Phase 3: Backtesting engine
 └── obsidian/vault/         ← knowledge base (24 notes across 8 folders)
     ├── Home.md
@@ -167,7 +188,7 @@ ClawStreetBot/
 ## Current Phase
 
 Phase 1 (foundation) is complete. Phase 2 in progress:
-- [x] Docker services running (Postgres, Redis, Obsidian)
+- [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
 - [x] Options data explorers working
 - [x] Watchlist synced (Alpaca + Postgres)
@@ -176,10 +197,22 @@ Phase 1 (foundation) is complete. Phase 2 in progress:
 - [x] Backtesting architecture documented (data pipeline, schema, analysis)
 - [x] Postgres MCP server configured for Claude Code
 - [x] Polygon.io credentials verified (REST API + Flat Files S3)
-- [ ] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres)
+- [x] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres)
+- [x] IV rank / realized vol / GEX-DEX computed
+- [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
+- [x] n8n scheduler (6 workflows + wollomatic socket-proxy for secure docker exec)
 - [ ] Greeks filtering engine (IV rank, delta entry, theta budget)
 - [ ] RSS/News scraper pipeline
 - [ ] Signal generation engine
+
+## Security Architecture
+
+- **n8n does NOT have direct docker.sock access** — routes through `wollomatic/socket-proxy`
+- Proxy allowlists ONLY: `GET /containers/clawstreet-worker/json` and `POST /containers/clawstreet-worker/exec` + `/exec/*/start`
+- Denied at proxy: `docker ps`, `docker stop/rm/kill`, `docker run` (no container creation), filesystem mounts, exec into any other container
+- Proxy container hardened: `read_only`, `cap_drop ALL`, `no-new-privileges`, runs as `65534:DOCKER_GID`
+- All credentials via `.env.*` files (gitignored), never hardcoded
+- Redis password via `$$REDIS_PASSWORD` env var (no hardcoded fallbacks)
 
 ## Critical Warnings
 
