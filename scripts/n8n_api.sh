@@ -26,9 +26,10 @@ N8N_HOST_PORT=$(grep '^N8N_HOST_PORT=' "$ENV_FILE" | cut -d'=' -f2-)
 N8N_HOST_PORT="${N8N_HOST_PORT:-5678}"
 BASE_URL="http://localhost:${N8N_HOST_PORT}/api/v1"
 
-if [[ -z "$N8N_API_KEY" || "$N8N_API_KEY" == "replace-with-api-key-from-n8n-ui" ]]; then
-    echo "ERROR: N8N_API_KEY not set or is placeholder in $ENV_FILE" >&2
+if [[ -z "$N8N_API_KEY" || "$N8N_API_KEY" == "replace-with-api-key-from-n8n-ui" || "$N8N_API_KEY" == *"..."* ]]; then
+    echo "ERROR: N8N_API_KEY not set, is placeholder, or is truncated in $ENV_FILE" >&2
     echo "Generate one at http://localhost:${N8N_HOST_PORT} → Settings → API → Create API Key" >&2
+    echo "Then update N8N_API_KEY= in $ENV_FILE with the FULL key (200+ chars, no '...' in it)" >&2
     exit 1
 fi
 
@@ -73,17 +74,24 @@ print(f\"Nodes: {[n['name'] for n in w['nodes']]}\")
     import)
         [[ -z "${2:-}" ]] && { echo "Usage: $0 import <file.json>"; exit 1; }
         PAYLOAD=$(python3 -c "
-import json
+import json, sys
 with open('$2') as f:
     wf = json.load(f)
 # Remove fields that conflict with creation
-for k in ['id','createdAt','updatedAt','activeVersionId','versionId','triggerCount','shared','activeVersion','pinData','staticData','meta']:
+for k in ['id','createdAt','updatedAt','activeVersionId','versionId','triggerCount','shared','activeVersion','pinData','staticData','meta','active']:
     wf.pop(k, None)
-wf['active'] = True
 print(json.dumps(wf))
 ")
-        curl -X POST "${CURL_ARGS[@]}" -d "$PAYLOAD" "$BASE_URL/workflows"
-        echo ""
+        # Create workflow (inactive), then activate it
+        RESULT=$(curl -X POST "${CURL_ARGS[@]}" -d "$PAYLOAD" "$BASE_URL/workflows" 2>/dev/null)
+        WF_ID=$(echo "$RESULT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+        if [[ -n "$WF_ID" ]]; then
+            echo "Created workflow $WF_ID, activating..."
+            curl -X POST "${CURL_ARGS[@]}" "$BASE_URL/workflows/$WF_ID/activate" 2>/dev/null
+            echo ""
+        else
+            echo "Create result: $RESULT"
+        fi
         ;;
     *)
         echo "Usage: $0 [list|get|activate|deactivate|delete|import] [id_or_file]"
