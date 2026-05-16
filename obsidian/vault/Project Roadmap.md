@@ -18,6 +18,9 @@ tags: [roadmap, mOC]
 - [x] Trade Entry Criteria documented — the "why" behind every trade
 
 ## Phase 2 — Data Ingestion & Signals
+- [ ] **Polygon.io integration** — historical OHLCV, options, fundamentals → Postgres
+- [ ] **Greeks filtering engine** — IV regime, delta entry, theta budget, vanna alerts (see [[Greeks Strategy]])
+- [ ] **Claude Code + Postgres MCP** — direct DB access for research, ad-hoc queries, schema management
 - [ ] 2a: RSS/News scraper (Seeking Alpha, MarketWatch, Reuters)
 - [ ] 2a: Alpaca News API integration for watchlist symbols
 - [ ] 2a: Reddit mention scraper (r/wallstreetbets, r/options)
@@ -26,7 +29,7 @@ tags: [roadmap, mOC]
 - [ ] 2b: Opening Range Breakout (ORB) detection
 - [ ] 2b: Unusual volume detection (2x+ average)
 - [ ] 2c: Options flow scanner (unusual activity, OI spikes, IV rank)
-- [ ] 2c: Put/call ratio calculator per symbol
+- [ ] 2c: Greeks-based entry/exit filters (delta 0.50-0.90, theta budget, gamma risk)
 - [ ] 2c: IV rank heatmap across watchlist
 - [ ] 2d: News sentiment classifier (bullish/bearish/neutral)
 - [ ] 2d: Composite signal scoring (tech 40%, options flow 25%, news 20%, macro 15%)
@@ -34,12 +37,15 @@ tags: [roadmap, mOC]
 - [ ] 2e: Telegram alert system via bot
 - [ ] 2e: Obsidian trade journal auto-logging
 
-## Phase 3 — Strategy & Backtesting
-- [ ] Backtesting engine (historical data + simulation)
+## Phase 3 — Strategy & Backtesting (see [[Backtesting Architecture]])
+- [ ] Polygon.io full ingestion pipeline (OHLCV, greeks, fundamentals)
+- [ ] Postgres schema for options, greeks, iv_rank, fundamentals tables
+- [ ] Backtesting engine (historical data + signal simulation)
+- [ ] Validate greeks filters against historical data (IV rank, delta ranges, theta budgets)
 - [ ] Paper trading mode (Alpaca Paper, 30-day minimum)
-- [ ] Position sizing calculator (ATR-based, 20% max)
-- [ ] Stop-loss / take-profit automation (30%/50% exits)
-- [ ] Daily loss limits (5% rolling → cooldown per Law 1)
+- [ ] Position sizing calculator (swing: 10%/3:1, long-term: 3-tranche conviction model)
+- [ ] Stop-loss / take-profit automation (swing: 30%/50% tiered, long-term: 50%/100%)
+- [ ] Drawdown circuit breakers (10% daily, 20% weekly, 30% monthly)
 
 ## Phase 4 — Live Trading
 - [ ] Order execution engine (market, limit, stop, bracket)
@@ -56,5 +62,7 @@ tags: [roadmap, mOC]
 ## See Also
 - [[Laws of Trading]] — Non-negotiable rules
 - [[Trade Entry Criteria]] — When and why we enter trades
+- [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
+- [[Backtesting Architecture]] — Data pipeline, Postgres schema, backtest engine design
 - [[Watchlist]] — Current tracked assets
 - [[Database Architecture]] — Storage design

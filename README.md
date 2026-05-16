@@ -7,6 +7,7 @@ Autonomous stock screening, alerts, and trading.
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
 | **Broker / Data** | Alpaca (alpaca-py) | Trading, market data, news, screeners |
+| **Market Data** | Polygon.io | Historical OHLCV, options chains, fundamentals, real-time feeds |
 | **Knowledge Base** | Obsidian (Docker) | Notes & RAG — strategies, research, API refs |
 | **Database** | PostgreSQL 16 | Persistent storage — market data, scraped content, trades |
 | **Cache / Queue** | Redis 7 | Real-time price cache, task queue, pub/sub alerts |
@@ -25,6 +26,12 @@ Autonomous stock screening, alerts, and trading.
 │ Notes &  │ market.*  │  Price   │ Trading  │ RSS/News/  │
 │ RAG      │ scraper.* │  cache & │ Data &  │ Social     │
 │          │ trading.* │  queues  │ Orders   │ Media      │
+├──────────┼───────────┼──────────┼──────────┼────────────┤
+│          │           │          │ Polygon  │            │
+│          │           │          │   .io    │            │
+│          │           │          │          │            │
+│          │  Historical OHLCV, options, fundamentals      │
+│          │  → Postgres market.* tables                  │
 └──────────┴───────────┴──────────┴──────────┴────────────┘
 ```
 
@@ -52,6 +59,7 @@ ClawStreetBot/
 ├── docker-compose.yml          # All services
 ├── .env.db                     # DB credentials (gitignored)
 ├── .env.alpaca                 # Alpaca API keys (gitignored)
+├── .env.polygon                # Polygon.io API key (gitignored)
 ├── .env.obsidian               # Obsidian config (gitignored)
 ├── .venv/                      # Python venv (gitignored)
 ├── db/init/                    # Postgres init scripts
@@ -63,18 +71,29 @@ ClawStreetBot/
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
-    ├── 01-Trading-Strategies/
-    ├── 02-Market-Research/
+    ├── 01-Fundamentals/
+    │   ├── Laws of Trading.md
+    │   └── Trade Entry Criteria.md
+    ├── 02-Strategies/
+    │   ├── Strategies.md
+    │   ├── Swing Trading.md
+    │   ├── Long-Term Holding.md
+    │   ├── EMA Crossover.md
+    │   ├── ORB — Opening Range Breakout.md
+    │   └── Buy the 5% Dip.md
+    ├── 03-Market-Research/
     │   └── Watchlist.md
-    ├── 03-API-References/
+    ├── 04-API-References/
     │   └── Alpaca API.md
-    ├── 04-Risk-Management/
-    ├── 05-Indicators/
-    ├── 06-Infrastructure/
+    ├── 05-Risk-Management/
+    │   ├── Risk Management.md
+    │   ├── Position Sizing.md
+    │   ├── Loss Limits.md
+    │   └── Correlation Risk.md
+    ├── 06-Indicators/
+    ├── 07-Infrastructure/
     │   └── Database Architecture.md
-    └── 07-Templates/
-        ├── Strategy Template.md
-        └── API Reference Template.md
+    └── 08-Templates/
 ```
 
 ## Quick Start
@@ -117,6 +136,40 @@ Using **Paper Trading** for development. The free tier provides:
 - WebSocket streams for live data
 
 Switch to `paper=False` for live trading with real money (requires SIP data subscription).
+
+## Polygon.io Integration
+
+**Polygon.io** provides historical and real-time market data that complements Alpaca's trading API:
+
+- **Historical OHLCV** — daily, hourly, minute bars for all US stocks (goes back decades)
+- **Options chains** — full historical options data with greeks, IV, OI
+- **Fundamentals** — financial statements, earnings, dividends
+- **Real-time feeds** — WebSocket streaming for trades, quotes, aggregates
+
+### Why Polygon.io alongside Alpaca?
+
+| Data | Alpaca | Polygon.io |
+|------|--------|-----------|
+| Trading / orders | ✅ Broker | ❌ Data only |
+| Real-time quotes | 15-min delayed (free) | ✅ Real-time (paid) |
+| Historical bars | Limited | ✅ Full history |
+| Options greeks | ✅ Snapshots | ✅ Full historical |
+| Fundamentals | ❌ | ✅ Financials, earnings |
+| News | ✅ Basic | ✅ Full news feed |
+
+We use **Alpaca for execution** and **Polygon.io for deep historical data and analysis**.
+
+## TODO
+
+- [ ] Connect Polygon.io API (historical OHLCV, options, fundamentals → Postgres)
+- [ ] Create `.env.polygon` with API key
+- [ ] Build data ingestion scripts (bars, options chains, fundamentals)
+- [ ] Store Polygon data in `market.*` Postgres tables
+- [ ] Backfill historical data for watchlist symbols
+- [ ] Research Phase 2 signal pipeline (RSS/News, technical indicators, options flow)
+- [ ] Implement position sizing calculator (strategy-specific: swing vs. long-term)
+- [ ] Implement stop-loss / take-profit automation (30%/50% exits, 10% drawdown halt)
+- [ ] Build correlation matrix for watchlist (rolling 60-day)
 
 ## Contributing
 

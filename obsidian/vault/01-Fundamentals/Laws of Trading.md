@@ -28,7 +28,7 @@ No more than 20% of capital in any single position to start. Acknowledged: reali
 
 ## Law 5: No Short-Dated Options
 
-Nothing under 30 DTE — theta decay kills anything shorter. Most of my call options are between 1 to 6 months out. A couple over a year out. This also means **never touch 0DTE**. I also don't play earnings. 90 DTE is fine but the premiums are steep — 30+ DTE balances cost vs. time.
+Nothing under 30 DTE — theta decay kills anything shorter. Most of my call options are between 3 to 6 months out. A couple over a year out. This also means **never touch 0DTE**. I also don't play earnings. 30+ DTE balances cost vs. time.
 
 ## Law 6: Know the Difference Between Luck and Skill
 
@@ -50,7 +50,7 @@ These laws translate into hard constraints in the trading system:
 
 | Law | System Enforcement |
 |-----|-------------------|
-| Law 1 | Emotion detection暂停 — if recent losses > threshold, require cooldown before next trade |
+| Law 1 | Emotion detection — if recent losses > threshold, require cooldown before next trade |
 | Law 2 | If position P&L variance triggers emotional threshold, auto-suggest size reduction |
 | Law 3 | `max_position_size = 0.20 * portfolio_value` — hard cap, no override |
 | Law 4 | Auto-generate take-profit orders at 30% and 50% gain levels (1/3 each, let remainder ride) |
@@ -63,6 +63,9 @@ These laws translate into hard constraints in the trading system:
 
 ## See Also
 
-- [[Risk Management]] — Position sizing formulas and stop-loss frameworks
+- [[Position Sizing]] — Formulas and methods for calculating trade size
+- [[Loss Limits]] — Stop-losses, drawdown caps, and circuit breakers
+- [[Correlation Risk]] — Portfolio correlation and sector exposure
+- [[Risk Management]] — Overview of all risk pillars
 - [[Watchlist]] — Current tracked assets
 - [[Alpaca API]] — Trading and data endpoints

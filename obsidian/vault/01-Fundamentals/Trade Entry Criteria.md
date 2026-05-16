@@ -118,7 +118,7 @@ These are the *timing* signals — they don't tell us WHAT to trade, they tell u
 │                                                                  │
 │  Composite Signal Score ──→ Laws of Trading Check                │
 │                            ├─ Position size ≤ 20%?               │
-│                            ├─ DTE ≥ 30?                          │
+│                            ├─ DTE ≥ 30?                           │
 │                            ├─ Stop-loss defined?                  │
 │                            ├─ Research record attached?          │
 │                            └─ No earnings play?                  │

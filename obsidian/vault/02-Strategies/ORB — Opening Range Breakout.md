@@ -1,7 +1,7 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
-tags: [strategy, swing-trading, orb, mOC]
+updated: 2026-05-16
+tags: [strategy, day-trading, orb, mOC]
 status: draft
 ---
 
@@ -13,7 +13,7 @@ status: draft
 - [ ] Validated — proven positive expected value
 
 ## Category
-[[Swing Trading]] — hold hours to days (typically same-day or next-day exit)
+[[Day Trading]] — hold minutes to hours (same-day or next-day exit)
 
 ## Trigger
 From [[Trade Entry Criteria]]:
@@ -27,8 +27,9 @@ From [[Trade Entry Criteria]]:
 - [ ] Opening range high defined (15-min or 30-min after market open)
 - [ ] Price breaks above opening range high with volume ≥ 2x average
 - [ ] VWAP is rising after breakout
-- [ ] Stock not in first/last 15 minutes of trading (Law — volatility trap)
+- [ ] Stock not in first/last 15 minutes of trading (volatility trap)
 - [ ] No earnings within 5 business days
+- [ ] Pre-market action checked (gap up/down?)
 
 **For Short / Puts (bearish breakdown):**
 - [ ] Opening range low defined
@@ -46,24 +47,23 @@ From [[Trade Entry Criteria]]:
 2. Candle closes outside range (not just a wick)
 3. No immediate reversal
 
-## Position Sizing
-- **Capital allocation:** ≤20% of portfolio (Law 3)
-- **Formula:** Risk amount / (ATR × 2) = position size (ORBs have wider stops)
-- **Smaller than EMA crossover position** — opening range trades have higher volatility
-
 ## Stop-Loss (defined before entry — Law 2)
 - **Bullish ORB stop:** Below opening range low or 1.5 ATR below entry
 - **Bearish ORB stop:** Above opening range high or 1.5 ATR above entry
+- **ATR multiplier for sizing:** 1.5× → see [[Position Sizing#ATR-Based]]
 - **No exceptions** — if it reverses back into the range, you're out
 
-## Take-Profit (Law 4 — realize gains)
-- **Target 1 (1:1 R:R):** Sell 1/3 — covers risk
-- **Target 2 (1:2 R:R):** Sell 1/3 — locks in profit
-- **Remainder:** Trail with VWAP or previous day's low as stop
+## Risk Parameters
+→ All R:R, position sizing, take-profit, and drawdown limits are defined in [[Risk Management]] and [[Position Sizing#Day Trading]]
+- This strategy uses the **Day Trading** risk profile
+- R:R minimum: **3:1** (see [[Position Sizing]])
+- Position sizing: **5% risk / ATR × 1.5** stop method (see [[Position Sizing#Day Trading]])
+- Take-profit tiers: **20% / 40% / flatten before close** (see [[Loss Limits#Tiered Exit — Day Trading]])
+- **Time stop:** Flatten all positions before market close — no overnight gap risk
 
 ## DTE Requirement (options only — Law 5)
-- **Minimum DTE:** 30
-- **Preferred:** 45-60 DTE — ORBs can be quick but need cushion for timing
+- **Minimum DTE:** 30 (insurance for timing, not hold time)
+- **Preferred:** 45-60 DTE — gives cushion, but you're typically out same-day
 - **Strike selection:** Slightly ITM (delta 0.55-0.65) for faster move on breakout
 
 ## Research Checklist (Law 8)
@@ -73,11 +73,7 @@ From [[Trade Entry Criteria]]:
 - [ ] Sector strength assessed (is the whole sector moving?)
 - [ ] Greeks analyzed for options (delta, theta, IV rank)
 - [ ] IV rank checked — avoid entries when IV rank > 70 (expensive options)
-
-## Risk/Reward
-- **Typical R:R:** 1:2 minimum, ideally 1:3 (ORBs can run big)
-- **Win rate target:** 40-45% is acceptable if R:R is ≥1:2.5
-- **Max loss:** Stop level × position size
+- [ ] Correlation check — ORB on NVDA + AMD + MU same morning = one trade (see [[Correlation Risk]])
 
 ## Invalidation
 Exit immediately if:
@@ -85,10 +81,11 @@ Exit immediately if:
 - Volume dies immediately after breakout
 - Sector or market turns against thesis
 - Trade causing emotional reaction (Law 2 — size down)
+- Time stop hit — flatten before close, no exceptions
 
 ## Timeframe Notes
 - **15-min ORB:** Faster, more signals, more false breakouts
-- **30-min ORB:** Fewer signals, higher quality, better for beginners
+- **30-min ORB:** Fewer signals, higher quality, better for newer traders
 - **1-hour ORB:** Most conservative, best for high-priced stocks
 
 ## Backtest Results

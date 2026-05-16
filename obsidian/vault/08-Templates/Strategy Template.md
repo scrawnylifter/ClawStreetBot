@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-16
 tags: [template, strategy]
 ---
 
@@ -10,6 +10,9 @@ tags: [template, strategy]
 - [ ] Draft — not tested
 - [ ] Paper — live on Alpaca Paper for ≥30 days
 - [ ] Validated — proven positive expected value
+
+## Category
+[[Day Trading]] / [[Swing Trading]] / [[Long-Term Holding]] — choose one
 
 ## Trigger
 Which [[Trade Entry Criteria]] signals fired?
@@ -22,19 +25,16 @@ Which [[Trade Entry Criteria]] signals fired?
 - **Timing:**
 - **Execution steps:**
 
-## Position Sizing
-- **Capital allocation:** ≤20% of portfolio (Law 3)
-- **Formula:** (shares/contracts based on ATR and risk)
-- **Max position:**
-
 ## Stop-Loss (defined before entry — Law 2)
 - **Stop level:**
+- **ATR multiplier:** (feeds into position sizing at [[Position Sizing]])
 - **Why here:**
 
-## Take-Profit (Law 4 — realize gains)
-- **Target 1 (+30%):** Sell 1/3
-- **Target 2 (+50%):** Sell 1/3
-- **Remainder:** Trail with stop
+## Risk Parameters
+→ All R:R, position sizing, take-profit, and drawdown limits from [[Risk Management]]
+- This strategy uses the **[Day / Swing / Long-Term]** risk profile
+- See [[Position Sizing]] for sizing formulas
+- See [[Loss Limits]] for take-profit tiers
 
 ## DTE Requirement (options only — Law 5)
 - **Minimum DTE:** 30
@@ -45,11 +45,7 @@ Which [[Trade Entry Criteria]] signals fired?
 - [ ] Data sources cited
 - [ ] Greeks analyzed (for options)
 - [ ] IV rank/percentile checked
-
-## Risk/Reward
-- **Expected R:R:**
-- **Probability estimate:**
-- **Max loss:**
+- [ ] Correlation check — sector exposure vs existing positions (see [[Correlation Risk]])
 
 ## Invalidation
 What makes this trade wrong? Exit immediately if:

@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-16
 tags: [strategy, long-term, accumulation, mOC]
 status: draft
 ---
@@ -34,27 +34,25 @@ From [[Trade Entry Criteria]]:
 
 ## Entry
 - **Order type:** Limit order at current price or slightly below
-- **Timing:** Anytime — not time-sensitive like swing trades
+- **Timing:** Anytime — not time-sensitive like swing/day trades
 - **Scale approach:** Don't buy the full position at once. Buy in 3rds:
   - 1/3 on the 5% dip
   - 1/3 on a further 5% dip (5% below your first entry)
   - 1/3 on confirmation of a rebound (price starts recovering)
 
-## Position Sizing
-- **Max total position:** ≤20% of portfolio (Law 3) — this includes all tranches
-- **Per-tranche sizing:** ~6-7% per buy (3 tranches × 6.7% ≈ 20%)
-- **Example:** $10,000 portfolio → max $2,000 total in stock → buy $670 per tranche
-
 ## Stop-Loss (Law 2 — even long-term holds need one)
-- **Stop level:** 15-20% below your average entry
-- **Why:** Long-term holds can turn into bagholds. A 20% loss is recoverable. A 60% loss is not.
-- **Trailing stop:** Once position is up >10%, trail at 10% below recent high
+- **Stop type:** Thesis-based (not price-based)
+- **Ask:** "Is the reason I bought this stock still true?"
+- **If no → sell. If yes → hold or add.**
+- See [[Position Sizing#Long-Term Holding]] for thesis invalidation model
+- See [[Loss Limits]] for trailing stop after position is profitable
 
-## Take-Profit (Law 4 — realize gains)
-- Different from swing trades — we're accumulating, not flipping
-- **First scale-out:** When position is up 30-50%, consider selling 1/3
-- **Reinvestment:** Rotate profits into the next dip opportunity on a different watchlist stock
-- **Core holding:** Keep at least 1/3 as a long-term position indefinitely
+## Risk Parameters
+→ All R:R, position sizing, take-profit, and drawdown limits are defined in [[Risk Management]] and [[Position Sizing#Long-Term Holding]]
+- This strategy uses the **Long-Term Holding** risk profile
+- Position sizing: **3-tranche scale-in** (~5-7% per tranche, max 15-20% total) (see [[Position Sizing]])
+- Take-profit tiers: **50% / 100% / let it ride** (see [[Loss Limits#Tiered Exit — Long-Term Holding]])
+- Drawdown tolerance: **30-40%** (see [[Position Sizing]])
 
 ## No DTE Requirement
 This strategy is for shares, not options. Long-term equity accumulation.
@@ -69,7 +67,6 @@ This strategy is for shares, not options. Long-term equity accumulation.
 ## Invalidation
 Stop accumulating (and consider exiting) if:
 - The fundamental thesis changes (e.g., company loses a major contract)
-- The stock drops >20% from your average entry (stop-loss triggered)
 - Sector rotation away from your stock's industry
 - You're buying out of emotion, not conviction (Law 1)
 
