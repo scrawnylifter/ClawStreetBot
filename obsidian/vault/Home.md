@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-16
+updated: 2026-05-17
 tags: [home, mOC]
 ---
 
@@ -26,7 +26,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 || [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** · **[[Polygon.io API]]** |
 | [[05-Risk-Management]] | **[[Risk Management]]** · **[[Position Sizing]]** · **[[Loss Limits]]** · **[[Correlation Risk]]** |
 | [[06-Indicators]] | Technical indicators, calculations, usage notes |
-| [[07-Infrastructure]] | Deployment, monitoring, **[[Database Architecture]]** |
+| [[07-Infrastructure]] | Deployment, monitoring, **[[Database Architecture]]** · **[[n8n Scheduler]]** |
 | [[08-Templates]] | Reusable note templates |
 
 ## Quick Links
@@ -40,6 +40,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Polygon.io API]] — Historical data, fundamentals, options chains
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
+- [[n8n Scheduler]] — 6 workflows, Docker socket isolation, API management
 
 ## Current Status
 

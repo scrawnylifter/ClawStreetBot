@@ -23,10 +23,17 @@ ClawStreetBot uses a **PostgreSQL + Redis** stack, both running in Docker.
 
 ### `clawstreet` database
 
-**`market` schema** — Asset prices and metadata
-- `market.assets` — Stocks, crypto, forex definitions
-- `market.ohlcv` — OHLCV candle data (all timeframes)
-- Index on `(asset_id, timeframe, timestamp DESC)` for fast lookups
+**`market` schema** — Asset prices, options, and derived analytics
+- `market.assets` — Watchlist symbols with lifecycle columns: `active`, `added_at`, `deactivated_at`, `backfill_status`
+- `market.ohlcv` — OHLCV candle data (1d, 5m, 15m). Index on `(asset_id, timeframe, timestamp DESC)`
+- `market.options` — Options contracts with strike, expiry, type, settlement
+- `market.greeks` — Greeks snapshots (delta, gamma, theta, vega, IV) per contract/date
+- `market.iv_rank` — IV rank percentiles per symbol/date (1,576 rows)
+- `market.realized_vol` — 20-day and 5-day annualized realized volatility + IV-RV spread per symbol/date (3,465 rows)
+- `market.gex_dex` — GEX/DEX per strike/expiry per symbol/date (9,350 rows)
+- `market.gex_dex_overview` — Net GEX/DEX totals per underlying/date (15 rows)
+- `market.fundamentals` — Revenue, EPS, P/E (currently empty, Phase 2)
+- `market.ingest_state` — Tracks last-ingested timestamp per symbol/timeframe for incremental updates
 
 **`scraper` schema** — Scraped content from the internet
 - `scraper.sources` — RSS feeds, Twitter, Reddit, etc.

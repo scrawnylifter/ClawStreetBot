@@ -44,9 +44,17 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Database Schema
 
-Key tables (see `db/init/02_create_tables.sql` for full DDL):
-- `market.assets` — symbols with sector/industry tags
-- `market.ohlcv` — OHLCV bars (fk → assets)
+Key tables (see `db/init/` for full DDL):
+- `market.assets` — watchlist symbols with lifecycle columns (active, added_at, deactivated_at, backfill_status)
+- `market.ohlcv` — OHLCV bars (1d, 5m, 15m; fk → assets)
+- `market.options` — options contracts with strike, expiry, type, settlement
+- `market.greeks` — greeks snapshots (delta, gamma, theta, vega, IV) per contract/date
+- `market.iv_rank` — IV rank percentiles per symbol/date (1,576 rows)
+- `market.realized_vol` — 20d/5d annualized RV + IV-RV spread per symbol/date (3,465 rows)
+- `market.gex_dex` — GEX/DEX per strike/expiry per symbol/date (9,350 rows)
+- `market.gex_dex_overview` — net GEX/DEX totals per underlying/date (15 rows)
+- `market.ingest_state` — tracks last-ingested timestamp per symbol/timeframe for incremental updates
+- `market.fundamentals` — revenue, EPS, P/E (empty — Phase 2 TBD)
 - `scraper.sources` — RSS/social/news sources
 - `scraper.articles` — scraped articles with sentiment + symbol arrays
 - `scraper.posts` — social media posts
@@ -181,7 +189,7 @@ ClawStreetBot/
     ├── 04-API-References/   ← Alpaca API, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
     ├── 06-Indicators/       ← (empty, ready for TA docs)
-    ├── 07-Infrastructure/   ← Database Architecture
+    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler
     └── 08-Templates/
 ```
 
