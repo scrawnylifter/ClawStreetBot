@@ -1,0 +1,31 @@
+{
+  "name": "intraday_signal_5m",
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300},
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "*/5 9-15 * * 1-5"
+      },
+      "id": "trigger",
+      "name": "Every 5min Market Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /app && python scripts/intraday_signal.py --threshold 60"
+      },
+      "id": "run",
+      "name": "Intraday Signal Refresh",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 300]
+    }
+  ],
+  "connections": {
+    "Every 5min Market Hours": {
+      "main": [[{"node": "Intraday Signal Refresh", "type": "main", "index": 0}]]
+    }
+  }
+}
