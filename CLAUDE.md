@@ -54,7 +54,9 @@ Key tables (see `db/init/` for full DDL):
 - `market.gex_dex` — GEX/DEX per strike/expiry per symbol/date (9,350 rows)
 - `market.gex_dex_overview` — net GEX/DEX totals per underlying/date (15 rows)
 - `market.ingest_state` — tracks last-ingested timestamp per symbol/timeframe for incremental updates
-- `market.fundamentals` — revenue, EPS, P/E (empty — Phase 2 TBD)
+- `market.technical_indicators` — EMA/RSI/MACD/ATR/VWAP/Bollinger per symbol/date (4,125 rows)
+- `market.greeks_filter` — IV regime + per-contract filter results (19,976 rows, 543 passing)
+- `market.iv_outliers` — 3σ z-score IV outlier flags (sparse, only flagged rows)
 - `scraper.sources` — RSS/social/news sources
 - `scraper.articles` — scraped articles with sentiment + symbol arrays
 - `scraper.posts` — social media posts
@@ -128,6 +130,30 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - **Gamma risk:** high near expiry (Law 5 backs this up), moderate for swing, low for LT
 - **Vanna:** monitor around IV regime changes and earnings — delta shifts when IV shifts
 
+## 🔐 MANDATORY: Secrets & Credentials
+
+**NEVER hardcode API keys, passwords, tokens, or connection strings in commands, scripts, or tool calls.** This is non-negotiable.
+
+### Rules
+1. **All credentials live in `.env.*` files** — `.env.db`, `.env.polygon`, `.env.alpaca`, `.env.n8n` (gitignored)
+2. **Scripts source `.env.*` automatically** — use the `load_env()` pattern (see any `scripts/compute_*.py`)
+3. **Shell helpers source `.env.*` automatically** — use `scripts/n8n_api.sh` for all n8n REST API calls (never raw curl with hardcoded keys)
+4. **Docker compose uses `env_file:` directives** — never put secrets in `environment:` blocks
+5. **`.env.*.example` files** are committed with placeholder values; real keys are gitignored
+6. **If a key is invalidated** (e.g., after n8n restart) — regenerate in the service UI, update `.env.*`, restart
+
+### ❌ WRONG
+```bash
+curl -H "X-N8N-API-KEY: eyJhbGciOi..." ...
+psql -U clawstreet -d clawstreet -h localhost -p 5432 -w ...
+```
+
+### ✅ RIGHT
+```bash
+./scripts/n8n_api.sh list          # sources key from .env.n8n
+source .env.db && psql ...         # or use load_env() in Python
+```
+
 ## Code Standards
 
 - Type hints on all public functions
@@ -138,6 +164,7 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - Use `psycopg2` or `psycopg2-binary` for Postgres connections
 - Use `alpaca-py` SDK for all Alpaca API calls
 - Use `polygon-api-client` SDK for Polygon.io calls
+- **See 🔐 MANDATORY section above** — the "never hardcoded" line is backed by the full skill: `.claude/skills/secrets-management.md`
 
 ## Project Structure
 
@@ -166,7 +193,7 @@ ClawStreetBot/
 │       ├── ohlcv_daily.json        ← Mon-Fri 18:00 ET
 │       ├── ohlcv_intraday.json     ← Mon-Fri hourly :05
 │       ├── options_daily.json      ← Mon-Fri 17:55 ET
-│       └── derived_daily.json      ← Mon-Fri 18:30 ET (RV → IV-rank → GEX)
+│       └── derived_daily.json      ← Mon-Fri 18:30 ET (RV → IV-rank → GEX → TechInd → GreeksFilter → IVOutliers)
 ├── scripts/
 │   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
 │   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
@@ -179,6 +206,10 @@ ClawStreetBot/
 │   ├── compute_iv_rank.py             ← Phase 2: IV rank calculation
 │   ├── compute_realized_vol.py        ← Phase 2: Realized volatility (20d/5d + IV-RV spread)
 │   ├── compute_gex_dex.py             ← Phase 2: GEX/DEX computation (strike/expiry + overview)
+│   ├── compute_technical_indicators.py ← Phase 2: EMA/RSI/MACD/ATR/VWAP/Bollinger
+│   ├── compute_greeks_filter.py        ← Phase 2: IV regime + delta/theta-budget gating per contract
+│   ├── compute_iv_outliers.py          ← Phase 2: 3σ z-score IV outlier flags
+│   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   └── backtest.py                    ← Phase 3: Backtesting engine
 └── obsidian/vault/         ← knowledge base (24 notes across 8 folders)
     ├── Home.md
@@ -207,9 +238,13 @@ Phase 1 (foundation) is complete. Phase 2 in progress:
 - [x] Polygon.io credentials verified (REST API + Flat Files S3)
 - [x] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres)
 - [x] IV rank / realized vol / GEX-DEX computed
+- [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
+- [x] Greeks filtering engine (IV regime, delta, theta-budget per contract)
+- [x] IV outlier detection (3σ z-score)
+- [x] n8n scheduler (7 nodes across 6 workflows + wollomatic socket-proxy)
+- [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
 - [x] n8n scheduler (6 workflows + wollomatic socket-proxy for secure docker exec)
-- [ ] Greeks filtering engine (IV rank, delta entry, theta budget)
 - [ ] RSS/News scraper pipeline
 - [ ] Signal generation engine
 
