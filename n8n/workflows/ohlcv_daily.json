@@ -1,0 +1,58 @@
+{
+  "name": "ohlcv_daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Weekdays 18:00 ET",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_polygon_ohlcv.py --timeframe 1d"
+      },
+      "id": "run",
+      "name": "ingest 1d bars",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Weekdays 18:00 ET": {
+      "main": [
+        [
+          {
+            "node": "ingest 1d bars",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/New_York"
+  },
+  "active": true
+}

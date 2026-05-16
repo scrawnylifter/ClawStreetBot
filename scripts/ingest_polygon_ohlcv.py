@@ -55,11 +55,11 @@ from polygon import RESTClient  # noqa: E402
 POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
 DB_CONFIG = {
-    "host": "localhost",
+    "host": os.environ.get("POSTGRES_HOST", "localhost"),
     "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-    "dbname": os.environ.get("POSTGRES_DB", "clawstreet"),
-    "user": os.environ.get("POSTGRES_USER", "clawstreet"),
-    "password": os.environ.get("POSTGRES_PASSWORD", "ClawStr33tBot2026"),
+    "dbname": os.environ["POSTGRES_DB"],
+    "user": os.environ["POSTGRES_USER"],
+    "password": os.environ["POSTGRES_PASSWORD"],
 }
 
 # (multiplier, timespan) per Polygon aggregate API
@@ -79,7 +79,10 @@ DEFAULT_DAYS = {
 
 def get_watchlist(conn) -> list[tuple[int, str]]:
     with conn.cursor() as cur:
-        cur.execute("SELECT id, symbol FROM market.assets WHERE asset_type='stock' ORDER BY symbol")
+        cur.execute(
+            "SELECT id, symbol FROM market.assets "
+            "WHERE asset_type='stock' AND active = TRUE ORDER BY symbol"
+        )
         return cur.fetchall()
 
 

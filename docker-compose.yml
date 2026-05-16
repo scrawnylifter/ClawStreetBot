@@ -37,7 +37,7 @@ services:
     container_name: clawstreet-redis
     env_file:
       - .env.db
-    command: redis-server --requirepass RedisClaw2026 --appendonly yes
+    command: redis-server --requirepass $$REDIS_PASSWORD --appendonly yes
     volumes:
       - redisdata:/data
     ports:
@@ -51,9 +51,71 @@ services:
       - clawnet
     restart: unless-stopped
 
+  # Idle Python container that n8n execs ingestion/compute scripts into.
+  # Project tree is bind-mounted at /app so edits land without rebuilding.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    image: clawstreetbot/worker:latest
+    container_name: clawstreet-worker
+    env_file:
+      - .env.db
+      - .env.polygon
+      - .env.alpaca
+    environment:
+      - POSTGRES_HOST=postgres
+      - PYTHONPATH=/app
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./config:/app/config:ro
+      - ./db/init:/app/db/init:ro
+      - ./.env.db:/app/.env.db:ro
+      - ./.env.polygon:/app/.env.polygon:ro
+      - ./.env.alpaca:/app/.env.alpaca:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - clawnet
+    restart: unless-stopped
+
+  # Workflow scheduler. Workflows under ./n8n/workflows are checked in;
+  # runtime state (executions, encrypted creds) lives in the n8n_data volume.
+  n8n:
+    build:
+      context: .
+      dockerfile: docker/n8n/Dockerfile
+    image: clawstreetbot/n8n:latest
+    container_name: clawstreet-n8n
+    env_file:
+      - .env.n8n
+    environment:
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_SECURE_COOKIE=false
+    ports:
+      - "${N8N_HOST_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # GID of the host's docker group — lets the non-root `node` user use the socket.
+    # Override in .env.n8n if your host uses a different GID (e.g. 999 on Debian).
+    group_add:
+      - "${DOCKER_GID:-988}"
+    depends_on:
+      - worker
+    networks:
+      - clawnet
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
+  n8n_data:
 
 networks:
   clawnet:

@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-16
 tags: [home, mOC]
 ---
 
@@ -58,6 +58,9 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] **Options + greeks ingestion** — 20k contracts, daily snapshots (see [[Backtesting Architecture]])
 - [x] **Claude Code + Postgres MCP** — direct DB access for research & analysis
 - [x] **PDT rules documented** — 3 day-trade limit, emergency-only 3rd, NEVER 4th
+- [x] **IV rank / realized vol / GEX-DEX computed** — `market.iv_rank` (1,576), `market.realized_vol` (3,465), `market.gex_dex` (9,350) + overview (15)
+- [x] **Watchlist lifecycle** — `config/watchlist.yml` source-of-truth; add / soft-deactivate / re-add via `market.assets.active` + `backfill_status`
+- [x] **n8n scheduler** — 6 workflows drive watchlist sync, pending backfills, OHLCV (daily + intraday), options, and derived computes (RV → IV-rank → GEX). Worker container execs Python scripts; secrets via `.env.n8n`.
 - [ ] **Historical IV backfill** for IV rank calculation
 - [ ] **Greeks filtering engine** — IV regime, delta entry, theta budget (see [[Greeks Strategy]])
 - [ ] RSS/News + Reddit scraper pipeline

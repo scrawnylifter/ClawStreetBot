@@ -8,6 +8,9 @@ obsidian/config/
 
 # Docker volumes (persistent DB data — managed by Docker)
 db/data/
+
+# n8n runtime state (workflows themselves live under n8n/workflows/ and ARE tracked)
+n8n/data/
 *.key
 *.pem
 *.p12

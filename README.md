@@ -37,11 +37,16 @@ Autonomous stock screening, alerts, and trading.
 
 ## Watchlist
 
-ClawStreetBot tracks a configurable watchlist stored in both Alpaca and Postgres (with sector/industry tags for heat maps). Run the setup script and add your own picks:
+ClawStreetBot tracks a YAML-driven watchlist (`config/watchlist.yml`) synced to Alpaca and Postgres, with sector/industry tags for heat maps. Edits to the YAML are picked up by the next `setup_watchlist.py` run (or the `watchlist_sync` n8n workflow that runs every 5 minutes).
+
+- **Add** a symbol → row inserted into `market.assets` with `backfill_status='pending'`. The `backfill_pending` workflow picks it up and runs the full OHLCV → options → IV → RV → GEX chain.
+- **Remove** a symbol → `active=false`, `deactivated_at=NOW()`. Historical rows are retained; ingestion simply stops touching it (all queries filter `WHERE active = TRUE`).
+- **Re-add** a symbol → `active=true`, status re-armed to `pending`; OHLCV gap-fills incrementally from `market.ingest_state.last_timestamp`.
 
 ```bash
-# Edit SYMBOLS in scripts/setup_watchlist.py, then:
-python scripts/setup_watchlist.py
+# Edit config/watchlist.yml, then:
+python scripts/setup_watchlist.py        # diff YAML vs DB, sync both sides
+python scripts/backfill_symbol.py TSLA   # one-shot full backfill for a single symbol
 ```
 
 ## Databases
@@ -57,20 +62,41 @@ python scripts/setup_watchlist.py
 ```
 ClawStreetBot/
 ├── docker-compose.yml          # All services
+├── requirements.txt            # Python deps for worker image + local venv
 ├── .env.db                     # DB credentials (gitignored)
 ├── .env.alpaca                 # Alpaca API keys (gitignored)
 ├── .env.polygon                # Polygon.io API key (gitignored)
 ├── .env.obsidian               # Obsidian config (gitignored)
+├── .env.n8n                    # n8n basic-auth + encryption key (gitignored)
 ├── .venv/                      # Python venv (gitignored)
+├── config/
+│   └── watchlist.yml           # YAML source-of-truth for tracked symbols
 ├── db/init/                    # Postgres init scripts
 │   ├── 01_init_databases.sql
 │   ├── 02_create_tables.sql
-│   └── 03_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
+│   ├── 03_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
+│   ├── 04_rv_gex_tables.sql    # Realized volatility, GEX/DEX tables
+│   └── 05_watchlist_lifecycle.sql # active/added_at/deactivated_at/backfill_status
+├── docker/
+│   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
+│   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
+├── n8n/
+│   └── workflows/              # Source-of-truth JSON for n8n workflows
+│       ├── watchlist_sync.json
+│       ├── backfill_pending.json
+│       ├── ohlcv_daily.json
+│       ├── ohlcv_intraday.json
+│       ├── options_daily.json
+│       └── derived_daily.json
 ├── scripts/                    # Python scripts
 │   ├── explore_data.py         # Alpaca data explorer
-│   ├── setup_watchlist.py      # Watchlist setup (Alpaca + Postgres)
+│   ├── setup_watchlist.py      # Sync config/watchlist.yml → Alpaca + Postgres
+│   ├── backfill_symbol.py      # Full ingestion chain for one symbol
 │   ├── ingest_polygon_ohlcv.py # OHLCV bars → market.ohlcv (1d/5m/15m)
 │   ├── ingest_polygon_options.py # Options contracts + greeks snapshots
+│   ├── compute_iv_rank.py        # IV rank from historical IV percentiles
+│   ├── compute_realized_vol.py   # 20d/5d realized volatility + IV-RV spread
+│   ├── compute_gex_dex.py        # GEX/DEX by strike/expiry + overview per underlying
 │   └── backfill_historical_iv.py # Historical IV backfill
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
@@ -112,31 +138,56 @@ cp .env.db.example .env.db
 cp .env.obsidian.example .env.obsidian
 cp .env.alpaca.example .env.alpaca
 cp .env.polygon.example .env.polygon
-# Edit each with real passwords/keys
+cp .env.n8n.example .env.n8n
+# Edit each with real passwords/keys.
+# For .env.n8n, set DOCKER_GID to `stat -c '%g' /var/run/docker.sock`.
 
-# Launch all services
+# Launch all services (Postgres, Redis, Obsidian, worker, n8n)
 docker compose up -d
 
-# Install Python dependencies
+# Install Python dependencies for the local venv
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Set up watchlist in Alpaca + Postgres
+# Edit config/watchlist.yml, then sync to Alpaca + Postgres
 python scripts/setup_watchlist.py
 
-# Ingest Polygon.io market data
-python scripts/ingest_polygon_ohlcv.py --all-timeframes   # OHLCV bars (1d/5m/15m)
-python scripts/ingest_polygon_options.py                    # Options + greeks snapshots
-
-# Explore available data
-python scripts/explore_data.py
+# One-off manual backfills (n8n will run these on schedule too)
+python scripts/ingest_polygon_ohlcv.py --all-timeframes
+python scripts/ingest_polygon_options.py
+python scripts/backfill_historical_iv.py
+python scripts/compute_realized_vol.py
+python scripts/compute_iv_rank.py
+python scripts/compute_gex_dex.py
 
 # Connect to Postgres
 docker exec -it clawstreet-db psql -U clawstreet -d clawstreet
 
 # Connect to Redis
 docker exec -it clawstreet-redis redis-cli -a <password>
+```
+
+## Continuous Ingestion (n8n)
+
+The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`.
+
+| Workflow            | Schedule (ET)              | Action                                                       |
+|---------------------|----------------------------|--------------------------------------------------------------|
+| `watchlist_sync`    | every 5 min                | `setup_watchlist.py` (no-op when YAML unchanged)             |
+| `backfill_pending`  | every 5 min                | Picks `backfill_status='pending'` symbols → `backfill_symbol.py` |
+| `ohlcv_daily`       | Mon–Fri 18:00              | 1d OHLCV bars                                                |
+| `ohlcv_intraday`    | Mon–Fri hourly :05 (09–16) | 5m + 15m OHLCV bars                                          |
+| `options_daily`     | Mon–Fri 17:55              | Options contracts + greeks snapshot                          |
+| `derived_daily`     | Mon–Fri 18:30              | RV → IV-rank → GEX chain                                     |
+
+n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
+
+Import + activate workflows once the n8n owner account is set up:
+
+```bash
+docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows
+# Then activate each workflow in the UI (Settings → Workflows → toggle Active)
 ```
 
 ## Alpaca API
@@ -182,6 +233,12 @@ We use **Alpaca for execution** and **Polygon.io for deep historical data and an
 - [x] Store Polygon data in `market.*` Postgres tables (ohlcv, options, greeks, iv_rank, fundamentals)
 - [x] Backfill historical data for 15 watchlist symbols
 - [x] Claude Code + Postgres MCP — direct DB access for research & analysis
+- [x] IV rank computation (`compute_iv_rank.py` — 1,576 rows in market.iv_rank)
+- [x] Realized volatility computation (`compute_realized_vol.py` — 3,465 rows in market.realized_vol)
+- [x] GEX/DEX computation (`compute_gex_dex.py` — 9,350 rows in market.gex_dex, 15 rows in market.gex_dex_overview)
+- [x] Watchlist lifecycle (`config/watchlist.yml`, `market.assets.active/backfill_status`, soft-deactivate on remove)
+- [x] Per-symbol backfill orchestrator (`scripts/backfill_symbol.py`)
+- [x] n8n scheduler with worker container (6 workflows: watchlist_sync, backfill_pending, ohlcv_daily, ohlcv_intraday, options_daily, derived_daily)
 - [ ] Historical IV backfill for IV rank calculation
 - [ ] Greeks filtering engine — IV regime, delta entry, theta budget
 - [ ] Technical analysis engine (EMA, MACD, RSI, VWAP, ATR, ORB)
