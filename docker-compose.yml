@@ -131,6 +131,9 @@ services:
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
       - N8N_SECURE_COOKIE=false
+      # Re-enable Execute Command and Local File Trigger nodes (disabled by default in n8n v2.x).
+      # Setting NODES_EXCLUDE to an empty array overrides the breaking-change rule.
+      - NODES_EXCLUDE=[]
       # Routes the docker CLI inside this container through the proxy.
       - DOCKER_HOST=tcp://docker-proxy:2375
     ports:
