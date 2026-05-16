@@ -24,6 +24,8 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/explore_data.py` — explore Alpaca data
 - `python scripts/explore_options.py` — explore options chains
 - `python scripts/options_analysis.py` — options greeks/IV analysis
+- `python scripts/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01` — run backtest
+- `python scripts/generate_signals.py --all` — generate daily signals
 
 ## Credentials (gitignored)
 
@@ -63,6 +65,9 @@ Key tables (see `db/init/` for full DDL):
 - `scraper.posts` — social media posts (75 posts)
 - `trading.signals` — generated trading signals with 6-factor composite scoring (0-100)
 - `trading.positions` — open/closed positions
+- `trading.backtest_runs` — backtest run metadata (strategy mode, date range, capital, params)
+- `trading.backtest_trades` — individual simulated trades with P&L, R-multiples, partial exits
+- `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 
 ## Watchlist (15 stocks)
 
@@ -235,7 +240,9 @@ ClawStreetBot/
 
 ## Current Phase
 
-Phase 1 (foundation) is complete. Phase 2 in progress:
+Phase 1 (foundation) and Phase 2 (analytics) are complete. Phase 3 (backtesting) is complete:
+
+All phases 1-3 complete. Operational pipeline running daily/weekly.
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
 - [x] Options data explorers working
@@ -253,11 +260,11 @@ Phase 1 (foundation) is complete. Phase 2 in progress:
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (9 workflows + wollomatic socket-proxy)
+- [x] n8n scheduler (10 workflows + wollomatic socket-proxy)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Secrets management skill (NEVER hardcode API keys)
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
-- [ ] Backtesting engine (Phase 3)
+- [x] Backtesting engine (day/swing/long_term with user trading rules, ATR-based SL/TP, partial exits, PDT tracking)
 
 ## Security Architecture
 
