@@ -50,11 +50,37 @@ tags: [roadmap, mOC]
 - [x] Trend-aware intraday adjustments — aligned trend boosts signal, counter-trend penalizes
 
 ## Phase 5 — Execution & Alerts (NEXT)
-- [ ] Telegram alert system — push notifications when signals cross thresholds
-- [ ] Order execution engine — market, limit, stop, bracket orders via Alpaca
-- [ ] Position sizing calculator — standalone tool beyond backtest engine
-- [ ] Monitoring & dashboards — positions, P&L, violations, performance
-- [ ] Regime optimizer improvement — needs more diverse bull/bear data to outperform static weights
+
+### 5A: Telegram Alert System (see [[Telegram Alert System]])
+- [ ] Create Telegram bot + store credentials in `.env.telegram`
+- [ ] `scripts/alert_telegram.py` — format + send alerts via Telegram Bot API
+- [ ] Alert deduplication via `trading.alert_history` table
+- [ ] Trade signal alerts: composite > 60, factor breakdown, regime/trend context
+- [ ] Risk alerts: drawdown halts, PDT warnings, position breaches
+- [ ] Pipeline health: daily summary, failures, data freshness
+- [ ] Regime/trend/IV threshold change notifications
+- [ ] 2 n8n workflows: `alerts_daily`, `alerts_intraday`
+
+### 5B: Order Execution Engine (see [[Order Execution Engine]])
+- [ ] `scripts/execute_trades.py` — full execution engine with subcommands
+- [ ] Pre-flight checks: Laws compliance (20% cap, DTE≥30, PDT, drawdown) + greeks filters
+- [ ] Contract selection: options with DTE≥30, delta in range, cheapest theta
+- [ ] Position sizing: per user rules (5% day, 10% swing, 5%/tranche LT)
+- [ ] Order construction: bracket orders with ATR-based SL, tiered TP
+- [ ] Telegram approval flow (first 30 days human-in-the-loop)
+- [ ] Exit management: SL, TP1/TP2/trail, time stops, greeks exits, thesis stops
+- [ ] PDT tracker module + drawdown circuit breakers
+- [ ] Extend `trading.positions` + `trading.execution_log` for audit trail
+- [ ] Paper-only default, `--mode live` explicit flag
+- [ ] 2 n8n workflows: `execute_daily`, `execute_intraday`
+
+### 5C: Monitoring & Dashboards (see [[Monitoring & Dashboards]])
+- [ ] Materialized views for dashboard queries (portfolio, signals, risk, freshness)
+- [ ] `scripts/dashboard_api.py` — FastAPI read-only JSON endpoints
+- [ ] HTML dashboard: positions, signals, context, pipeline, risk
+- [ ] Docker service on port 8080 (LAN-only, read-only DB access)
+- [ ] Mobile-responsive, dark theme, 60s auto-refresh
+- [ ] Alert timeline + pipeline failure highlighting
 
 ## Phase 6 — Advanced
 - [ ] Multi-asset support (crypto, futures)

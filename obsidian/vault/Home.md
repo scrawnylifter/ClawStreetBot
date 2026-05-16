@@ -26,7 +26,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 | [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** · **[[Polygon.io API]]** |
 | [[05-Risk-Management]] | **[[Risk Management]]** · **[[Position Sizing]]** · **[[Loss Limits]]** · **[[Correlation Risk]]** |
 | [[06-Indicators]] | Technical indicators, calculations, usage notes |
-| [[07-Infrastructure]] | Deployment, monitoring, **[[Database Architecture]]** · **[[n8n Scheduler]]** |
+| [[07-Infrastructure]] | Deployment, monitoring, **[[Database Architecture]]** · **[[n8n Scheduler]]** · **[[Telegram Alert System]]** · **[[Order Execution Engine]]** · **[[Monitoring & Dashboards]]** |
 | [[08-Templates]] | Reusable note templates |
 
 ## Quick Links
@@ -41,6 +41,9 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
 - [[n8n Scheduler]] — 12 workflows, Docker socket isolation, API management
+- [[Telegram Alert System]] — Real-time trade signals and risk alerts via Telegram
+- [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
+- [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
 
 ## Current Status
 
@@ -85,9 +88,28 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] Trend-aware intraday adjustments — aligned trend boosts, counter-trend penalizes
 - [x] 5-minute intraday signal refresh — re-scores tech from 5m bars, threshold alerts
 
-**Remaining Items**
-- [ ] Telegram alert system (signals exist but no push notifications)
-- [ ] Order execution engine (still paper-only)
-- [ ] Position sizing calculator (backtest has it, no standalone tool)
-- [ ] Monitoring/dashboards (no visibility beyond raw DB queries)
-- [ ] Regime optimizer needs more diverse data (underperforms static — not a code fix)
+**Remaining Items (Phase 5 — Execution & Alerts)**
+- [ ] **Telegram Alert System** (see [[Telegram Alert System]])
+  - Trade signal alerts: score > 60, with factor breakdown, regime, trend context
+  - Risk alerts: drawdown halts, PDT warnings, position size breaches
+  - Pipeline health: daily summary, failure notifications, data freshness
+  - Regime/trend/IV threshold changes
+  - Alert deduplication via `trading.alert_history`
+  - 2 new n8n workflows: alerts_daily, alerts_intraday
+- [ ] **Order Execution Engine** (see [[Order Execution Engine]])
+  - Pre-flight checks: Laws compliance + greeks filtering before any order
+  - Contract selection: options DTE≥30, delta in range, cheapest theta
+  - Position sizing: your rules (5% day, 10% swing, 5%/tranche LT)
+  - Bracket orders: ATR-based SL, tiered TP (30%/50%/trail for swing)
+  - Telegram approval flow for first 30 days (human-in-the-loop)
+  - Exit management: stop-loss, take-profit, time stops, greeks exits
+  - PDT tracker + drawdown circuit breakers enforced in code
+  - Paper-only by default, `--mode live` requires explicit flag
+- [ ] **Monitoring & Dashboards** (see [[Monitoring & Dashboards]])
+  - Portfolio view: positions, unrealized P&L, daily returns, win rate
+  - Signal dashboard: today's signals, intraday changes, accuracy tracking
+  - Market context: regime, IV rank, GEX, trend, sentiment
+  - Pipeline health: workflow status, data freshness, error counts
+  - Risk monitor: PDT, drawdown, concentration, greeks exposure
+  - FastAPI backend + HTML dashboard, LAN-only (port 8080)
+  - Mobile-responsive, dark theme, 60s auto-refresh
