@@ -59,6 +59,45 @@
         920,
         300
       ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_technical_indicators.py"
+      },
+      "id": "tech",
+      "name": "compute technical indicators",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_greeks_filter.py"
+      },
+      "id": "gfilter",
+      "name": "compute greeks filter",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_iv_outliers.py"
+      },
+      "id": "ivout",
+      "name": "compute iv outliers",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1640,
+        300
+      ]
     }
   ],
   "connections": {
@@ -89,6 +128,39 @@
         [
           {
             "node": "compute gex/dex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute gex/dex": {
+      "main": [
+        [
+          {
+            "node": "compute technical indicators",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute technical indicators": {
+      "main": [
+        [
+          {
+            "node": "compute greeks filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute greeks filter": {
+      "main": [
+        [
+          {
+            "node": "compute iv outliers",
             "type": "main",
             "index": 0
           }
