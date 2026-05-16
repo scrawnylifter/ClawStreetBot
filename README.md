@@ -64,10 +64,14 @@ ClawStreetBot/
 ├── .venv/                      # Python venv (gitignored)
 ├── db/init/                    # Postgres init scripts
 │   ├── 01_init_databases.sql
-│   └── 02_create_tables.sql
+│   ├── 02_create_tables.sql
+│   └── 03_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
 ├── scripts/                    # Python scripts
 │   ├── explore_data.py         # Alpaca data explorer
-│   └── setup_watchlist.py      # Watchlist setup (Alpaca + Postgres)
+│   ├── setup_watchlist.py      # Watchlist setup (Alpaca + Postgres)
+│   ├── ingest_polygon_ohlcv.py # OHLCV bars → market.ohlcv (1d/5m/15m)
+│   ├── ingest_polygon_options.py # Options contracts + greeks snapshots
+│   └── backfill_historical_iv.py # Historical IV backfill
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
@@ -76,15 +80,19 @@ ClawStreetBot/
     │   └── Trade Entry Criteria.md
     ├── 02-Strategies/
     │   ├── Strategies.md
+    │   ├── Day Trading.md
     │   ├── Swing Trading.md
     │   ├── Long-Term Holding.md
+    │   ├── Greeks Strategy.md
     │   ├── EMA Crossover.md
     │   ├── ORB — Opening Range Breakout.md
     │   └── Buy the 5% Dip.md
     ├── 03-Market-Research/
-    │   └── Watchlist.md
+    │   ├── Watchlist.md
+    │   └── Backtesting Architecture.md
     ├── 04-API-References/
-    │   └── Alpaca API.md
+    │   ├── Alpaca API.md
+    │   └── Polygon.io API.md
     ├── 05-Risk-Management/
     │   ├── Risk Management.md
     │   ├── Position Sizing.md
@@ -103,6 +111,7 @@ ClawStreetBot/
 cp .env.db.example .env.db
 cp .env.obsidian.example .env.obsidian
 cp .env.alpaca.example .env.alpaca
+cp .env.polygon.example .env.polygon
 # Edit each with real passwords/keys
 
 # Launch all services
@@ -111,10 +120,14 @@ docker compose up -d
 # Install Python dependencies
 python3 -m venv .venv
 source .venv/bin/activate
-pip install alpaca-py psycopg2-binary
+pip install -r requirements.txt
 
 # Set up watchlist in Alpaca + Postgres
 python scripts/setup_watchlist.py
+
+# Ingest Polygon.io market data
+python scripts/ingest_polygon_ohlcv.py --all-timeframes   # OHLCV bars (1d/5m/15m)
+python scripts/ingest_polygon_options.py                    # Options + greeks snapshots
 
 # Explore available data
 python scripts/explore_data.py
@@ -161,15 +174,28 @@ We use **Alpaca for execution** and **Polygon.io for deep historical data and an
 
 ## TODO
 
-- [ ] Connect Polygon.io API (historical OHLCV, options, fundamentals → Postgres)
-- [ ] Create `.env.polygon` with API key
-- [ ] Build data ingestion scripts (bars, options chains, fundamentals)
-- [ ] Store Polygon data in `market.*` Postgres tables
-- [ ] Backfill historical data for watchlist symbols
-- [ ] Research Phase 2 signal pipeline (RSS/News, technical indicators, options flow)
-- [ ] Implement position sizing calculator (strategy-specific: swing vs. long-term)
-- [ ] Implement stop-loss / take-profit automation (30%/50% exits, 10% drawdown halt)
-- [ ] Build correlation matrix for watchlist (rolling 60-day)
+### Phase 2 — Data Ingestion & Signals (in progress)
+- [x] Connect Polygon.io API (historical OHLCV, options, fundamentals)
+- [x] Create `.env.polygon` with API key + Flat Files credentials
+- [x] Build OHLCV ingestion script (`ingest_polygon_ohlcv.py` — 1d/5m/15m)
+- [x] Build options + greeks ingestion script (`ingest_polygon_options.py`)
+- [x] Store Polygon data in `market.*` Postgres tables (ohlcv, options, greeks, iv_rank, fundamentals)
+- [x] Backfill historical data for 15 watchlist symbols
+- [x] Claude Code + Postgres MCP — direct DB access for research & analysis
+- [ ] Historical IV backfill for IV rank calculation
+- [ ] Greeks filtering engine — IV regime, delta entry, theta budget
+- [ ] Technical analysis engine (EMA, MACD, RSI, VWAP, ATR, ORB)
+- [ ] Options flow scanner (unusual activity, IV rank)
+- [ ] RSS/News + Reddit scraper pipeline
+- [ ] Composite signal scoring & Laws compliance check
+
+### Phase 3 — Strategy & Backtesting
+- [ ] Backtesting engine (historical data + simulation)
+- [ ] Validate greeks filters against historical data (IV regime, delta ranges)
+- [ ] Paper trading mode (Alpaca Paper, 30-day minimum)
+- [ ] Position sizing & stop-loss automation (swing: 10%/3:1, long-term: 3-tranche)
+- [ ] Correlation analysis & sector exposure monitoring
+- [ ] Drawdown circuit breakers (10% daily, 20% weekly, 30% monthly)
 
 ## Contributing
 

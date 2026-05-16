@@ -53,9 +53,13 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] Trade Entry Criteria documented
 
 **Phase 2 — Data Ingestion & Signals** 🔄
-- [ ] **Polygon.io data integration → Postgres** (see [[Backtesting Architecture]])
+- [x] **Polygon.io connected → Postgres** (see [[Polygon.io API]])
+- [x] **OHLCV ingestion** — 1d/5m/15m bars for 15 watchlist stocks (see [[Backtesting Architecture]])
+- [x] **Options + greeks ingestion** — 20k contracts, daily snapshots (see [[Backtesting Architecture]])
+- [x] **Claude Code + Postgres MCP** — direct DB access for research & analysis
+- [x] **PDT rules documented** — 3 day-trade limit, emergency-only 3rd, NEVER 4th
+- [ ] **Historical IV backfill** for IV rank calculation
 - [ ] **Greeks filtering engine** — IV regime, delta entry, theta budget (see [[Greeks Strategy]])
-- [ ] **Claude Code + Postgres MCP** — direct DB access for research & analysis
 - [ ] RSS/News + Reddit scraper pipeline
 - [ ] Technical analysis engine (EMA, MACD, RSI, VWAP, ATR, ORB)
 - [ ] Options flow scanner (unusual activity, IV rank)
