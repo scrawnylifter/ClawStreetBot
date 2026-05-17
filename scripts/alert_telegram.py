@@ -172,6 +172,12 @@ def format_15m_crossover_alert(signal: dict) -> str:
         opt_delta = signal.get("option_delta", 0)
         contract_type = "C" if direction == "bullish" else "P"
         lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
+        opt_bid = signal.get("option_bid")
+        opt_ask = signal.get("option_ask")
+        opt_mid = signal.get("option_mid")
+        if opt_bid is not None and opt_ask is not None:
+            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
+            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
 
     # --- Vol & Gamma context ---
     context_bits = []
@@ -263,6 +269,12 @@ def format_ema_crossover_alert(signal: dict) -> str:
         opt_delta = signal.get("option_delta", 0)
         contract_type = "C" if direction == "bullish" else "P"
         lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
+        opt_bid = signal.get("option_bid")
+        opt_ask = signal.get("option_ask")
+        opt_mid = signal.get("option_mid")
+        if opt_bid is not None and opt_ask is not None:
+            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
+            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
 
     # --- Vol & Gamma context ---
     context_bits = []
@@ -338,6 +350,7 @@ def main():
                trend_score, ema_stack, invalidation,
                option_symbol, option_strike, option_expiry,
                option_delta, option_theta,
+               option_bid, option_ask, option_mid,
                iv_rank, iv_rv_spread, net_gex,
                timeframe, daily_trend, daily_ema_position,
                intraday_ema_9, intraday_ema_21,
@@ -381,6 +394,7 @@ def main():
         "trend_score", "ema_stack", "invalidation",
         "option_symbol", "option_strike", "option_expiry",
         "option_delta", "option_theta",
+        "option_bid", "option_ask", "option_mid",
         "iv_rank", "iv_rv_spread", "net_gex",
         "timeframe", "daily_trend", "daily_ema_position",
         "intraday_ema_9", "intraday_ema_21",
