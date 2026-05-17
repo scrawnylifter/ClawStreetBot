@@ -14,7 +14,7 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 - **Credentials:** See `.env.n8n` (gitignored)
 - **API:** REST API at `<n8n-url>/api/v1/` with `X-N8N-API-KEY` header
 
-## Workflows (17 total, 14 active, 3 deactivated)
+## Workflows (18 total, 15 active, 3 deactivated)
 
 ### Core Sync
 | Workflow | Schedule (PDT) | Script | Purpose |
@@ -57,7 +57,9 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 ### Signal Generation
 | Workflow | Schedule (PDT) | Script | Purpose |
 |----------|----------------|--------|---------|
-| `ema_crossover_detector` | Mon–Fri 7:00 | `detect_ema_crossover.py` | Daily EMA 9/21 crossover detection → Telegram alert |
+| `ema_crossover_detector` | Mon–Fri 7:00 | `detect_ema_crossover.py` | Daily EMA 9/21 crossover detection → Telegram alert (supplementary) |
+| `ema_crossover_15m` | Mon–Fri every 15 min 6:30–13 | `detect_ema_crossover_15m.py` | 15m EMA crossover + real-time Alpaca snapshot (supplementary) |
+| **`setup_scanner`** | **Mon–Fri every 15 min 6–12** | **`scan_setups.py`** | **★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R). Silence = no signal.** |
 | `signals_daily` | Mon–Fri 16:30 | `generate_signals.py` → `backtest.py` | Composite signal scoring + daily backtest |
 
 ### Weekly
@@ -78,7 +80,7 @@ The daily pipeline runs in sequence to ensure data dependencies are met:
 16:30  signals_daily         → trading.signals + backtest
 ```
 
-Intraday bars, intraday signals, EMA crossover detection, RSS scanner, and watchlist syncs run independently in parallel.
+Intraday bars, intraday signals, EMA crossover detection, **setup scanner**, RSS scanner, and watchlist syncs run independently in parallel.
 
 ### Watchlist Lifecycle
 

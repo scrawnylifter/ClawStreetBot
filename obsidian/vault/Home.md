@@ -41,7 +41,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 17 workflows (14 active, 3 deactivated), Docker socket isolation
+- [[n8n Scheduler]] — 18 workflows (15 active, 3 deactivated), Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -65,7 +65,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] **PDT rules documented** — 3 day-trade limit, emergency-only 3rd, NEVER 4th
 - [x] **IV rank / realized vol / GEX-DEX computed** — `market.iv_rank` (1,576), `market.realized_vol` (3,465), `market.gex_dex` (9,350) + overview (15)
 - [x] **Watchlist lifecycle** — `config/watchlist.yml` source-of-truth; add / soft-deactivate / re-add via `market.assets.active` + `backfill_status`
-- [x] **n8n scheduler** — 17 workflows (14 active, 3 deactivated) driving all ingestion, compute, and signal generation
+- [x] **n8n scheduler** — 18 workflows (15 active, 3 deactivated) driving all ingestion, compute, and signal generation
 - [x] **Docker socket isolation** — n8n no longer mounts `/var/run/docker.sock`; it talks to a `wollomatic/socket-proxy` sidecar that whitelists only worker exec
 - [x] **Greeks filtering engine** — IV regime + delta/theta-budget gating per contract
 - [x] **Technical analysis engine** — EMA/RSI/MACD/ATR/VWAP/Bollinger
@@ -90,16 +90,18 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] 5-minute intraday signal refresh — re-scores tech from 5m bars, threshold alerts
 
 **Phase 5A — Signal Detection & Alerts (in progress)** 🔧
-- [x] **EMA crossover detector** (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes to `market.signal_alerts`
+- [x] **EMA crossover detector** (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes to `market.signal_alerts` *(supplementary)*
 - [x] **Signal alerts table** (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
 - [x] **Telegram alert sender** (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
 - [x] **Alpaca data migration** — OHLCV + options ingestion moved from Polygon ($108/mo) to Alpaca (free); see [[Alpaca Data Pipeline]]
 - [x] **Alpaca OHLCV ingestion** (`ingest_alpaca_ohlcv.py`) — 1d/15m/5m bars with trade_count + VWAP
 - [x] **Alpaca options ingestion** (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
 - [x] **Real-time snapshot** (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
-- [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals with live option enrichment
+- [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals with live option enrichment *(supplementary)*
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, VWAP), `018_alpaca_options_columns.sql` (bid, ask)
 - [x] **n8n workflow migration** — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
+- [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY alert mechanism** — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal
+- [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
 - [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] **Options chain filter** (`filter_options.py`) — DTE≥30, delta range, theta budget

@@ -28,8 +28,10 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/generate_signals.py --all` — generate daily signals
 - `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars)
 - `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
-- `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers
-- `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot
+- `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers (supplementary)
+- `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot (supplementary)
+- `python scripts/scan_setups.py` — ★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
+- `python scripts/scan_setups.py --dry-run` — dry-run: stdout only, no Telegram alert
 - `python scripts/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
 - `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
 
@@ -85,7 +87,7 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner)
 
 ## Watchlist (16 symbols)
 
@@ -235,8 +237,9 @@ ClawStreetBot/
 │       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
 │       ├── signals_daily.json          ← Mon-Fri 16:30 PDT (includes daily backtest)
 │       ├── intraday_signal_5m.json     ← Mon-Fri every 5 min 6-12 PDT
-│       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert)
-│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot)
+│       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert, supplementary)
+│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
+│       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -262,8 +265,9 @@ ClawStreetBot/
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
 │   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
-│   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector
-│   ├── detect_ema_crossover_15m.py    ← ★ Phase 5A: 15m EMA crossover + real-time Alpaca snapshot enrichment
+│   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
+│   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
+│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
 │   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (shows bid/ask/mid from snapshot)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
@@ -311,7 +315,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (17 workflows, 14 active, 3 deactivated)
+- [x] n8n scheduler (18 workflows, 15 active, 3 deactivated)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
@@ -335,6 +339,8 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals + real-time option enrichment
 - [x] **Real-time snapshot** (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
+- [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner; PRIMARY alert mechanism (EMA detectors are now supplementary)
+- [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT); silence = no signal
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget

@@ -109,6 +109,7 @@ ClawStreetBot/
 │       ├── intraday_signal_5m.json
 │       ├── ema_crossover_detector.json
 │       ├── ema_crossover_15m.json        # EMA crossover on 15m + realtime snapshot
+│       ├── setup_scanner.json            # PRIMARY — 8-gate BUY signal scanner (every 15min market hours)
 │       ├── trend_daily.json
 │       └── regime_weekly.json
 ├── scripts/                    # Python scripts
@@ -131,8 +132,9 @@ ClawStreetBot/
 │   ├── compute_trend.py           # Multi-timeframe trend detection
 │   ├── generate_signals.py        # Composite signal scoring (6-factor, 0-100)
 │   ├── intraday_signal.py         # 5-min intraday tech re-score + threshold alerts
-│   ├── detect_ema_crossover.py    # Daily EMA 9/21 crossover + ADX>25 detector
-│   ├── detect_ema_crossover_15m.py # 15m EMA crossover + real-time snapshot enrichment ★
+│   ├── detect_ema_crossover.py    # Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
+│   ├── detect_ema_crossover_15m.py # 15m EMA crossover + real-time snapshot enrichment (supplementary)
+│   ├── scan_setups.py            # ★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
 │   ├── alert_telegram.py          # Telegram alert sender (shows bid/ask/mid) ★
 │   ├── backfill_historical_iv.py  # Historical IV backfill
 │   ├── backtest.py                 # Backtesting engine
@@ -201,6 +203,10 @@ python scripts/compute_realized_vol.py
 python scripts/compute_iv_rank.py
 python scripts/compute_gex_dex.py
 
+# Run the 8-gate BUY signal scanner (PRIMARY alert mechanism)
+python scripts/scan_setups.py             # scan + Telegram alert
+python scripts/scan_setups.py --dry-run   # dry-run: stdout only
+
 # Connect to Postgres
 docker exec -it clawstreet-db psql -U clawstreet -d clawstreet
 
@@ -227,12 +233,15 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `rss_news_scanner` | Mon–Fri every 30m 6–13 | RSS + Reddit ingestion |
 | `signals_daily` | Mon–Fri 16:30 | Composite signals + daily backtests |
 | `intraday_signal_5m` | Mon–Fri every 5min 6–12 | 5-min intraday tech re-score + threshold alerts |
-| `ema_crossover_detector` | Mon–Fri 7:00 | Daily EMA 9/21 crossover detection → Telegram alert |
-| `ema_crossover_15m` | Mon–Fri every 15min 6:30–13 | 15m EMA crossover + real-time Alpaca snapshot |
+| `ema_crossover_detector` | Mon–Fri 7:00 | Daily EMA 9/21 crossover detection → Telegram alert (supplementary) |
+| `ema_crossover_15m` | Mon–Fri every 15min 6:30–13 | 15m EMA crossover + real-time Alpaca snapshot (supplementary) |
+| **`setup_scanner`** | **Mon–Fri every 15min 6–12** | **★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium, DTE, R:R)** |
 | `trend_daily` | Mon–Fri 11:00 | Multi-timeframe trend detection + status |
 | `regime_weekly` | Sat 8:00 | Classify regime + optimize weights + compare |
 
 n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
+
+**★ Primary alert mechanism:** The `setup_scanner` workflow (`scan_setups.py`) evaluates ALL watchlist symbols against 8 buying gates (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R) every 15 minutes during market hours. It only sends a Telegram alert when ALL 8 gates pass — silence means no signal. EMA crossover detectors (daily + 15m) remain active as supplementary alerts.
 
 ### Docker socket isolation
 
@@ -305,6 +314,8 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 - [x] **Alpaca options ingestion** (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, VWAP), `018_alpaca_options_columns.sql` (bid, ask)
 - [x] **n8n workflows** — `alpaca_ohlcv_daily`, `alpaca_ohlcv_intraday`, `alpaca_options_daily` (active); old Polygon workflows deactivated
+- [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal; PRIMARY alert mechanism
+- [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
 - [ ] ORB breakout detector (`detect_orb.py`)
 - [ ] Buy the 5% Dip detector (`detect_dip.py`)
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
