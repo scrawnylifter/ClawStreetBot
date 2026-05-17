@@ -16,7 +16,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Key Commands
 
-- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy)
+- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy, telegram-listener)
 - `docker exec -it clawstreet-db psql -U clawstreet -d clawstreet` — Postgres shell
 - `source .venv/bin/activate` — activate Python venv
 - `python scripts/setup_watchlist.py` — sync watchlist YAML → Alpaca + Postgres
@@ -37,6 +37,11 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/detect_liquidity_sweep.py` — ★ liquidity sweep scanner (5m + daily, close-beyond, Telegram)
 - `python scripts/detect_liquidity_sweep.py --dry-run` — dry-run: stdout only, no DB/Telegram
 - `python scripts/backtest_liquidity_v3.py` — run liquidity sweep refinement backtest (A/B/C/D)
+- `python scripts/execute_trade.py --dry-run` — dry-run: print Alpaca order for approved signals (no submission)
+- `python scripts/execute_trade.py --confirm` — submit approved signals to Alpaca paper
+- `python scripts/reconcile_orders.py --dry-run` — check BUY fill state from Alpaca (dry-run)
+- `python scripts/reconcile_exits.py --dry-run` — check SELL fill state + realized P&L (dry-run)
+- `python scripts/exit_monitor.py --dry-run` — check TP/SL/time-stop exit conditions (dry-run)
 
 ## Credentials (gitignored)
 
@@ -85,7 +90,7 @@ Key tables (see `db/init/` for full DDL):
 - `scraper.articles` — scraped articles with sentiment + symbol arrays (69 articles)
 - `scraper.posts` — social media posts (75 posts)
 - `trading.signals` — generated trading signals with 6-factor composite scoring (0-100)
-- `trading.positions` — open/closed positions
+- `trading.positions` — open/closed positions (with exit tracking: sell_order_id, exit_reason, tp1_hit_at)
 - `trading.backtest_runs` — backtest run metadata (strategy mode, date range, capital, params)
 - `trading.backtest_trades` — individual simulated trades with P&L, R-multiples, partial exits
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
@@ -228,6 +233,7 @@ ClawStreetBot/
 │   ├── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
 │   └── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
 │   └── 020_alert_lifecycle.sql     ← alert approval lifecycle (status enum, executed_at, approval columns)
+│   └── 021_position_exit_columns.sql ← position exit tracking (sell_order_id, exit_submitted_at, exit_reason, tp1_hit_at)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -250,6 +256,10 @@ ClawStreetBot/
 │       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
 │       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
+│       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
+│       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-13 PDT (Alpaca fill state → trading.positions)
+│       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-13 PDT (SELL fill → closed + realized_pnl)
+│       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -290,6 +300,10 @@ ClawStreetBot/
 │   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
 │   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
 │   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
+│   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (dry-run by default, --confirm to submit)
+│   ├── reconcile_orders.py           ← Phase 5B: Polls Alpaca for BUY fill state → trading.positions
+│   ├── reconcile_exits.py            ← Phase 5B: Polls Alpaca for SELL fill state → closed + realized_pnl
+│   └── exit_monitor.py              ← Phase 5B: TP/SL/time-stop monitor (SELECT FOR UPDATE SKIP LOCKED)
 └── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
