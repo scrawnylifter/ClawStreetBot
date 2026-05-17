@@ -70,12 +70,19 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
     """Submit one order. Returns {'order_id', 'submitted_price', 'order_type', 'tif'}.
 
     Raises on submission failure — caller decides whether to record 'error'.
+
+    A deterministic client_order_id (`csb-entry-<signal_id>`) is attached so
+    that a process crash between Alpaca submit and DB commit doesn't lead
+    to a duplicate BUY on the next reconcile pass — Alpaca rejects the
+    second submission with a duplicate-client-order-id error.
     """
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
     qty = sizing["qty"]
     direction = signal["direction"]
+    client_order_id = f"csb-entry-{signal['id']}"
+
     # For options the side is always BUY (you buy a call for bullish, a put
     # for bearish — the option_symbol encodes which). For stocks, bullish→BUY,
     # bearish→SELL (short).
@@ -95,6 +102,7 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
             side=side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(ask),
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
@@ -111,6 +119,7 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {

@@ -347,8 +347,15 @@ def stamp_tp1_partial(
 # Close-order submission
 # ---------------------------------------------------------------------------
 
-def submit_close(client, row: dict, qty: Decimal) -> dict:
-    """Submit a SELL (or BUY-to-cover) for `qty` of the position. Raises on failure."""
+def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
+    """Submit a SELL (or BUY-to-cover) for `qty` of the position. Raises on failure.
+
+    `reason` is the short exit reason (e.g. 'stop', 'tp1_partial', 'tp2',
+    'time_stop'). It's baked into a deterministic client_order_id so
+    a process crash between Alpaca submit and DB commit doesn't produce
+    a duplicate SELL on the next monitor pass — Alpaca rejects duplicate
+    client_order_ids while the original is still in-flight.
+    """
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
@@ -361,6 +368,11 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
         side = OrderSide.SELL
     else:
         side = OrderSide.BUY
+
+    # Deterministic id: one Alpaca order per (position, exit reason). After an
+    # Alpaca-side terminal status (rejected/canceled/etc) the same id can be
+    # reused — Alpaca enforces uniqueness only for currently-open orders.
+    client_order_id = f"csb-exit-{row['position_id']}-{reason}"
 
     if is_option:
         sym = row["option_symbol"]
@@ -382,6 +394,7 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
             side=side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(limit_price),
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
@@ -395,6 +408,7 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
     sym = row["symbol"]
     req = MarketOrderRequest(
         symbol=sym, qty=int(qty), side=side, time_in_force=TimeInForce.DAY,
+        client_order_id=client_order_id,
     )
     order = client.submit_order(req)
     return {
@@ -465,7 +479,7 @@ def process_one(
                     f"x{partial_qty} (TP1) — {reason} [{quote_str}]")
 
         try:
-            result = submit_close(trading_client, row, partial_qty)
+            result = submit_close(trading_client, row, partial_qty, "tp1_partial")
         except Exception as e:
             log.exception("position #%s TP1 partial submission failed", pid)
             return f"position #{pid} {sym} ERROR — TP1 partial: {type(e).__name__}: {e}"
@@ -486,7 +500,7 @@ def process_one(
                 f"{reason} [{quote_str}]")
 
     try:
-        result = submit_close(trading_client, row, qty_remaining)
+        result = submit_close(trading_client, row, qty_remaining, short_reason)
     except Exception as e:
         log.exception("position #%s close submission failed", pid)
         return f"position #{pid} {sym} ERROR — {type(e).__name__}: {e}"
