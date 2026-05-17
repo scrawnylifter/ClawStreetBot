@@ -357,34 +357,56 @@ def count_day_trades(
     return base + (1 if projected_mode == "day" else 0)
 
 
-def calc_drawdown(conn, equity: Decimal) -> dict[str, Decimal]:
-    """Calculate realized P&L drawdown over 1 day, 1 week, 1 month.
+def calc_drawdown(conn, current_equity: Decimal) -> dict[str, Decimal | None]:
+    """Drawdown over rolling daily / weekly / monthly windows.
 
-    Returns {daily_pnl, weekly_pnl, monthly_pnl} as fractions of equity.
-    Positive = profit, Negative = loss/drawdown.
+    Returns fractions: positive = profit, negative = loss. Computed as
+        (current_equity - start_equity) / start_equity
+    where start_equity is read from market.equity_snapshots at the start of
+    the relevant period:
+        daily   → most recent snapshot before today
+        weekly  → most recent snapshot before this week (Mon-start)
+        monthly → most recent snapshot before this month (1st)
+
+    current_equity is the live Alpaca paper account equity, which already
+    reflects unrealized P&L on open positions — so both realized and
+    unrealized movement over the window are captured without separately
+    summing positions.
+
+    Returns None for any period with no snapshot yet. Preflight surfaces a
+    WARN on None rather than mistakenly clearing the halt.
     """
+    if current_equity is None or current_equity <= 0:
+        return {"daily": None, "weekly": None, "monthly": None}
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '1 day'
-                              THEN realized_pnl ELSE 0 END), 0) AS daily_pnl,
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '7 days'
-                              THEN realized_pnl ELSE 0 END), 0) AS weekly_pnl,
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '30 days'
-                              THEN realized_pnl ELSE 0 END), 0) AS monthly_pnl
-            FROM trading.positions
-            WHERE status IN ('closed', 'filled')
-              AND closed_at IS NOT NULL
-              AND realized_pnl IS NOT NULL
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < CURRENT_DATE
+                ORDER BY snapshot_date DESC LIMIT 1) AS daily_start,
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < date_trunc('week', CURRENT_DATE)::date
+                ORDER BY snapshot_date DESC LIMIT 1) AS weekly_start,
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < date_trunc('month', CURRENT_DATE)::date
+                ORDER BY snapshot_date DESC LIMIT 1) AS monthly_start
         """)
         row = cur.fetchone()
-        if not row or equity == 0:
-            return {"daily": Decimal("0"), "weekly": Decimal("0"), "monthly": Decimal("0")}
-        return {
-            "daily":   (Decimal(str(row[0])) / equity).quantize(Decimal("0.0001")),
-            "weekly":  (Decimal(str(row[1])) / equity).quantize(Decimal("0.0001")),
-            "monthly": (Decimal(str(row[2])) / equity).quantize(Decimal("0.0001")),
-        }
+
+    def delta(raw) -> Decimal | None:
+        if raw is None:
+            return None
+        start = Decimal(str(raw))
+        if start <= 0:
+            return None
+        return ((current_equity - start) / start).quantize(Decimal("0.0001"))
+
+    return {
+        "daily":   delta(row[0] if row else None),
+        "weekly":  delta(row[1] if row else None),
+        "monthly": delta(row[2] if row else None),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +516,11 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
         else:
             out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
 
-    # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly
+    # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly.
+    # Denominator is start-of-period equity from market.equity_snapshots
+    # (populated by scripts/snapshot_equity.py). current_equity is the live
+    # Alpaca account.equity which already includes unrealized P&L on open
+    # positions, so both realized and unrealized movement count.
     if conn is not None and equity is not None and equity > 0:
         dd = calc_drawdown(conn, equity)
         halted = False
@@ -504,6 +530,14 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
             ("monthly", "monthly", DRAWDOWN_MONTHLY_PCT),
         ]:
             pct = dd[key]
+            if pct is None:
+                # No snapshot for this horizon — halt is uncomputable. WARN
+                # so it surfaces in the dry-run / live logs; do NOT block.
+                out.append((CHECK_WARN,
+                            f"Drawdown {label}: no equity_snapshot at period "
+                            f"boundary — halt can't be computed (run "
+                            f"scripts/snapshot_equity.py daily)"))
+                continue
             if pct < -threshold:
                 out.append((CHECK_FAIL,
                             f"Drawdown halt: {label} P&L {pct*100:+.1f}% exceeds "
