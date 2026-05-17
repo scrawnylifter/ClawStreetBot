@@ -63,6 +63,7 @@ services:
       - .env.db
       - .env.polygon
       - .env.alpaca
+      - .env.telegram
     environment:
       - POSTGRES_HOST=postgres
       - PYTHONPATH=/app
@@ -73,6 +74,7 @@ services:
       - ./.env.db:/app/.env.db:ro
       - ./.env.polygon:/app/.env.polygon:ro
       - ./.env.alpaca:/app/.env.alpaca:ro
+      - ./.env.telegram:/app/.env.telegram:ro
     depends_on:
       postgres:
         condition: service_healthy

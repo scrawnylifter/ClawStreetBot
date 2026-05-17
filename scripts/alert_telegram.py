@@ -72,8 +72,18 @@ def get_telegram_config():
     return config
 
 
-def send_telegram_message(token: str, chat_id: str, text: str) -> dict | None:
-    """Send a message via Telegram Bot API. Returns the response JSON or None."""
+def send_telegram_message(token: str, chat_id: str, text: str, allowed_chat_id: str = "") -> dict | None:
+    """Send a message via Telegram Bot API. Returns the response JSON or None.
+    
+    Security: only sends to the allowed_chat_id. Any other chat_id
+    is rejected with a warning log. This prevents the bot from being
+    used to send alerts to unauthorized chats.
+    """
+    # Security gate: only allow the authorized chat ID
+    if allowed_chat_id and str(chat_id) != str(allowed_chat_id):
+        log.warning("BLOCKED: attempt to send to unauthorized chat_id=%s (allowed=%s)", chat_id, allowed_chat_id)
+        return None
+
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({
         "chat_id": chat_id,
@@ -303,7 +313,7 @@ def main():
             continue
 
         # Send via Telegram
-        result = send_telegram_message(tg_token, tg_chat_id, alert_text)
+        result = send_telegram_message(tg_token, tg_chat_id, alert_text, allowed_chat_id=tg_chat_id)
         if result and result.get("ok"):
             msg_id = result["result"]["message_id"]
             # Mark as sent
