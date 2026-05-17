@@ -20,7 +20,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import logging
 import os
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,11 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
+log = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from alert_telegram import send_telegram_message, get_telegram_config  # noqa: E402
 
 
 def load_env(filename: str) -> None:
@@ -432,6 +438,129 @@ def strategy_for(composite: float) -> str:
     return "no_trade"
 
 
+# ATR multipliers for intraday (5m) timeframe
+ATR_STOP_MULT_5M = 1.5
+ATR_TP1_MULT_5M = 4.5
+ATR_TP2_MULT_5M = 7.5
+
+
+def write_signal_alert(
+    conn,
+    symbol: str,
+    direction: str,
+    composite: float,
+    price: float,
+    ema_21: float | None,
+    rsi: float | None,
+    atr: float | None,
+    daily_factors: dict[str, Any],
+    trend_info: dict[str, Any],
+    details: dict[str, Any],
+    strategy_tag: str = "intraday_signal",
+) -> int | None:
+    """Insert into market.signal_alerts when composite crosses threshold.
+
+    Returns the row id, or None on duplicate/missing data.
+    """
+    if price is None or atr is None or atr <= 0:
+        return None
+
+    # ATR-based stops for intraday timeframe
+    if direction == "bullish":
+        stop = round(price - atr * ATR_STOP_MULT_5M, 2)
+        tp1 = round(price + atr * ATR_TP1_MULT_5M, 2)
+        tp2 = round(price + atr * ATR_TP2_MULT_5M, 2)
+        risk = price - stop
+        reward = tp1 - price
+    else:
+        stop = round(price + atr * ATR_STOP_MULT_5M, 2)
+        tp1 = round(price - atr * ATR_TP1_MULT_5M, 2)
+        tp2 = round(price - atr * ATR_TP2_MULT_5M, 2)
+        risk = stop - price
+        reward = price - tp1
+
+    risk_reward = round(reward / risk, 2) if risk > 0 else 0.0
+    regime = daily_factors.get("iv_regime", "unknown")
+    iv = daily_factors.get("current_iv")
+    iv_pct = daily_factors.get("iv_percentile")
+    iv_rank = daily_factors.get("iv_rank_52w")
+    rv20 = daily_factors.get("rv_20d")
+    iv_rv_spread = daily_factors.get("iv_rv_spread")
+    adx = daily_factors.get("adx")
+    net_gex = daily_factors.get("net_gex")
+    volume_ratio = details.get("vwap_ratio")  # approximate
+
+    invalidation = {
+        "context": {
+            "source": "intraday_5m",
+            "composite_score": round(composite, 2),
+            "tech_score_intraday": details.get("tech_score_intraday"),
+            "trend_adjustment": details.get("trend_adjustment"),
+            "raw_composite": details.get("raw_composite"),
+        },
+        "rules": [
+            "Composite drops below 40 → EXIT",
+            "Price breaks ATR stop → EXIT immediately",
+        ],
+    }
+
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO market.signal_alerts (
+                symbol, strategy, direction, status, regime, timeframe,
+                trigger_price, ema_21, adx, rsi, atr_14,
+                stop_price, tp1_price, tp2_price, risk_reward,
+                invalidation, iv_rank, iv_rv_spread, net_gex,
+                volume_ratio, trend_score, intermediate_trend
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s
+            )
+            ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
+            DO NOTHING
+            RETURNING id
+            """,
+            (
+                symbol, strategy_tag, direction, "new", regime, "5m",
+                round(price, 2), ema_21, adx, rsi, atr,
+                stop, tp1, tp2, risk_reward,
+                Json(invalidation), iv_rank, iv_rv_spread, net_gex,
+                volume_ratio, trend_info.get("trend_score"),
+                trend_info.get("intermediate_trend"),
+            ),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row[0] if row else None
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        cur.close()
+
+
+def format_intraday_alert(sig: dict) -> str:
+    """Format an intraday signal alert for Telegram."""
+    direction_emoji = "🟢" if sig["direction"] == "bullish" else "🔴"
+    direction_word = "BUY" if sig["direction"] == "bullish" else "SHORT"
+    s = sig
+    trend_label = s.get("intermediate_trend", s.get("direction", "?"))
+    lines = [
+        f"{direction_emoji} <b>{direction_word} Signal: {s['symbol']}</b>",
+        f"{'─' * 30}",
+        f"Stock: ${s['trigger_price']:.2f} | Trend: {trend_label} | RSI: {s['rsi']:.0f}",
+        f"Composite: {s['composite']:.1f} (intraday 5m)",
+        f"ATR Stop: ${s['stop_price']:.2f} | TP1: ${s['tp1_price']:.2f} | TP2: ${s['tp2_price']:.2f}",
+        f"R:R {s['risk_reward']:.1f}:1 ✅",
+    ]
+    return "\n".join(lines)
+
+
 def write_intraday_signal(
     conn,
     symbol: str,
@@ -498,6 +627,8 @@ def main() -> int:
                     help="Alert threshold for composite score (default: 60)")
     p.add_argument("--quiet", action="store_true",
                     help="Only output alerts (no per-symbol lines)")
+    p.add_argument("--dry-run", action="store_true",
+                    help="No DB writes or Telegram sends; stdout only")
     args = p.parse_args()
 
     conn = psycopg2.connect(**DB_CONFIG)
@@ -598,6 +729,51 @@ def main() -> int:
         if composite >= args.threshold:
             sig_type = signal_type_for(composite)
             strat = strategy_for(composite)
+            direction = "bullish" if composite >= 55 else "bearish"
+
+            # Write to market.signal_alerts for production alert pipeline
+            alert_id = write_signal_alert(
+                conn=conn,
+                symbol=sym,
+                direction=direction,
+                composite=composite,
+                price=price,
+                ema_21=ema_21,
+                rsi=rsi,
+                atr=atr,
+                daily_factors=daily,
+                trend_info=trend_info,
+                details=details,
+            )
+            if alert_id and not args.dry_run:
+                # Send Telegram alert
+                alert_sig = {
+                    "symbol": sym, "direction": direction,
+                    "trigger_price": price, "rsi": rsi, "atr_14": atr,
+                    "stop_price": round(price - atr * ATR_STOP_MULT_5M, 2) if direction == "bullish" else round(price + atr * ATR_STOP_MULT_5M, 2),
+                    "tp1_price": round(price + atr * ATR_TP1_MULT_5M, 2) if direction == "bullish" else round(price - atr * ATR_TP1_MULT_5M, 2),
+                    "tp2_price": round(price + atr * ATR_TP2_MULT_5M, 2) if direction == "bullish" else round(price - atr * ATR_TP2_MULT_5M, 2),
+                    "risk_reward": None,  # computed inside write_signal_alert
+                    "intermediate_trend": trend_info.get("intermediate_trend", "?"),
+                    "composite": composite,
+                }
+                try:
+                    tg_token, tg_chat_id = get_telegram_config()
+                    alert_text = format_intraday_alert(alert_sig)
+                    result = send_telegram_message(tg_token, tg_chat_id, alert_text)
+                    if result and result.get("ok"):
+                        msg_id = result["result"]["message_id"]
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE market.signal_alerts SET telegram_sent = TRUE, "
+                                "telegram_msg_id = %s WHERE id = %s",
+                                (msg_id, alert_id),
+                            )
+                            conn.commit()
+                        log.info("Telegram alert sent for %s (msg_id=%s)", sym, msg_id)
+                except Exception as e:
+                    log.warning("Telegram send failed for %s: %s", sym, e)
+
             alert = (
                 f"🚀 ALERT: {sym} composite={composite:.1f} ({sig_type}, {strat}) "
                 f"price={price:.2f} rsi={rsi:.1f} vwap={vwap_ratio:.3f}"

@@ -16,7 +16,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Key Commands
 
-- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy)
+- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy, telegram-listener)
 - `docker exec -it clawstreet-db psql -U clawstreet -d clawstreet` — Postgres shell
 - `source .venv/bin/activate` — activate Python venv
 - `python scripts/setup_watchlist.py` — sync watchlist YAML → Alpaca + Postgres
@@ -26,7 +26,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/options_analysis.py` — options greeks/IV analysis
 - `python scripts/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01` — run backtest
 - `python scripts/generate_signals.py --all` — generate daily signals
-- `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars)
+- `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars, dual-write to signal_alerts)
 - `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
 - `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers (supplementary)
 - `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot (supplementary)
@@ -34,6 +34,14 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/scan_setups.py --dry-run` — dry-run: stdout only, no Telegram alert
 - `python scripts/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
 - `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
+- `python scripts/detect_liquidity_sweep.py` — ★ liquidity sweep scanner (5m + daily, close-beyond, Telegram)
+- `python scripts/detect_liquidity_sweep.py --dry-run` — dry-run: stdout only, no DB/Telegram
+- `python scripts/backtest_liquidity_v3.py` — run liquidity sweep refinement backtest (A/B/C/D)
+- `python scripts/execute_trade.py --dry-run` — dry-run: print Alpaca order for approved signals (no submission)
+- `python scripts/execute_trade.py --confirm` — submit approved signals to Alpaca paper
+- `python scripts/reconcile_orders.py --dry-run` — check BUY fill state from Alpaca (dry-run)
+- `python scripts/reconcile_exits.py --dry-run` — check SELL fill state + realized P&L (dry-run)
+- `python scripts/exit_monitor.py --dry-run` — check TP/SL/time-stop exit conditions (dry-run)
 
 ## Credentials (gitignored)
 
@@ -41,6 +49,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `.env.alpaca` — Alpaca API key + secret
 - `.env.polygon` — Polygon.io API key + Flat Files S3 credentials (access_id, secret_key, endpoint)
 - `.env.obsidian` — Obsidian config
+- `.env.telegram` — Telegram bot token + chat ID
 - **DB passwords:** avoid `$` or `!` characters (Docker compose interpolation bug)
 
 ## Data Sources
@@ -81,13 +90,16 @@ Key tables (see `db/init/` for full DDL):
 - `scraper.articles` — scraped articles with sentiment + symbol arrays (69 articles)
 - `scraper.posts` — social media posts (75 posts)
 - `trading.signals` — generated trading signals with 6-factor composite scoring (0-100)
-- `trading.positions` — open/closed positions
+- `trading.positions` — open/closed positions (with exit tracking: sell_order_id, exit_reason, tp1_hit_at)
 - `trading.backtest_runs` — backtest run metadata (strategy mode, date range, capital, params)
 - `trading.backtest_trades` — individual simulated trades with P&L, R-multiples, partial exits
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at)
+- `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
+- `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
+- `trading.backtest_liquidity_trades` — liquidity sweep backtest individual trades
 
 ## Watchlist (16 symbols)
 
@@ -218,7 +230,10 @@ ClawStreetBot/
 │   ├── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
 │   ├── 016_signal_alerts_15m.sql ← 15m intraday signal alerts
 │   ├── 017_ohlcv_alpaca_columns.sql  ← trade_count, vwap for Alpaca bars
-│   └── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
+│   ├── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
+│   └── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
+│   └── 020_alert_lifecycle.sql     ← alert approval lifecycle (status enum, executed_at, approval columns)
+│   └── 021_position_exit_columns.sql ← position exit tracking (sell_order_id, exit_submitted_at, exit_reason, tp1_hit_at)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -240,6 +255,11 @@ ClawStreetBot/
 │       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert, supplementary)
 │       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
+│       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
+│       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
+│       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-13 PDT (Alpaca fill state → trading.positions)
+│       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-13 PDT (SELL fill → closed + realized_pnl)
+│       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -264,27 +284,37 @@ ClawStreetBot/
 │   ├── compute_iv_outliers.py          ← Phase 2: 3σ z-score IV outlier flags
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
-│   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
+│   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts (dual-write: trading.signals + market.signal_alerts)
 │   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
-│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
-│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (shows bid/ask/mid from snapshot)
+│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R + volume_ratio, trend context, GEX)
+│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (inline keyboard for approval/deny)
+│   ├── telegram_callback_listener.py  ← Phase 5B: Long-poll listener for Telegram callback queries (approve/deny)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
 │   ├── backtest.py                    ← Phase 3: Backtesting engine
-│   └── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
-└── obsidian/vault/         ← knowledge base (27 notes across 8 folders)
+│   ├── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
+│   ├── backtest_liquidity.py         ← Phase 5B: Liquidity sweep v1 backtest (FVG + external, superseded by v3)
+│   ├── backtest_liquidity_v2.py      ← Phase 5B: Liquidity sweep v2 backtest (external only, superseded by v3)
+│   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
+│   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
+│   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
+│   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (dry-run by default, --confirm to submit)
+│   ├── reconcile_orders.py           ← Phase 5B: Polls Alpaca for BUY fill state → trading.positions
+│   ├── reconcile_exits.py            ← Phase 5B: Polls Alpaca for SELL fill state → closed + realized_pnl
+│   └── exit_monitor.py              ← Phase 5B: TP/SL/time-stop monitor (SELECT FOR UPDATE SKIP LOCKED)
+└── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
-    ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria
-    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy, Liquidity 5m
+    ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria, Unified Entry & Exit Checklist
+    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy, Liquidity 5m, Risk Management Framework
     ├── 03-Market-Research/  ← Watchlist, Backtesting Architecture
-    ├── 04-API-References/   ← Alpaca API, Polygon.io API
+    ├── 04-API-References/   ← Alpaca API, Alpaca Data Pipeline, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
     ├── 06-Indicators/       ← (empty, ready for TA docs)
-    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System (v2 trade setups), Order Execution Engine, Monitoring & Dashboards
-    └── 08-Templates/
+    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System, Order Execution Engine, Monitoring & Dashboards
+    └── 08-Templates/        ← Strategy Template, API Reference Template
 ```
 
 ## Current Phase
@@ -341,6 +371,8 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
 - [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner; PRIMARY alert mechanism (EMA detectors are now supplementary)
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT); silence = no signal
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
+- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = THE key filter
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget

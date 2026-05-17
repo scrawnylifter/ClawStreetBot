@@ -63,12 +63,14 @@ Liquidity = areas with large open orders (stop losses + pending entries). Instit
 ### 4. The Draw-on-Liquidity Sequence (Tom Crown)
 
 1. Price takes external liquidity (sweeps a high/low)
-2. Next target = internal range liquidity (FVG)
-3. Enter at the FVG retrace, target the next external liquidity
+2. Next target = internal range liquidity (FVG) — ⚠️ **use as CONTINUATION TARGET, not entry trigger** (backtested -0.04R avg across 3,306 trades)
+3. Enter after the sweep rejection confirms, target the FVG as your first profit target
 4. If the FVG creates a new inefficiency → continuation draw
 
-**Bullish:** External low taken → price reverses up → FVG forms → enter long at FVG retrace → target external high
-**Bearish:** External high taken → price reverses down → FVG forms → enter short at FVG retrace → target external low
+**⚠️ BACKTEST VERDICT:** FVG-as-entry on 5m is noise. 3,306 trades produced -0.04R avg. FVGs are where price *goes next* after an external sweep fills — they are NOT where you enter. Enter on the external sweep rejection, use FVG as profit target.
+
+**Bullish:** External low taken → price reverses up → **enter on rejection** → FVG is your TP1 target → external high is TP2
+**Bearish:** External high taken → price reverses down → **enter on rejection** → FVG is your TP1 target → external low is TP2
 
 ### 5. Confirm with Traps and Candle Signals
 
@@ -94,9 +96,12 @@ Liquidity = areas with large open orders (stop losses + pending entries). Instit
 Before entering, confirm:
 - [ ] HTF zone marked (daily/4H swing level, trendline, or equal H/L)
 - [ ] Price has **swept** the zone (poked through and rejected — not just approached)
-- [ ] Confirmation signal present (engulfing, rejection wick, FVG, market structure shift)
+- [ ] Close-beyond confirmation ✅ (next bar closes past swept level — PF 1.56 vs 1.24 without)
+- [ ] Confirmation signal present (engulfing, rejection wick — ~~FVG is a profit target, NOT an entry trigger~~)
 - [ ] Entering at the point where **others' stop losses** are — not where breakout traders enter
 - [ ] R:R targets the **next liquidity point** (not an arbitrary percentage)
+
+> **See also:** [[Unified Entry & Exit Checklist]] — all strategy criteria ranked by backtest proof
 
 ---
 
@@ -152,23 +157,46 @@ Before entering, confirm:
 3. **Don't chase breakouts** — fade the move after the trap
 4. **Equal highs/lows are engineered** — they look "too clean" because they ARE bait
 5. **Consolidation makes liquidity obvious** — range H/L = stop clusters
-6. **External → Internal → External** — after an external sweep, target the FVG; after FVG fills, target next external level
+6. **External → Internal → External** — after an external sweep, FVG is your profit target (NOT entry — backtested -0.04R); after FVG fills, target next external level
 7. **Your strategy must profit from losers** — if your entry doesn't take advantage of someone else's stop, reconsider
 
 ---
 
 ## Integration with ClawStreetBot Scanner
 
-| Strategy Element | Scanner Component | Data Source |
-|-----------------|-------------------|-------------|
-| HTF levels (daily swing H/L) | `market.technical_indicators` EMA/RSI | Alpaca daily bars |
-| 5m zone approach/sweep detection | `market.ohlcv` 5m timeframe | Alpaca intraday |
-| Rejection candles (engulfing, wicks) | Candle pattern scanner (future) | 5m OHLCV |
-| Volume spike confirmation | `trade_count` + `vwap` from 5m bars | Alpaca |
-| Fair value gaps (internal liquidity) | FVG detector (future) | 5m/15m OHLCV |
-| Equal highs/lows detection | Swing point scanner (future) | Daily + 5m bars |
-| Session filtering (London/NY open) | Time-of-day gates | Exchange calendar |
-| Consolidation detection | Range/volatility scanner (future) | Daily OHLCV |
+- **Live scanner:** `scripts/detect_liquidity_sweep.py`
+- **DB:** `market.signal_alerts` (strategy='liquidity_sweep', timeframe='5m')
+- **Signal:** Telegram alert when close-beyond confirmation passes
+
+| Strategy Element | Component | Status |
+|-----------------|-----------|--------|
+| HTF levels (daily swing H/L) | `find_swing_levels()` | ✅ Live |
+| 5m sweep detection | `detect_sweep_signals()` | ✅ Live |
+| Rejection candles (engulfing, wicks) | Confirmation check | ✅ Live |
+| **Close-beyond confirmation** | `close_beyond` gate | ✅ Live (PF 1.56) |
+| Equal highs/lows detection | `find_equal_levels()` | ✅ Live |
+| Session filtering (NY hours only) | Time gates | ✅ Live |
+| Option contract lookup | Alpaca `select_best_option()` | ✅ Live |
+| Per-symbol skip list | RKLB/RDDT/OKLO excluded | ✅ Live |
+| Volume spike confirmation | Tested v3 — hurt PF | ❌ Discarded |
+| Fair value gaps | Tested v1 — pure noise | ❌ Discarded |
+| Consolidation detection | TradingLab framework | 🔲 Future |
+
+---
+
+## Backtest Results (6-month, 16 symbols)
+
+**Close-beyond confirmation (refinement D) — THE key filter:**
+
+| Metric | Baseline | D: Close-Beyond |
+|---|---|---|
+| Trades | 327 | 259 |
+| Win rate | 27.5% | **32.4%** |
+| Profit factor | 1.24 | **1.56** |
+| Avg R-multiple | -0.04R | **+0.16R** |
+
+**Best performers:** IREN (+0.85R), ASTS (+0.54R), MU (+0.55R), STX (+1.16R)
+**Failures (excluded):** RKLB (-0.61R), RDDT (-0.86R), OKLO (-0.39R)
 
 ---
 

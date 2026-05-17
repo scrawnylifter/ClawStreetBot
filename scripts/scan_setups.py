@@ -122,7 +122,7 @@ def _fnum(x) -> float | None:
 
 
 def fetch_candidates(conn) -> list[dict]:
-    """Read latest indicators per active symbol and return raw candidate rows."""
+    """Read latest indicators, trend, GEX, and volume ratio per active symbol."""
     cur = conn.cursor()
     cur.execute("""
         WITH latest_ti AS (
@@ -142,15 +142,52 @@ def fetch_candidates(conn) -> list[dict]:
                 symbol, date, rv_20d
             FROM market.realized_vol
             ORDER BY symbol, date DESC
+        ),
+        latest_trend AS (
+            SELECT DISTINCT ON (symbol)
+                symbol, date, adx, micro_trend, intermediate_trend,
+                primary_trend, trend_score, ema_stack
+            FROM market.trend_status
+            ORDER BY symbol, date DESC
+        ),
+        latest_gex AS (
+            SELECT DISTINCT ON (underlying)
+                underlying, net_gex
+            FROM market.gex_dex
+            ORDER BY underlying, date DESC
+        ),
+        vol_ratio AS (
+            SELECT asset_id, volume_ratio
+            FROM (
+                SELECT o.asset_id,
+                       o.volume::numeric / NULLIF(
+                           AVG(o.volume) OVER (
+                               PARTITION BY o.asset_id
+                               ORDER BY o.timestamp
+                               ROWS BETWEEN 19 PRECEDING AND 1 PRECEDING
+                           ), 0
+                       ) AS volume_ratio,
+                       ROW_NUMBER() OVER (PARTITION BY o.asset_id ORDER BY o.timestamp DESC) as rn
+                FROM market.ohlcv o
+                WHERE o.timeframe = '1d'
+            ) sub
+            WHERE rn = 1
         )
         SELECT a.symbol,
                ti.ema_9, ti.ema_21, ti.rsi_14, ti.atr_14,
                iv.current_iv, iv.iv_percentile, iv.iv_rank_52w,
-               rv.rv_20d
+               rv.rv_20d,
+               tr.adx, tr.micro_trend, tr.intermediate_trend,
+               tr.primary_trend, tr.trend_score, tr.ema_stack,
+               gx.net_gex,
+               vr.volume_ratio
         FROM market.assets a
         LEFT JOIN latest_ti ti ON ti.symbol = a.symbol
         LEFT JOIN latest_iv iv ON iv.symbol = a.symbol
         LEFT JOIN latest_rv rv ON rv.symbol = a.symbol
+        LEFT JOIN latest_trend tr ON tr.symbol = a.symbol
+        LEFT JOIN latest_gex gx ON gx.underlying = a.symbol
+        LEFT JOIN vol_ratio vr ON vr.asset_id = a.id
         WHERE a.active = TRUE
         ORDER BY a.symbol
     """)
@@ -158,19 +195,6 @@ def fetch_candidates(conn) -> list[dict]:
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     return rows
-
-
-def fetch_daily_adx(conn, symbol: str) -> float | None:
-    """Pull latest ADX from market.trend_status (daily)."""
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT adx FROM market.trend_status WHERE symbol = %s "
-        "ORDER BY date DESC LIMIT 1",
-        (symbol,),
-    )
-    row = cur.fetchone()
-    cur.close()
-    return _fnum(row[0]) if row else None
 
 
 def fetch_current_regime(conn) -> str:
@@ -244,8 +268,8 @@ def evaluate_symbol(
         log.info("%s: trend BEARISH (EMA9=%.2f < EMA21=%.2f, gap %.1f%%)",
                  sym, ema9, ema21, ema_pct)
 
-    # Gate 2: ADX > 20
-    adx = fetch_daily_adx(conn, sym)
+    # Gate 2: ADX > 20 (now from the candidate row directly)
+    adx = _fnum(cand.get("adx"))
     if adx is None or adx < ADX_MIN:
         log.info("%s: gate2 ADX fail (%s)", sym, adx)
         return None
@@ -402,6 +426,14 @@ def evaluate_symbol(
         "option_ask": opt["ask"],
         "option_mid": mid,
         "option_iv": opt.get("iv"),
+        # Trend context (from market.trend_status)
+        "volume_ratio": _fnum(cand.get("volume_ratio")),
+        "micro_trend": cand.get("micro_trend"),
+        "intermediate_trend": cand.get("intermediate_trend"),
+        "primary_trend": cand.get("primary_trend"),
+        "trend_score": _fnum(cand.get("trend_score")),
+        "ema_stack": cand.get("ema_stack"),
+        "net_gex": _fnum(cand.get("net_gex")),
     }
 
 
@@ -417,21 +449,27 @@ def save_signal(conn, sig: dict) -> int | None:
             INSERT INTO market.signal_alerts (
                 symbol, strategy, direction, status, regime, timeframe,
                 trigger_price, ema_9, ema_21, adx, rsi, atr_14,
+                volume_ratio,
                 stop_price, tp1_price, tp2_price, risk_reward,
                 invalidation,
+                micro_trend, intermediate_trend, primary_trend,
+                trend_score, ema_stack,
                 option_symbol, option_strike, option_expiry,
                 option_delta, option_theta,
                 option_bid, option_ask, option_mid,
-                iv_rank, iv_rv_spread
+                iv_rank, iv_rv_spread, net_gex
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
+                %s,
                 %s, %s, %s, %s,
                 %s,
                 %s, %s, %s,
                 %s, %s,
                 %s, %s, %s,
-                %s, %s
+                %s, %s,
+                %s, %s, %s,
+                %s, %s, %s
             )
             ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
             DO NOTHING
@@ -441,13 +479,18 @@ def save_signal(conn, sig: dict) -> int | None:
             sig["regime"], sig["timeframe"],
             sig["trigger_price"], sig["ema_9"], sig["ema_21"],
             sig["adx"], sig["rsi"], sig["atr_14"],
+            sig.get("volume_ratio"),
             sig["stop_price"], sig["tp1_price"], sig["tp2_price"],
             sig["stock_risk_reward"],
             sig["invalidation"],
+            sig.get("micro_trend"), sig.get("intermediate_trend"),
+            sig.get("primary_trend"),
+            sig.get("trend_score"), sig.get("ema_stack"),
             sig["option_symbol"], sig["option_strike"], sig["option_expiry"],
             sig["option_delta"], sig["option_theta"],
             sig["option_bid"], sig["option_ask"], sig["option_mid"],
-            sig["iv_percentile"], sig["iv_rv_spread"],
+            sig.get("iv_rank"), sig["iv_rv_spread"],
+            sig.get("net_gex"),
         ))
         row = cur.fetchone()
         conn.commit()
@@ -474,7 +517,9 @@ def format_buy_alert(sig: dict) -> str:
     contract_letter = "C" if s["direction"] == "bullish" else "P"
     direction_emoji = "🟢" if s["direction"] == "bullish" else "🔴"
     direction_word = "BUY" if s["direction"] == "bullish" else "SHORT"
-    trend_label = "Bullish (EMA9 > EMA21)" if s["direction"] == "bullish" else "Bearish (EMA9 < EMA21)"
+    trend_label = s.get("primary_trend") or s.get("intermediate_trend") or ("bullish" if s["direction"] == "bullish" else "bearish")
+    vol_ratio_str = f"{s['volume_ratio']:.1f}x" if s.get("volume_ratio") else "—"
+    net_gex_str = f"${s['net_gex']/1e6:+.0f}M" if s.get("net_gex") else "—"
     iv_pct_disp = round((s["iv_current"] or 0) * 100)
     rv_pct_disp = round((s["rv_20d"] or 0) * 100)
 
@@ -482,6 +527,7 @@ def format_buy_alert(sig: dict) -> str:
         f"{direction_emoji} <b>{direction_word} Signal: {s['symbol']}</b>",
         f"{'─' * 30}",
         f"Stock: ${s['trigger_price']:.2f} | Trend: {trend_label} | RSI: {s['rsi']:.0f}",
+        f"Vol: {vol_ratio_str} avg | GEX: {net_gex_str}",
         f"IV: {iv_pct_disp}% (rank {iv_pct:.0f}th pctl) — {iv_label}",
         f"RV: {rv_pct_disp}% | IV-RV spread: {spread:+.2f} — {spread_label}",
         "",

@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-17
+updated: 2026-05-19
 tags: [home, mOC]
 ---
 
@@ -12,15 +12,15 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 
 Every trade follows this chain:
 
-**Laws** (01-Fundamentals) → **Entry Criteria** (01-Fundamentals) → **Strategy** (02-Strategies) → **Risk Management** (05-Risk-Management) → **Execution**
+**Laws** (01-Fundamentals) → **Entry Criteria** (01-Fundamentals) → **Unified Checklist** (01-Fundamentals) → **Strategy** (02-Strategies) → **Risk Management** (05-Risk-Management) → **Execution**
 
-Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies define *how* to act.
+Rules constrain *whether* you trade. Criteria trigger *when* to look. The checklist ranks *what matters most*. Strategies define *how* to act.
 
 ## Navigation
 
 | Folder | Purpose |
 |--------|---------|
-| [[01-Fundamentals]] | **[[Laws of Trading]]** + **[[Trade Entry Criteria]]** — rules & triggers |
+| [[01-Fundamentals]] | **[[Laws of Trading]]** + **[[Trade Entry Criteria]]** + **[[Unified Entry & Exit Checklist]]** — rules, triggers & synthesis |
 | [[02-Strategies]] | **[[Swing Trading]]** · **[[Long-Term Holding]]** · [[EMA Crossover]] · [[ORB]] · [[Buy the 5% Dip]] · **[[Greeks Strategy]]** · [[Liquidity — 5m Day Trading]] |
 | [[03-Market-Research]] | Market research, asset analysis, **[[Watchlist]]** · **[[Backtesting Architecture]]** |
 | [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** · **[[Alpaca Data Pipeline]]** · **[[Polygon.io API]]** |
@@ -34,6 +34,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Project Roadmap]]
 - [[Laws of Trading]] — 8 non-negotiable rules
 - [[Trade Entry Criteria]] — When & why we enter trades
+- [[Unified Entry & Exit Checklist]] — Synthesized from all strategies, ranked by backtest proof
 - [[Watchlist]] — 16 stocks with sector/industry breakdown
 - [[Risk Management]] — Position sizing, loss limits, correlation risk
 - [[Alpaca API]] — Trading execution, orders, positions
@@ -102,6 +103,8 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] **n8n workflow migration** — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
 - [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY alert mechanism** — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
+- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = key filter
 - [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] **Options chain filter** (`filter_options.py`) — DTE≥30, delta range, theta budget

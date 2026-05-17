@@ -72,9 +72,29 @@ def get_telegram_config():
     return config
 
 
-def send_telegram_message(token: str, chat_id: str, text: str, allowed_chat_id: str = "") -> dict | None:
+def build_approval_keyboard(signal_id: int) -> dict:
+    """Inline keyboard with Approve / Deny buttons for a signal_alerts row.
+
+    callback_data is read by telegram_callback_listener.py — keep the
+    `approve:<id>` / `deny:<id>` format stable on both sides.
+    """
+    return {
+        "inline_keyboard": [[
+            {"text": "✅ Approve", "callback_data": f"approve:{signal_id}"},
+            {"text": "❌ Deny",    "callback_data": f"deny:{signal_id}"},
+        ]]
+    }
+
+
+def send_telegram_message(
+    token: str,
+    chat_id: str,
+    text: str,
+    allowed_chat_id: str = "",
+    reply_markup: dict | None = None,
+) -> dict | None:
     """Send a message via Telegram Bot API. Returns the response JSON or None.
-    
+
     Security: only sends to the allowed_chat_id. Any other chat_id
     is rejected with a warning log. This prevents the bot from being
     used to send alerts to unauthorized chats.
@@ -84,13 +104,17 @@ def send_telegram_message(token: str, chat_id: str, text: str, allowed_chat_id: 
         log.warning("BLOCKED: attempt to send to unauthorized chat_id=%s (allowed=%s)", chat_id, allowed_chat_id)
         return None
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = json.dumps({
+    payload: dict = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
-    }).encode("utf-8")
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
         url,
@@ -424,8 +448,13 @@ def main():
             sent_count += 1
             continue
 
-        # Send via Telegram
-        result = send_telegram_message(tg_token, tg_chat_id, alert_text, allowed_chat_id=tg_chat_id)
+        # Send via Telegram with Approve / Deny buttons
+        keyboard = build_approval_keyboard(signal["id"])
+        result = send_telegram_message(
+            tg_token, tg_chat_id, alert_text,
+            allowed_chat_id=tg_chat_id,
+            reply_markup=keyboard,
+        )
         if result and result.get("ok"):
             msg_id = result["result"]["message_id"]
             # Mark as sent

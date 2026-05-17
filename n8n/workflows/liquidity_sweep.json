@@ -1,5 +1,5 @@
 {
-  "name": "options_daily",
+  "name": "liquidity_sweep",
   "nodes": [
     {
       "parameters": {
@@ -7,40 +7,34 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "55 14 * * 1-5"
+              "expression": "*/5 6-12 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 14:55 PDT",
+      "name": "Every 5min market hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        240,
-        300
-      ]
+      "position": [240, 300]
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/ingest_polygon_options.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/detect_liquidity_sweep.py"
       },
       "id": "run",
-      "name": "ingest options + greeks",
+      "name": "detect liquidity sweep",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [
-        520,
-        300
-      ]
+      "position": [520, 300]
     }
   ],
   "connections": {
-    "Weekdays 14:55 PDT": {
+    "Every 5min market hours": {
       "main": [
         [
           {
-            "node": "ingest options + greeks",
+            "node": "detect liquidity sweep",
             "type": "main",
             "index": 0
           }
@@ -51,8 +45,8 @@
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "executionTimeout": 1800,
+    "executionTimeout": 300,
     "timezone": "America/Los_Angeles"
   },
-  "active": false
+  "active": true
 }
