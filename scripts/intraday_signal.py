@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-from alert_telegram import send_telegram_message, get_telegram_config  # noqa: E402
 
 
 def load_env(filename: str) -> None:
@@ -513,13 +512,15 @@ def write_signal_alert(
                 trigger_price, ema_21, adx, rsi, atr_14,
                 stop_price, tp1_price, tp2_price, risk_reward,
                 invalidation, iv_rank, iv_rv_spread, net_gex,
-                volume_ratio, trend_score, intermediate_trend
+                volume_ratio, trend_score, intermediate_trend,
+                composite_score
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s, %s
+                %s, %s, %s,
+                %s
             )
             ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
             DO NOTHING
@@ -532,6 +533,7 @@ def write_signal_alert(
                 Json(invalidation), iv_rank, iv_rv_spread, net_gex,
                 volume_ratio, trend_info.get("trend_score"),
                 trend_info.get("intermediate_trend"),
+                round(composite, 2),
             ),
         )
         row = cur.fetchone()
@@ -542,23 +544,6 @@ def write_signal_alert(
         return None
     finally:
         cur.close()
-
-
-def format_intraday_alert(sig: dict) -> str:
-    """Format an intraday signal alert for Telegram."""
-    direction_emoji = "🟢" if sig["direction"] == "bullish" else "🔴"
-    direction_word = "BUY" if sig["direction"] == "bullish" else "SHORT"
-    s = sig
-    trend_label = s.get("intermediate_trend", s.get("direction", "?"))
-    lines = [
-        f"{direction_emoji} <b>{direction_word} Signal: {s['symbol']}</b>",
-        f"{'─' * 30}",
-        f"Stock: ${s['trigger_price']:.2f} | Trend: {trend_label} | RSI: {s['rsi']:.0f}",
-        f"Composite: {s['composite']:.1f} (intraday 5m)",
-        f"ATR Stop: ${s['stop_price']:.2f} | TP1: ${s['tp1_price']:.2f} | TP2: ${s['tp2_price']:.2f}",
-        f"R:R {s['risk_reward']:.1f}:1 ✅",
-    ]
-    return "\n".join(lines)
 
 
 def write_intraday_signal(
@@ -731,48 +716,27 @@ def main() -> int:
             strat = strategy_for(composite)
             direction = "bullish" if composite >= 55 else "bearish"
 
-            # Write to market.signal_alerts for production alert pipeline
-            alert_id = write_signal_alert(
-                conn=conn,
-                symbol=sym,
-                direction=direction,
-                composite=composite,
-                price=price,
-                ema_21=ema_21,
-                rsi=rsi,
-                atr=atr,
-                daily_factors=daily,
-                trend_info=trend_info,
-                details=details,
-            )
-            if alert_id and not args.dry_run:
-                # Send Telegram alert
-                alert_sig = {
-                    "symbol": sym, "direction": direction,
-                    "trigger_price": price, "rsi": rsi, "atr_14": atr,
-                    "stop_price": round(price - atr * ATR_STOP_MULT_5M, 2) if direction == "bullish" else round(price + atr * ATR_STOP_MULT_5M, 2),
-                    "tp1_price": round(price + atr * ATR_TP1_MULT_5M, 2) if direction == "bullish" else round(price - atr * ATR_TP1_MULT_5M, 2),
-                    "tp2_price": round(price + atr * ATR_TP2_MULT_5M, 2) if direction == "bullish" else round(price - atr * ATR_TP2_MULT_5M, 2),
-                    "risk_reward": None,  # computed inside write_signal_alert
-                    "intermediate_trend": trend_info.get("intermediate_trend", "?"),
-                    "composite": composite,
-                }
-                try:
-                    tg_token, tg_chat_id = get_telegram_config()
-                    alert_text = format_intraday_alert(alert_sig)
-                    result = send_telegram_message(tg_token, tg_chat_id, alert_text)
-                    if result and result.get("ok"):
-                        msg_id = result["result"]["message_id"]
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE market.signal_alerts SET telegram_sent = TRUE, "
-                                "telegram_msg_id = %s WHERE id = %s",
-                                (msg_id, alert_id),
-                            )
-                            conn.commit()
-                        log.info("Telegram alert sent for %s (msg_id=%s)", sym, msg_id)
-                except Exception as e:
-                    log.warning("Telegram send failed for %s: %s", sym, e)
+            # Write to market.signal_alerts for production alert pipeline.
+            # alert_telegram.py is the sole dispatcher — it reads
+            # telegram_sent=FALSE rows and sends with the 4-button keyboard.
+            if not args.dry_run:
+                alert_id = write_signal_alert(
+                    conn=conn,
+                    symbol=sym,
+                    direction=direction,
+                    composite=composite,
+                    price=price,
+                    ema_21=ema_21,
+                    rsi=rsi,
+                    atr=atr,
+                    daily_factors=daily,
+                    trend_info=trend_info,
+                    details=details,
+                )
+                if alert_id:
+                    log.info("Saved intraday alert for %s (id=%s, composite=%.1f) "
+                             "— awaiting alert_telegram dispatch",
+                             sym, alert_id, composite)
 
             alert = (
                 f"🚀 ALERT: {sym} composite={composite:.1f} ({sig_type}, {strat}) "

@@ -476,6 +476,71 @@ def format_setup_scanner_alert(signal: dict) -> str:
     return "\n".join(lines)
 
 
+def format_intraday_signal_alert(signal: dict) -> str:
+    """Format an intraday composite-score signal (intraday_signal.py)."""
+    symbol = signal["symbol"]
+    direction = signal["direction"]
+    price = signal["trigger_price"]
+    stop = signal["stop_price"]
+    tp1 = signal["tp1_price"]
+    tp2 = signal["tp2_price"]
+    rr = signal["risk_reward"]
+    rsi = signal.get("rsi")
+    regime = signal.get("regime", "unknown")
+    composite = signal.get("composite_score")
+
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    action = "BUY" if direction == "bullish" else "SHORT"
+
+    lines = [
+        f"{emoji} <b>{action} Signal: {symbol}</b>",
+        f"{'─' * 30}",
+        f"Strategy: Intraday 5m | Regime: {regime}",
+    ]
+    if composite is not None:
+        lines.append(f"Composite: {float(composite):.1f}/100")
+
+    if rsi is not None:
+        lines.append(f"Stock: ${float(price):.2f} | RSI: {float(rsi):.0f}")
+    else:
+        lines.append(f"Stock: ${float(price):.2f}")
+
+    inter = _trend_english(signal.get("intermediate_trend", "?"))
+    trend_score = signal.get("trend_score")
+    if trend_score is not None:
+        lines.append(f"Mid-term trend: {inter} (score {float(trend_score):.0f})")
+    elif signal.get("intermediate_trend"):
+        lines.append(f"Mid-term trend: {inter}")
+
+    risk_dollars = float(price) - float(stop) if direction == "bullish" else float(stop) - float(price)
+    reward_dollars = float(tp1) - float(price) if direction == "bullish" else float(price) - float(tp1)
+    rr_check = "✅" if float(rr) >= 3 else "⚠️"
+    lines.append("")
+    lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
+    lines.append(f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} ({float(rr):.1f}:1) {rr_check}")
+
+    vwap_ratio = signal.get("volume_ratio")
+    if vwap_ratio is not None:
+        lines.append(f"VWAP ratio: {float(vwap_ratio):.3f}")
+
+    invalidation = signal.get("invalidation")
+    if invalidation:
+        if isinstance(invalidation, str):
+            try:
+                invalidation = json.loads(invalidation)
+            except (json.JSONDecodeError, TypeError):
+                invalidation = None
+        if invalidation:
+            rules = invalidation if isinstance(invalidation, list) else invalidation.get("rules", [])
+            if rules:
+                lines.append("")
+                lines.append("<b>Bail if:</b>")
+                for rule in rules:
+                    lines.append(f"  ⛔ {rule}")
+
+    return "\n".join(lines)
+
+
 def format_liquidity_sweep_alert(signal: dict) -> str:
     """Format a liquidity sweep signal (detect_liquidity_sweep.py)."""
     symbol = signal["symbol"]
@@ -622,6 +687,8 @@ def main():
             alert_text = format_setup_scanner_alert(signal)
         elif signal["strategy"] == "liquidity_sweep":
             alert_text = format_liquidity_sweep_alert(signal)
+        elif signal["strategy"] == "intraday_signal":
+            alert_text = format_intraday_signal_alert(signal)
         else:
             # Generic fallback
             emoji = "📈" if signal["direction"] == "bullish" else "📉"
