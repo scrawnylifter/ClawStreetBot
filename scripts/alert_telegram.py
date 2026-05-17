@@ -75,14 +75,23 @@ def get_telegram_config():
 def build_approval_keyboard(signal_id: int) -> dict:
     """Inline keyboard with Approve / Deny buttons for a signal_alerts row.
 
-    callback_data is read by telegram_callback_listener.py — keep the
-    `approve:<id>` / `deny:<id>` format stable on both sides.
+    Row 1: ✅ Approve (standard sizing) | ❌ Deny
+    Row 2: 🔵 Conservative (half risk)  | 🟡 Aggressive (2x risk)
+
+    callback_data format (read by telegram_callback_listener.py):
+        approve:<id>:standard | approve:<id>:conservative | approve:<id>:aggressive | deny:<id>
     """
     return {
-        "inline_keyboard": [[
-            {"text": "✅ Approve", "callback_data": f"approve:{signal_id}"},
-            {"text": "❌ Deny",    "callback_data": f"deny:{signal_id}"},
-        ]]
+        "inline_keyboard": [
+            [
+                {"text": "✅ Approve", "callback_data": f"approve:{signal_id}:standard"},
+                {"text": "❌ Deny", "callback_data": f"deny:{signal_id}"},
+            ],
+            [
+                {"text": "🔵 Conservative", "callback_data": f"approve:{signal_id}:conservative"},
+                {"text": "🟡 Aggressive", "callback_data": f"approve:{signal_id}:aggressive"},
+            ],
+        ]
     }
 
 

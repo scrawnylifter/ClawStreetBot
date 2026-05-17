@@ -48,6 +48,13 @@ RISK_PCT = {
     "long_term": Decimal("0.05"),  # per-tranche
 }
 
+# Approval keyboard risk modes: conservative halves risk, aggressive doubles it.
+RISK_MODE_MULT = {
+    "conservative": Decimal("0.5"),   # half sizing
+    "standard":     Decimal("1.0"),   # default
+    "aggressive":   Decimal("2.0"),   # 2x sizing (capped by MAX_POSITION_FRACTION)
+}
+
 # Hard cap from Law 3: never more than 20% in a single position.
 MAX_POSITION_FRACTION = Decimal("0.20")
 
@@ -195,9 +202,10 @@ def _to_decimal(v: Any) -> Decimal | None:
 
 def size_option_position(
     equity: Decimal, mode: str, option_mid: Decimal,
+    risk_mode: str = "standard",
 ) -> dict:
     """Compute contract count using premium-based stop + 20% notional cap."""
-    risk_pct = RISK_PCT[mode]
+    risk_pct = RISK_PCT[mode] * RISK_MODE_MULT.get(risk_mode, Decimal("1.0"))
     dollar_risk = (equity * risk_pct).quantize(Decimal("0.01"))
     per_contract_risk = (option_mid * OPTION_PREMIUM_STOP_PCT * Decimal("100")).quantize(Decimal("0.01"))
     if per_contract_risk <= 0:
@@ -232,9 +240,10 @@ def size_option_position(
 
 def size_stock_position(
     equity: Decimal, mode: str, entry: Decimal, stop: Decimal, direction: str,
+    risk_mode: str = "standard",
 ) -> dict:
     """Fallback sizing when no option contract is attached."""
-    risk_pct = RISK_PCT[mode]
+    risk_pct = RISK_PCT[mode] * RISK_MODE_MULT.get(risk_mode, Decimal("1.0"))
     dollar_risk = (equity * risk_pct).quantize(Decimal("0.01"))
     per_share_risk = abs(entry - stop)
     if per_share_risk <= 0:
@@ -459,7 +468,7 @@ def _fmt_money(v: Decimal | None) -> str:
 def render_plan(
     signal: dict, mode: str, equity: Decimal,
     sizing: dict, checks: list[tuple[str, str]],
-    verbose: bool,
+    verbose: bool, risk_mode: str = "standard",
 ) -> str:
     sid = signal["id"]
     sym = signal["symbol"]
@@ -498,7 +507,7 @@ def render_plan(
     lines.append(f"  Entry: {_fmt_money(entry)}   Stop: {_fmt_money(stop)}   "
                  f"TP1: {_fmt_money(tp1)}   TP2: {_fmt_money(tp2)}")
     lines.append(f"  R:R: {signal.get('risk_reward') or '—'}:1   "
-                 f"Mode: {mode}   Risk %: {sizing['risk_pct']*100}%")
+                 f"Mode: {mode}   Risk %: {sizing['risk_pct']*100}%   Sizing: {risk_mode}")
     lines.append(f"  Equity: {_fmt_money(equity)}   "
                  f"Risk $: {_fmt_money(sizing['dollar_risk'])}")
     lines.append("")
@@ -592,20 +601,21 @@ def render_plan(
 
 def process_one(signal: dict, equity: Decimal, verbose: bool, conn=None) -> str:
     mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
+    risk_mode = signal.get("risk_mode") or "standard"
 
     opt_mid = _to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
-        sizing = size_option_position(equity, mode, opt_mid)
+        sizing = size_option_position(equity, mode, opt_mid, risk_mode=risk_mode)
     else:
         entry = _to_decimal(signal.get("trigger_price"))
         stop  = _to_decimal(signal.get("stop_price"))
         if entry is None or stop is None:
             return (f"Signal #{signal['id']} {signal['symbol']} — SKIP: "
                     f"no trigger_price/stop_price, can't size a stock fallback.")
-        sizing = size_stock_position(equity, mode, entry, stop, signal["direction"])
+        sizing = size_stock_position(equity, mode, entry, stop, signal["direction"], risk_mode=risk_mode)
 
     checks = preflight(signal, sizing, mode, conn=conn, equity=equity)
-    return render_plan(signal, mode, equity, sizing, checks, verbose)
+    return render_plan(signal, mode, equity, sizing, checks, verbose, risk_mode=risk_mode)
 
 
 def main() -> int:
