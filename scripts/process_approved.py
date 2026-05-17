@@ -702,7 +702,7 @@ def render_plan(
     if stop:
         lines.append(f"  invalidation: underlying {'≤' if direction == 'bullish' else '≥'} {_fmt_money(stop)}  → flatten immediately")
     if mode == "day":
-        lines.append("  time stop: flatten before 12:55 PDT (day-trade rule)")
+        lines.append("  time stop: flatten before 12:45 PDT (day-trade rule)")
 
     return "\n".join(lines)
 

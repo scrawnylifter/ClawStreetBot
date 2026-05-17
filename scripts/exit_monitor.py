@@ -55,9 +55,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("exit_monitor")
 
-# Day-trade time stop: 12:55 PDT/PST (5 min before US equities close).
+# Day-trade time stop: 12:45 PDT/PST (15 min before US equities close).
+# 15-min buffer so the SELL doesn't have to fight the worst-liquidity
+# window of the session and gets at least two more 5-min cron ticks
+# (12:45, 12:50, 12:55) to retry if Alpaca rejects the first attempt.
 # zoneinfo handles DST correctly so this works year-round.
-TIME_STOP_LOCAL = time(12, 55)
+TIME_STOP_LOCAL = time(12, 45)
 EQUITIES_TZ = ZoneInfo("America/Los_Angeles")
 
 OPTION_PREMIUM_STOP_FRACTION = Decimal("0.50")  # close if mid ≤ 50% of entry
@@ -221,7 +224,7 @@ def decide_exit(
     if mode == "day":
         stop_utc = _today_time_stop_utc(now)
         if now >= stop_utc:
-            return ACTION_FULL_CLOSE, f"time_stop: {now.isoformat()} ≥ 12:55 PDT"
+            return ACTION_FULL_CLOSE, f"time_stop: {now.isoformat()} ≥ 12:45 PDT"
 
     # 6. Option expiry imminent.
     if is_option:
