@@ -12,15 +12,15 @@ Welcome to the ClawStreetBot knowledge base. This vault serves as the central br
 
 Every trade follows this chain:
 
-**Laws** (01-Fundamentals) → **Entry Criteria** (01-Fundamentals) → **Strategy** (02-Strategies) → **Risk Management** (05-Risk-Management) → **Execution**
+**Laws** (01-Fundamentals) → **Entry Criteria** (01-Fundamentals) → **Unified Checklist** (01-Fundamentals) → **Strategy** (02-Strategies) → **Risk Management** (05-Risk-Management) → **Execution**
 
-Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies define *how* to act.
+Rules constrain *whether* you trade. Criteria trigger *when* to look. The checklist ranks *what matters most*. Strategies define *how* to act.
 
 ## Navigation
 
 | Folder | Purpose |
 |--------|---------|
-| [[01-Fundamentals]] | **[[Laws of Trading]]** + **[[Trade Entry Criteria]]** — rules & triggers |
+| [[01-Fundamentals]] | **[[Laws of Trading]]** + **[[Trade Entry Criteria]]** + **[[Unified Entry & Exit Checklist]]** — rules, triggers & synthesis |
 | [[02-Strategies]] | **[[Swing Trading]]** · **[[Long-Term Holding]]** · [[EMA Crossover]] · [[ORB]] · [[Buy the 5% Dip]] · **[[Greeks Strategy]]** · [[Liquidity — 5m Day Trading]] |
 | [[03-Market-Research]] | Market research, asset analysis, **[[Watchlist]]** · **[[Backtesting Architecture]]** |
 | [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** · **[[Alpaca Data Pipeline]]** · **[[Polygon.io API]]** |
@@ -34,6 +34,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Project Roadmap]]
 - [[Laws of Trading]] — 8 non-negotiable rules
 - [[Trade Entry Criteria]] — When & why we enter trades
+- [[Unified Entry & Exit Checklist]] — Synthesized from all strategies, ranked by backtest proof
 - [[Watchlist]] — 16 stocks with sector/industry breakdown
 - [[Risk Management]] — Position sizing, loss limits, correlation risk
 - [[Alpaca API]] — Trading execution, orders, positions
