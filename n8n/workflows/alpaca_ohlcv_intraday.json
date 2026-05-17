@@ -1,0 +1,58 @@
+{
+  "name": "alpaca_ohlcv_intraday",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 7-13 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Hourly :05 6:30-13:00 PDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_alpaca_ohlcv.py --timeframe 15m"
+      },
+      "id": "run15m",
+      "name": "ingest 15m bars (Alpaca)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Hourly :05 6:30-13:00 PDT": {
+      "main": [
+        [
+          {
+            "node": "ingest 15m bars (Alpaca)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 900,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": true
+}

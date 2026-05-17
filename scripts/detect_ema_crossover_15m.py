@@ -29,6 +29,10 @@ from datetime import date, datetime, timezone, timedelta
 import psycopg2
 import numpy as np
 
+# Allow `import fetch_alpaca_snapshot` regardless of CWD (n8n runs from /).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fetch_alpaca_snapshot import select_best_option  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -287,23 +291,15 @@ def detect_15m_crossovers(conn) -> list[dict]:
                 "Price breaks below stop → EXIT immediately",
             ])
 
-            # Best option contract
+            # Best option contract — live snapshot from Alpaca (not stale daily greeks)
             contract_type = 'C' if direction == 'bullish' else 'P'
-            today = date.today()
-            cur.execute("""
-                SELECT o.occ_symbol, o.strike, o.expiration,
-                       g.delta, g.theta, g.underlying_price
-                FROM market.options o
-                JOIN market.greeks g ON o.occ_symbol = g.occ_symbol
-                WHERE o.underlying = %s
-                  AND o.expiration >= %s + INTERVAL '30 days'
-                  AND o.contract_type = %s
-                  AND g.delta IS NOT NULL
-                  AND g.delta BETWEEN 0.50 AND 0.70
-                ORDER BY g.theta ASC, ABS(g.delta - 0.60) ASC
-                LIMIT 1
-            """, (symbol, today, contract_type))
-            option_row = cur.fetchone()
+            try:
+                live_opt = select_best_option(
+                    symbol, want_type=contract_type, min_dte=30, max_dte=120,
+                )
+            except Exception as e:
+                log.warning("%s: live option snapshot failed (%s), falling back to DB", symbol, e)
+                live_opt = None
 
             signal = {
                 "symbol": symbol,
@@ -341,13 +337,16 @@ def detect_15m_crossovers(conn) -> list[dict]:
                 "trigger_time": trigger_time,
             }
 
-            if option_row:
+            if live_opt:
                 signal.update({
-                    "option_symbol": option_row[0],
-                    "option_strike": float(option_row[1]),
-                    "option_expiry": option_row[2].strftime("%Y-%m-%d") if hasattr(option_row[2], "strftime") else str(option_row[2])[:10],
-                    "option_delta": float(option_row[3]) if option_row[3] else None,
-                    "option_theta": float(option_row[4]) if option_row[4] else None,
+                    "option_symbol": live_opt["occ_symbol"],
+                    "option_strike": live_opt["strike"],
+                    "option_expiry": live_opt["expiry"],
+                    "option_delta": live_opt["delta"],
+                    "option_theta": live_opt["theta"],
+                    "option_bid": live_opt["bid"],
+                    "option_ask": live_opt["ask"],
+                    "option_mid": live_opt["mid"],
                 })
             else:
                 signal.update({
@@ -356,6 +355,9 @@ def detect_15m_crossovers(conn) -> list[dict]:
                     "option_expiry": None,
                     "option_delta": None,
                     "option_theta": None,
+                    "option_bid": None,
+                    "option_ask": None,
+                    "option_mid": None,
                 })
 
             signals.append(signal)
@@ -390,6 +392,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                     trend_score, ema_stack, invalidation,
                     option_symbol, option_strike, option_expiry,
                     option_delta, option_theta,
+                    option_bid, option_ask, option_mid,
                     iv_rank, iv_rv_spread, net_gex,
                     timeframe, daily_trend, daily_ema_position,
                     intraday_ema_9, intraday_ema_21
@@ -403,6 +406,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                     %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
+                    %s, %s, %s,
                     %s, %s
                 ) ON CONFLICT (symbol, strategy, direction, timeframe, created_at) DO NOTHING
             """, (
@@ -413,6 +417,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                 s["trend_score"], s["ema_stack"], s["invalidation"],
                 s["option_symbol"], s["option_strike"], s["option_expiry"],
                 s["option_delta"], s["option_theta"],
+                s["option_bid"], s["option_ask"], s["option_mid"],
                 s["iv_rank"], s["iv_rv_spread"], s["net_gex"],
                 s["timeframe"], s["daily_trend"], s["daily_ema_position"],
                 s["intraday_ema_9"], s["intraday_ema_21"],
