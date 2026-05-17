@@ -121,6 +121,19 @@ Recommendation: /close position immediately
 Or: /override to hold (not recommended per strategy rules)
 ```
 
+**MACD momentum fading (exit warning):**
+```
+⚠️ WDC EMA — MOMENTUM FADING
+
+MACD histogram declining 3 consecutive candles (momentum weakening)
+Price still above EMA cross, but momentum is fading
+ADX: 22 (trending but weakening)
+
+Action: Tighten stop to breakeven ($72.50)
+/tighten_stop — move stop to entry price
+/hold — keep current stop (riskier)
+```
+
 **Greeks deterioration (if options position):**
 ```
 ⚠️ WDC EMA — GREEKS DETERIORATION
@@ -513,6 +526,7 @@ EXIT MONITORING (runs while position is open)
 - Create `scripts/detect_ema_crossover.py`
 - Input: today's + yesterday's technical indicators, trend_status
 - Filter: EMA-9 crossed EMA-21, ADX > 25, volume >= 1.5x, RSI 40-65 (bullish) or 35-60 (bearish)
+- **MACD is NOT an entry filter** — data confirms MACD echoes 92% of EMA crosses (redundant). ADX is the real filter (only 5.6% of crosses are ADX-confirmed)
 - Cross-reference trend alignment, regime, iv_rank
 - Calculate: ATR×2.0 stop, 30%/50%/trail TP, R:R ratio
 - Output: structured entry alert with full trade plan + invalidation conditions
@@ -554,6 +568,10 @@ EXIT MONITORING (runs while position is open)
   - 9 EMA crosses back below 21 EMA within 2 candles → `INVALIDATION` alert
   - ADX drops below 20 → `INVALIDATION` alert
   - Volume dries up (below 0.5x average after entry) → `CAUTION` alert
+  - **MACD momentum fading (exit signal):**
+    - MACD histogram declining 3+ consecutive candles → `MOMENTUM FADING` alert (tighten stop)
+    - MACD histogram crosses zero against position → `STRONG EXIT` alert (take profit or close)
+    - MACD divergence (price higher high, MACD lower high) → `DIVERGENCE` alert (consider TP1 exit)
 - **ORB invalidation:**
   - Price reverses back inside opening range → `FALSE BREAKOUT` alert
   - Volume dies below 1x average → `CAUTION` alert

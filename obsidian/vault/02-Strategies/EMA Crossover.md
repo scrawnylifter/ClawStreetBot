@@ -45,7 +45,6 @@ From [[Trade Entry Criteria]]:
 - [ ] Price is above VWAP (intraday) or above 50 EMA (swing)
 - [ ] Volume on crossover candle ≥ 1.5x 20-day average
 - [ ] RSI between 40-65 (room to run, not overbought)
-- [ ] MACD histogram turning positive or already positive
 - [ ] Higher-timeframe trend agrees (if daily cross, weekly trend bullish)
 
 **For Puts (bearish crossover):**
@@ -54,8 +53,9 @@ From [[Trade Entry Criteria]]:
 - [ ] Price is below VWAP (intraday) or below 50 EMA (swing)
 - [ ] Volume on crossover candle ≥ 1.5x 20-day average
 - [ ] RSI between 35-60 (room to fall, not oversold)
-- [ ] MACD histogram turning negative or already negative
 - [ ] Higher-timeframe trend agrees (if daily cross, weekly trend bearish)
+
+> **Why no MACD in entry criteria?** Data analysis (36 bullish crosses in 2026) shows MACD histogram confirms 92% of EMA crossovers — it's effectively redundant. When the 9/21 crosses, MACD (12/26) is almost always already aligned. It doesn't filter out bad signals; it echoes the signal you already have. ADX is the real filter (only 5.6% of crosses had ADX > 25 = trending). MACD is moved to invalidation/exit where it adds actual value — declining momentum while still in a trade is a meaningful warning.
 
 ## Entry
 - **Order type:** Limit order at or near the crossover candle close
@@ -86,7 +86,8 @@ From [[Trade Entry Criteria]]:
 - [ ] Greeks analyzed (delta, theta, IV rank for options)
 - [ ] IV rank checked — prefer entries when IV rank < 50th percentile
 - [ ] No earnings within 5 business days (Law 5)
-- [ ] ADX checked — must be >25 to confirm trend
+- [ ] ADX checked — must be >25 to confirm trend (the primary filter)
+- [ ] MACD noted for exit monitoring — NOT for entry (see "Momentum Fading" section)
 - [ ] Correlation check — is another semi stock already signaling the same cross? (see [[Correlation Risk]])
 
 ## Invalidation
@@ -96,6 +97,16 @@ Exit immediately if:
 - Volume dries up immediately after entry
 - Major macro event invalidates thesis (Fed announcement, sector rotation)
 - Position is causing emotional distress (Law 2 — you're too deep)
+
+## Momentum Fading (Exit Warning — Not Immediate Exit)
+MACD is **not used for entry** (it's redundant with the EMA cross itself — confirms 92% of crosses). But once you're **in** a trade, MACD momentum divergence is a valuable exit signal:
+
+- **MACD histogram declining for 3+ candles** → momentum fading, tighten stop to breakeven or trail tighter
+- **MACD histogram crosses zero against position** (positive→negative for calls, negative→positive for puts) → strong exit signal, take profit or close
+- **MACD bearish divergence** (price makes higher high, MACD makes lower high) → warning: trend is exhausting, consider exiting at TP1 instead of holding for TP2
+- **MACD bullish divergence** (price makes lower low, MACD makes higher low) — for puts: bearish momentum fading, consider covering early
+
+> Why MACD works for exits but not entries: At entry, MACD is already aligned with the crossover 92% of the time — it tells you nothing new. But during the trade, MACD momentum **diverging** from price direction is an early warning that the move is losing steam. That's information you didn't have at entry.
 
 ## Backtest Results
 - **Win Rate:** TBD
