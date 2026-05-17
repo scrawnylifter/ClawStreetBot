@@ -101,23 +101,27 @@ ClawStreetBot/
 │   # docker-socket-proxy (wollomatic/socket-proxy) is pulled directly,
 │   # configured inline in docker-compose.yml — no Dockerfile needed.
 ├── n8n/
-│   └── workflows/              # Source-of-truth JSON for n8n workflows
+│   └── workflows/              # Source-of-truth JSON — 22 active workflows
 │       ├── watchlist_sync.json
 │       ├── backfill_pending.json
-│       ├── alpaca_ohlcv_daily.json      # Active — Alpaca 1d bars
-│       ├── alpaca_ohlcv_intraday.json   # Active — Alpaca 15m + 5m bars
-│       ├── alpaca_options_daily.json     # Active — Alpaca options + greeks + bid/ask
-│       ├── ohlcv_daily.json             # DEACTIVATED (replaced by alpaca_ohlcv_daily)
-│       ├── ohlcv_intraday.json          # DEACTIVATED (replaced by alpaca_ohlcv_intraday)
-│       ├── options_daily.json           # DEACTIVATED (replaced by alpaca_options_daily)
+│       ├── alpaca_ohlcv_daily.json       # 1d Alpaca bars
+│       ├── alpaca_ohlcv_intraday.json    # 15m + 5m Alpaca bars
+│       ├── alpaca_options_daily.json     # Alpaca options + greeks + bid/ask
 │       ├── derived_daily.json
-│       ├── fundamentals_daily.json
+│       ├── fundamentals_daily.json       # Polygon quarterly fundamentals (last Polygon-backed cron)
 │       ├── rss_news_scanner.json
 │       ├── signals_daily.json
 │       ├── intraday_signal_5m.json
 │       ├── ema_crossover_detector.json
 │       ├── ema_crossover_15m.json        # EMA crossover on 15m + realtime snapshot
 │       ├── setup_scanner.json            # PRIMARY — 8-gate BUY signal scanner (every 15min market hours)
+│       ├── liquidity_sweep.json          # 5m + daily liquidity sweep scanner
+│       ├── alert_dispatch.json           # alert_telegram.py every 1min market hours
+│       ├── execute_trade.json            # Alpaca paper submit (approved → executing)
+│       ├── reconcile_orders.json         # BUY fill → trading.positions
+│       ├── reconcile_exits.json          # SELL fill → closed + realized_pnl + status='exited'
+│       ├── exit_monitor.json             # TP/SL/time-stop decision tree
+│       ├── equity_snapshot_daily.json    # Daily equity snapshot for drawdown denominator
 │       ├── trend_daily.json
 │       └── regime_weekly.json
 ├── scripts/                    # Python scripts
@@ -246,6 +250,8 @@ docker exec -it clawstreet-redis redis-cli -a <password>
 
 The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`. All cron schedules use **America/Los_Angeles (PDT)** timezone.
 
+22 active workflows; the old Polygon ingestion JSONs (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been deleted from the repo — replaced by their Alpaca equivalents.
+
 | Workflow | Schedule (PDT) | Action |
 |---------------------|-----------------------------|--------------------------------------------------------------|
 | `watchlist_sync` | every 5 min | `setup_watchlist.py` (no-op when YAML unchanged) |
@@ -253,17 +259,21 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `alpaca_ohlcv_daily` | Mon–Fri 15:00 | 1d OHLCV bars (trade_count, VWAP) |
 | `alpaca_ohlcv_intraday` | Mon–Fri hourly :05 (7–13) | 15m + 5m OHLCV bars (trade_count, VWAP) |
 | `alpaca_options_daily` | Mon–Fri 14:55 | Options chains + greeks + bid/ask snapshots |
-| ~~ohlcv_daily~~ | ~~Mon–Fri 15:00~~ | ~~DEACTIVATED — replaced by alpaca_ohlcv_daily~~ |
-| ~~ohlcv_intraday~~ | ~~Mon–Fri hourly :05~~ | ~~DEACTIVATED — replaced by alpaca_ohlcv_intraday~~ |
-| ~~options_daily~~ | ~~Mon–Fri 14:55~~ | ~~DEACTIVATED — replaced by alpaca_options_daily~~ |
 | `derived_daily` | Mon–Fri 15:30 | RV → IV-rank → GEX → tech → greeks → outliers chain |
 | `fundamentals_daily` | Mon–Fri 16:00 | Polygon quarterly financials |
 | `rss_news_scanner` | Mon–Fri every 30m 6–13 | RSS + Reddit ingestion |
 | `signals_daily` | Mon–Fri 16:30 | Composite signals + daily backtests |
 | `intraday_signal_5m` | Mon–Fri every 5min 6–12 | 5-min intraday tech re-score + threshold alerts |
-| `ema_crossover_detector` | Mon–Fri 7:00 | Daily EMA 9/21 crossover detection → Telegram alert (supplementary) |
+| `ema_crossover_detector` | Mon–Fri 7:00 | Daily EMA 9/21 crossover detection → DB row (supplementary) |
 | `ema_crossover_15m` | Mon–Fri every 15min 6:30–13 | 15m EMA crossover + real-time Alpaca snapshot (supplementary) |
 | **`setup_scanner`** | **Mon–Fri every 15min 6–12** | **★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium, DTE, R:R)** |
+| `liquidity_sweep` | Mon–Fri every 5min 6–12 | 5m + daily liquidity sweep scanner (close-beyond confirmation) |
+| **`alert_dispatch`** | **Mon–Fri every 1min 6–13** | **`alert_telegram.py` — dispatches unsent `signal_alerts` rows with the 4-button approval keyboard** |
+| `execute_trade` | Mon–Fri every 1min 6–13 | Approved → Alpaca paper submit (`status='executing'`) |
+| `reconcile_orders` | Mon–Fri every 1min 6–14 | BUY fill state → `trading.positions`, `status='filled'` |
+| `reconcile_exits` | Mon–Fri every 1min 6–14 | SELL / TP1-partial fills → close position + record P&L + `status='exited'` |
+| `exit_monitor` | Mon–Fri every 5min 6–13 | TP/SL/time-stop decision tree; submits closes with `client_order_id` |
+| `equity_snapshot_daily` | Mon–Fri 14:30 | Daily equity snapshot for drawdown halt denominator |
 | `trend_daily` | Mon–Fri 11:00 | Multi-timeframe trend detection + status |
 | `regime_weekly` | Sat 8:00 | Classify regime + optimize weights + compare |
 

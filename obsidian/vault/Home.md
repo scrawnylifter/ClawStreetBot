@@ -42,7 +42,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 18 workflows (15 active, 3 deactivated), Docker socket isolation
+- [[n8n Scheduler]] — 22 active workflows, Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -66,7 +66,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [x] **PDT rules documented** — 3 day-trade limit, emergency-only 3rd, NEVER 4th
 - [x] **IV rank / realized vol / GEX-DEX computed** — `market.iv_rank` (1,576), `market.realized_vol` (3,465), `market.gex_dex` (9,350) + overview (15)
 - [x] **Watchlist lifecycle** — `config/watchlist.yml` source-of-truth; add / soft-deactivate / re-add via `market.assets.active` + `backfill_status`
-- [x] **n8n scheduler** — 18 workflows (15 active, 3 deactivated) driving all ingestion, compute, and signal generation
+- [x] **n8n scheduler** — 22 active workflows driving ingestion, compute, signal generation, alert dispatch, and execution; old Polygon JSONs deleted from repo
 - [x] **Docker socket isolation** — n8n no longer mounts `/var/run/docker.sock`; it talks to a `wollomatic/socket-proxy` sidecar that whitelists only worker exec
 - [x] **Greeks filtering engine** — IV regime + delta/theta-budget gating per contract
 - [x] **Technical analysis engine** — EMA/RSI/MACD/ATR/VWAP/Bollinger

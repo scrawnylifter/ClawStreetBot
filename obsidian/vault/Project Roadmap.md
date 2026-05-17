@@ -102,4 +102,4 @@ tags: [roadmap, mOC]
 - [[Backtesting Architecture]] — Data pipeline, Postgres schema, backtest engine design
 - [[Watchlist]] — Current tracked assets
 - [[Database Architecture]] — Storage design
-- [[n8n Scheduler]] — 17 workflows (14 active, 3 deactivated) driving all pipelines
+- [[n8n Scheduler]] — 22 active workflows driving ingestion, compute, signal detection, alert dispatch, execution, reconciliation, and exit monitoring

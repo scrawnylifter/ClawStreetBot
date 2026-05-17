@@ -14,13 +14,15 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 - **Credentials:** See `.env.n8n` (gitignored)
 - **API:** REST API at `<n8n-url>/api/v1/` with `X-N8N-API-KEY` header
 
-## Workflows (18 total, 15 active, 3 deactivated)
+## Workflows (22 active)
+
+The decommissioned Polygon ingestion workflows (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been deleted from the repo — replaced by their Alpaca equivalents listed below.
 
 ### Core Sync
 | Workflow | Schedule (PDT) | Script | Purpose |
 |----------|----------------|--------|---------|
 | `watchlist_sync` | Every 5 min | `setup_watchlist.py` | Sync `config/watchlist.yml` → Alpaca + Postgres |
-| `backfill_pending` | Every 5 min | `backfill_symbol.py` | Pick up symbols with `backfill_status='pending'` and run full ingestion |
+| `backfill_pending` | Every 5 min | `backfill_runner.py` | Pick up symbols with `backfill_status='pending'` and run full ingestion |
 
 ### Alpaca Data Ingestion (Primary)
 | Workflow | Schedule (PDT) | Script | Purpose |
@@ -33,13 +35,6 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 | Workflow | Schedule (PDT) | Script | Purpose |
 |----------|----------------|--------|---------|
 | `fundamentals_daily` | Mon–Fri 16:00 | `ingest_polygon_fundamentals.py` | Quarterly financials (revenue, EPS, market cap) |
-
-### ⛔ Deactivated Polygon Workflows (Replaced by Alpaca)
-| Workflow | Former Schedule | Replacement |
-|----------|---------------|-------------|
-| `ohlcv_daily` | Mon–Fri 15:00 | `alpaca_ohlcv_daily` |
-| `ohlcv_intraday` | Mon–Fri hourly :05 | `alpaca_ohlcv_intraday` |
-| `options_daily` | Mon–Fri 14:55 | `alpaca_options_daily` |
 
 ### Intraday Signal Detection
 | Workflow | Schedule (PDT) | Script | Purpose |
@@ -61,6 +56,16 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 | `ema_crossover_15m` | Mon–Fri every 15 min 6:30–13 | `detect_ema_crossover_15m.py` | 15m EMA crossover + real-time Alpaca snapshot (supplementary) |
 | **`setup_scanner`** | **Mon–Fri every 15 min 6–12** | **`scan_setups.py`** | **★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R). Silence = no signal.** |
 | `signals_daily` | Mon–Fri 16:30 | `generate_signals.py` → `backtest.py` | Composite signal scoring + daily backtest |
+
+### Alert Dispatch + Execution + Exits (Phase 5B — shipped)
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `alert_dispatch` | Mon–Fri every 1min 6–13 | `alert_telegram.py --limit 20` | Reads `signal_alerts WHERE telegram_sent=FALSE`; sends with the 4-button keyboard |
+| `execute_trade` | Mon–Fri every 1min 6–13 | `execute_trade.py --confirm --limit 5` | Submits approved orders to Alpaca paper |
+| `reconcile_orders` | Mon–Fri every 1min 6–14 | `reconcile_orders.py` | Polls BUY fill state → `trading.positions`; FOR UPDATE SKIP LOCKED |
+| `reconcile_exits` | Mon–Fri every 1min 6–14 | `reconcile_exits.py` | Polls SELL/TP1-partial fills → close position + record P&L + `status='exited'` |
+| `exit_monitor` | Mon–Fri every 5min 6–13 | `exit_monitor.py --confirm --limit 20` | TP/SL/time-stop decision tree; submits closes with client_order_id |
+| `equity_snapshot_daily` | Mon–Fri 14:30 | `snapshot_equity.py` | Daily equity snapshot for drawdown halt denominator (H8) |
 
 ### Weekly
 | Workflow | Schedule (PDT) | Script | Purpose |

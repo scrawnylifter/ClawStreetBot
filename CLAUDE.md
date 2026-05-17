@@ -347,7 +347,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Alpaca options ingestion (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
 - [x] Real-time snapshot enrichment (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
 - [x] 15m EMA crossover detector (`detect_ema_crossover_15m.py`) — intraday signals with live option data
-- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
+- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon ingestion JSONs deleted from repo
 - [x] DB migrations — trade_count/vwap on ohlcv, bid/ask on greeks
 - [x] IV rank / realized vol / GEX-DEX computed
 - [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
@@ -356,7 +356,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (22 workflows; decommissioned Polygon JSONs removed in this branch)
+- [x] n8n scheduler — **22 active workflows** (ingestion, compute, signal detection, alert dispatch, execution, reconciliation, exit monitoring); decommissioned Polygon JSONs deleted
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
