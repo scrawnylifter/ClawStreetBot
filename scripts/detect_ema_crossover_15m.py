@@ -383,6 +383,21 @@ def save_signals(conn, signals: list[dict]) -> int:
 
     for s in signals:
         try:
+            # 4-hour cooldown: skip if same-direction alert fired within 4h.
+            # The UNIQUE constraint uses created_at (default NOW()) so it never
+            # collides in practice — this SELECT is the real dedup.
+            cur.execute("""
+                SELECT 1 FROM market.signal_alerts
+                WHERE symbol = %s AND strategy = %s
+                  AND direction = %s AND timeframe = %s
+                  AND created_at > NOW() - INTERVAL '4 hours'
+                LIMIT 1
+            """, (s["symbol"], s["strategy"], s["direction"], s["timeframe"]))
+            if cur.fetchone():
+                log.info("Skipped (4h cooldown): %s %s %s %s",
+                         s["symbol"], s["strategy"], s["direction"], s["timeframe"])
+                continue
+
             cur.execute("""
                 INSERT INTO market.signal_alerts (
                     symbol, strategy, direction, status, regime,

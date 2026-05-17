@@ -73,22 +73,28 @@ ClawStreetBot/
 ├── .venv/                      # Python venv (gitignored)
 ├── config/
 │   └── watchlist.yml           # YAML source-of-truth for tracked symbols
-├── db/init/                    # Postgres init scripts
-│   ├── 01_init_databases.sql
-│   ├── 02_create_tables.sql
-│   ├── 03_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
-│   ├── 04_rv_gex_tables.sql    # Realized volatility, GEX/DEX tables
-│   ├── 05_watchlist_lifecycle.sql # active/added_at/deactivated_at/backfill_status
-│   ├── 06_derived_analytics.sql   # Technical indicators, greeks filter, IV outliers
-│   ├── 07_signals_scoring.sql     # Signal scoring columns + unique constraint
-│   ├── 08_backtest.sql           # Backtest engine tables (runs, trades, metrics)
-│   ├── 09_regime.sql             # Regime classification + weights + factor analysis
-│   ├── 10_trend.sql              # Trend status table (micro/intermediate/primary)
+├── db/init/                    # Postgres init scripts (lex order = run order)
+│   ├── 001_init_databases.sql
+│   ├── 002_create_tables.sql
+│   ├── 003_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
+│   ├── 004_rv_gex_tables.sql    # Realized volatility, GEX/DEX tables
+│   ├── 005_watchlist_lifecycle.sql # active/added_at/deactivated_at/backfill_status
+│   ├── 006_derived_analytics.sql   # Technical indicators, greeks filter, IV outliers
+│   ├── 007_signals_scoring.sql     # Signal scoring columns + unique constraint
+│   ├── 008_backtest.sql           # Backtest engine tables (runs, trades, metrics)
+│   ├── 009_regime.sql             # Regime classification + weights + factor analysis
+│   ├── 010_trend.sql              # Trend status table (micro/intermediate/primary)
 │   ├── 015_signal_alerts.sql     # Signal alerts (EMA, ORB, Dip trade plans)
 │   ├── 016_signal_alerts_15m.sql # 15m intraday signal alerts
 │   ├── 017_ohlcv_alpaca_columns.sql  # trade_count, vwap columns for Alpaca bars
 │   ├── 018_alpaca_options_columns.sql # bid/ask columns for Alpaca options snapshots
-│   └── 019_backtest_liquidity.sql    # Liquidity sweep backtest tables
+│   ├── 019_backtest_liquidity.sql    # Liquidity sweep backtest tables
+│   ├── 020_alert_lifecycle.sql       # Alert approval lifecycle (status enum)
+│   ├── 021_position_exit_columns.sql # Position exit tracking (sell_order_id, tp1_hit_at)
+│   ├── 022_composite_score.sql       # composite_score column on signal_alerts
+│   ├── 023_risk_mode.sql             # risk_mode column on signal_alerts
+│   ├── 024_position_tp1_partial.sql  # TP1 50% partial close columns
+│   └── 025_equity_snapshots.sql      # Daily equity snapshots (drawdown denominator)
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes

@@ -52,10 +52,6 @@ from fetch_alpaca_snapshot import (  # noqa: E402
     get_underlying_price,
     select_best_option,
 )
-from alert_telegram import (  # noqa: E402
-    get_telegram_config,
-    send_telegram_message,
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -458,9 +454,26 @@ def evaluate_symbol(
 # ---------------------------------------------------------------------------
 
 def save_signal(conn, sig: dict) -> int | None:
-    """Insert into market.signal_alerts; returns row id, or None on duplicate."""
+    """Insert into market.signal_alerts; returns row id, or None on duplicate.
+
+    Skips insert if an alert for the same (symbol, strategy, direction, timeframe)
+    fired within the last 4 hours — the table's UNIQUE constraint on
+    created_at never collides because the column defaults to NOW().
+    """
     cur = conn.cursor()
     try:
+        cur.execute("""
+            SELECT 1 FROM market.signal_alerts
+            WHERE symbol = %s AND strategy = %s
+              AND direction = %s AND timeframe = %s
+              AND created_at > NOW() - INTERVAL '4 hours'
+            LIMIT 1
+        """, (sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"]))
+        if cur.fetchone():
+            log.info("%s: cooldown active (%s %s %s alerted within 4h), skipping",
+                     sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"])
+            return None
+
         cur.execute("""
             INSERT INTO market.signal_alerts (
                 symbol, strategy, direction, status, regime, timeframe,
@@ -602,37 +615,15 @@ def main() -> int:
         conn.close()
         return 0
 
-    # Real run: write to DB, then Telegram.
-    tg_config = get_telegram_config()
-    tg_token = tg_config.get("TELEGRAM_BOT_TOKEN")
-    tg_chat_id = tg_config.get("TELEGRAM_CHAT_ID")
-    if not tg_token or not tg_chat_id:
-        log.error("Missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — alerts not sent")
-        conn.close()
-        return 1
-
-    cur = conn.cursor()
+    # Real run: write to DB only. alert_telegram.py is the sole dispatcher
+    # — it reads telegram_sent=FALSE rows and sends with the 4-button keyboard.
     for sig in passed:
         sig_id = save_signal(conn, sig)
         if sig_id is None:
-            log.info("%s: duplicate signal for current minute, skipping send", sig["symbol"])
+            log.info("%s: duplicate / cooldown active, skipping", sig["symbol"])
             continue
-        text = format_buy_alert(sig)
-        result = send_telegram_message(tg_token, tg_chat_id, text,
-                                       allowed_chat_id=tg_chat_id)
-        if result and result.get("ok"):
-            msg_id = result["result"]["message_id"]
-            cur.execute(
-                "UPDATE market.signal_alerts "
-                "SET telegram_sent = TRUE, telegram_msg_id = %s WHERE id = %s",
-                (msg_id, sig_id),
-            )
-            conn.commit()
-            log.info("Sent %s alert for %s (msg_id=%s)",
-                     sig["direction"], sig["symbol"], msg_id)
-        else:
-            log.error("Telegram send failed for %s", sig["symbol"])
-    cur.close()
+        log.info("Saved %s setup for %s (id=%s) — awaiting alert_telegram dispatch",
+                 sig["direction"], sig["symbol"], sig_id)
     conn.close()
     return 0
 

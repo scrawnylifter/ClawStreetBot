@@ -177,8 +177,25 @@ def get_alpaca_equity() -> Decimal:
 # Mode + sizing
 # ---------------------------------------------------------------------------
 
-def infer_trade_mode(strategy: str | None, timeframe: str | None) -> str:
-    """Map (strategy, timeframe) to one of: day / swing / long_term."""
+def infer_trade_mode(
+    strategy: str | None,
+    timeframe: str | None,
+    risk_mode: str | None = None,
+) -> str:
+    """Map (strategy, timeframe, risk_mode) to one of: day / swing / long_term.
+
+    The user-selected risk_mode overrides strategy/timeframe inference when it
+    expresses explicit intent:
+      - aggressive   → day   (intraday scalp; flatten before close)
+      - conservative → swing (slower hold, lower risk)
+      - standard / None → fall through to strategy/timeframe inference
+    """
+    rm = (risk_mode or "").lower()
+    if rm == "aggressive":
+        return "day"
+    if rm == "conservative":
+        return "swing"
+
     s = (strategy or "").lower()
     t = (timeframe or "").lower()
 
@@ -278,58 +295,125 @@ def size_stock_position(
 # PDT counter & drawdown halts
 # ---------------------------------------------------------------------------
 
-def count_day_trades(conn, window_days: int = PDT_WINDOW_DAYS) -> int:
-    """Count day trades (same-day open+close) in the last N business days.
+def count_day_trades(
+    conn,
+    window_days: int = PDT_WINDOW_DAYS,
+    projected_mode: str = "swing",
+    exclude_signal_id: int | None = None,
+) -> int:
+    """Count realized + projected day trades in the rolling N-business-day window.
 
-    A day trade is defined as: a position that opened AND closed on the same
-    calendar date (US market hours). Swing positions held overnight don't count.
+    FINRA counts a day trade the moment the closing leg executes; this function
+    projects forward conservatively so we never trigger the 4th-DT ban (Law 5).
 
-    This queries trading.positions for closed positions where the open and close
-    happened on the same trading day, within the rolling business-day window.
+    Components of the returned count:
+      1. Realized — closed positions that opened AND closed on the same calendar
+         day, within the last (window_days + 4) days (+4 covers weekend gaps).
+      2. Open intraday today — positions opened today (not yet closed) whose
+         originating signal had an intraday timeframe (5m/15m). These can still
+         become day trades if flatted before close.
+      3. Pending intraday approvals — signal_alerts with timeframe 5m/15m that
+         are 'approved' or 'executing' and were created today.
+      4. The pending trade itself — +1 if projected_mode == 'day'.
+
+    exclude_signal_id: when called from preflight() for a specific signal, that
+    same row is already in pending_intraday_today (status='approved', timeframe
+    5m/15m, created today). Excluding it prevents double-counting against the
+    +1 projection below.
     """
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT COUNT(*) AS day_trade_count
-            FROM trading.positions
-            WHERE status IN ('closed', 'filled')
-              AND opened_at IS NOT NULL
-              AND closed_at IS NOT NULL
-              AND opened_at >= NOW() - interval '%s days'
-              AND DATE(opened_at AT TIME ZONE 'America/Los_Angeles')
-                  = DATE(closed_at AT TIME ZONE 'America/Los_Angeles')
-        """, (window_days + 4,))  # +4 to cover weekends in the window
+        cur.execute(
+            """
+            WITH realized AS (
+                SELECT COUNT(*) AS n
+                FROM trading.positions
+                WHERE status IN ('closed', 'filled')
+                  AND opened_at IS NOT NULL
+                  AND closed_at IS NOT NULL
+                  AND opened_at >= NOW() - INTERVAL '1 day' * %s
+                  AND DATE(opened_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(closed_at AT TIME ZONE 'America/Los_Angeles')
+            ),
+            open_intraday_today AS (
+                SELECT COUNT(*) AS n
+                FROM trading.positions p
+                LEFT JOIN market.signal_alerts sa ON sa.position_id = p.id
+                WHERE p.closed_at IS NULL
+                  AND p.opened_at IS NOT NULL
+                  AND DATE(p.opened_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(NOW() AT TIME ZONE 'America/Los_Angeles')
+                  AND sa.timeframe IN ('5m', '15m')
+            ),
+            pending_intraday_today AS (
+                SELECT COUNT(*) AS n
+                FROM market.signal_alerts
+                WHERE status IN ('approved', 'executing')
+                  AND timeframe IN ('5m', '15m')
+                  AND DATE(created_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(NOW() AT TIME ZONE 'America/Los_Angeles')
+                  AND (%s::int IS NULL OR id <> %s::int)
+            )
+            SELECT (SELECT n FROM realized)
+                 + (SELECT n FROM open_intraday_today)
+                 + (SELECT n FROM pending_intraday_today)
+            """,
+            (window_days + 4, exclude_signal_id, exclude_signal_id),
+        )
         row = cur.fetchone()
-        return row[0] if row else 0
+        base = row[0] if row else 0
+    return base + (1 if projected_mode == "day" else 0)
 
 
-def calc_drawdown(conn, equity: Decimal) -> dict[str, Decimal]:
-    """Calculate realized P&L drawdown over 1 day, 1 week, 1 month.
+def calc_drawdown(conn, current_equity: Decimal) -> dict[str, Decimal | None]:
+    """Drawdown over rolling daily / weekly / monthly windows.
 
-    Returns {daily_pnl, weekly_pnl, monthly_pnl} as fractions of equity.
-    Positive = profit, Negative = loss/drawdown.
+    Returns fractions: positive = profit, negative = loss. Computed as
+        (current_equity - start_equity) / start_equity
+    where start_equity is read from market.equity_snapshots at the start of
+    the relevant period:
+        daily   → most recent snapshot before today
+        weekly  → most recent snapshot before this week (Mon-start)
+        monthly → most recent snapshot before this month (1st)
+
+    current_equity is the live Alpaca paper account equity, which already
+    reflects unrealized P&L on open positions — so both realized and
+    unrealized movement over the window are captured without separately
+    summing positions.
+
+    Returns None for any period with no snapshot yet. Preflight surfaces a
+    WARN on None rather than mistakenly clearing the halt.
     """
+    if current_equity is None or current_equity <= 0:
+        return {"daily": None, "weekly": None, "monthly": None}
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '1 day'
-                              THEN realized_pnl ELSE 0 END), 0) AS daily_pnl,
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '7 days'
-                              THEN realized_pnl ELSE 0 END), 0) AS weekly_pnl,
-              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '30 days'
-                              THEN realized_pnl ELSE 0 END), 0) AS monthly_pnl
-            FROM trading.positions
-            WHERE status IN ('closed', 'filled')
-              AND closed_at IS NOT NULL
-              AND realized_pnl IS NOT NULL
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < CURRENT_DATE
+                ORDER BY snapshot_date DESC LIMIT 1) AS daily_start,
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < date_trunc('week', CURRENT_DATE)::date
+                ORDER BY snapshot_date DESC LIMIT 1) AS weekly_start,
+              (SELECT equity FROM market.equity_snapshots
+                WHERE snapshot_date < date_trunc('month', CURRENT_DATE)::date
+                ORDER BY snapshot_date DESC LIMIT 1) AS monthly_start
         """)
         row = cur.fetchone()
-        if not row or equity == 0:
-            return {"daily": Decimal("0"), "weekly": Decimal("0"), "monthly": Decimal("0")}
-        return {
-            "daily":   (Decimal(str(row[0])) / equity).quantize(Decimal("0.0001")),
-            "weekly":  (Decimal(str(row[1])) / equity).quantize(Decimal("0.0001")),
-            "monthly": (Decimal(str(row[2])) / equity).quantize(Decimal("0.0001")),
-        }
+
+    def delta(raw) -> Decimal | None:
+        if raw is None:
+            return None
+        start = Decimal(str(raw))
+        if start <= 0:
+            return None
+        return ((current_equity - start) / start).quantize(Decimal("0.0001"))
+
+    return {
+        "daily":   delta(row[0] if row else None),
+        "weekly":  delta(row[1] if row else None),
+        "monthly": delta(row[2] if row else None),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +433,8 @@ GLYPH = {
 }
 
 
-def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal | None = None) -> list[tuple[str, str]]:
+def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal | None = None) -> list[tuple[str, str]]:  # noqa: E501
+    sid = signal.get("id")
     """Return [(status, message)] entries describing each gate's verdict."""
     out: list[tuple[str, str]] = []
 
@@ -405,26 +490,45 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
     else:
         out.append((CHECK_WARN, "no option_symbol on signal — falling back to stock trade"))
 
-    # 5) PDT counter — count same-day trades in the last 5 business days
+    # 5) PDT counter — projected count of day trades in the rolling 5-business-day
+    # window. Includes the pending trade (+1 if day mode), open intraday positions
+    # opened today, and pending intraday approvals — see count_day_trades.
     if conn is not None and mode == "day":
-        dt_count = count_day_trades(conn)
-        if dt_count >= PDT_MAX_TOTAL:
+        dt_count = count_day_trades(conn, projected_mode=mode, exclude_signal_id=sid)
+        if dt_count >= PDT_MAX_TOTAL + 1:
+            # Projected count already includes +1 for this trade. Crossing
+            # PDT_MAX_TOTAL means submitting this would be the 4th DT.
             out.append((CHECK_FAIL,
-                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
-                        f"4th would trigger PDT ban (Law 5)"))
-        elif dt_count >= PDT_MAX_NORMAL:
+                        f"PDT: projected {dt_count} day trades in last "
+                        f"{PDT_WINDOW_DAYS} business days — submitting would be "
+                        f"the 4th DT (PDT ban, Law 5)"))
+        elif dt_count >= PDT_MAX_NORMAL + 1:
             out.append((CHECK_WARN,
-                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
-                        f"3rd = emergency only (exit or hedge), no new speculative entries"))
+                        f"PDT: projected {dt_count} day trades in last "
+                        f"{PDT_WINDOW_DAYS} business days — this would be the 3rd "
+                        f"DT (emergency only: exit or hedge, no new speculation)"))
         else:
             out.append((CHECK_PASS,
-                        f"PDT: {dt_count}/{PDT_MAX_TOTAL} day trades in last {PDT_WINDOW_DAYS} business days"))
+                        f"PDT: projected {dt_count}/{PDT_MAX_TOTAL} day trades in "
+                        f"last {PDT_WINDOW_DAYS} business days"))
     elif mode == "day":
         out.append((CHECK_WARN, "PDT: no DB connection — cannot count day trades"))
     else:
-        out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
+        # Swing/long_term don't trigger the PDT counter, but surface the projected
+        # count so the user can see if a same-day flatten would push them over.
+        if conn is not None:
+            dt_count = count_day_trades(conn, projected_mode=mode, exclude_signal_id=sid)
+            out.append((CHECK_PASS,
+                        f"PDT: {dt_count}/{PDT_MAX_TOTAL} projected day trades "
+                        f"(mode={mode}; this trade doesn't count unless flatted today)"))
+        else:
+            out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
 
-    # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly
+    # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly.
+    # Denominator is start-of-period equity from market.equity_snapshots
+    # (populated by scripts/snapshot_equity.py). current_equity is the live
+    # Alpaca account.equity which already includes unrealized P&L on open
+    # positions, so both realized and unrealized movement count.
     if conn is not None and equity is not None and equity > 0:
         dd = calc_drawdown(conn, equity)
         halted = False
@@ -434,6 +538,14 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
             ("monthly", "monthly", DRAWDOWN_MONTHLY_PCT),
         ]:
             pct = dd[key]
+            if pct is None:
+                # No snapshot for this horizon — halt is uncomputable. WARN
+                # so it surfaces in the dry-run / live logs; do NOT block.
+                out.append((CHECK_WARN,
+                            f"Drawdown {label}: no equity_snapshot at period "
+                            f"boundary — halt can't be computed (run "
+                            f"scripts/snapshot_equity.py daily)"))
+                continue
             if pct < -threshold:
                 out.append((CHECK_FAIL,
                             f"Drawdown halt: {label} P&L {pct*100:+.1f}% exceeds "
@@ -590,7 +702,7 @@ def render_plan(
     if stop:
         lines.append(f"  invalidation: underlying {'≤' if direction == 'bullish' else '≥'} {_fmt_money(stop)}  → flatten immediately")
     if mode == "day":
-        lines.append("  time stop: flatten before 12:55 PDT (day-trade rule)")
+        lines.append("  time stop: flatten before 12:45 PDT (day-trade rule)")
 
     return "\n".join(lines)
 
@@ -600,8 +712,9 @@ def render_plan(
 # ---------------------------------------------------------------------------
 
 def process_one(signal: dict, equity: Decimal, verbose: bool, conn=None) -> str:
-    mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
     risk_mode = signal.get("risk_mode") or "standard"
+    mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
+                            risk_mode=risk_mode)
 
     opt_mid = _to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
@@ -635,24 +748,26 @@ def main() -> int:
     conn = get_connection()
     try:
         rows = fetch_approved(conn, args.id, args.limit)
+        if not rows:
+            if args.id is not None:
+                print(f"No signal_alerts row with id={args.id}.")
+            else:
+                print("No approved signals waiting for execution.")
+            return 0
+
+        print(f"Found {len(rows)} signal(s) to plan.  Equity: ${equity:,.2f}\n")
+        for r in rows:
+            # Pass signal_id so count_day_trades excludes this row from
+            # pending_intraday_today (otherwise the same row would be counted
+            # there AND projected with +1 — double-counting toward PDT).
+            print(process_one(r, equity, args.verbose, conn=conn))
+            print()
+
+        print(f"DONE — {len(rows)} dry-run plan(s) printed. No orders submitted, "
+              f"no DB rows modified.")
+        return 0
     finally:
         conn.close()
-
-    if not rows:
-        if args.id is not None:
-            print(f"No signal_alerts row with id={args.id}.")
-        else:
-            print("No approved signals waiting for execution.")
-        return 0
-
-    print(f"Found {len(rows)} signal(s) to plan.  Equity: ${equity:,.2f}\n")
-    for r in rows:
-        print(process_one(r, equity, args.verbose, conn=conn))
-        print()
-
-    print(f"DONE — {len(rows)} dry-run plan(s) printed. No orders submitted, "
-          f"no DB rows modified.")
-    return 0
 
 
 if __name__ == "__main__":

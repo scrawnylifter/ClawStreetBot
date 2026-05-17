@@ -70,12 +70,19 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
     """Submit one order. Returns {'order_id', 'submitted_price', 'order_type', 'tif'}.
 
     Raises on submission failure — caller decides whether to record 'error'.
+
+    A deterministic client_order_id (`csb-entry-<signal_id>`) is attached so
+    that a process crash between Alpaca submit and DB commit doesn't lead
+    to a duplicate BUY on the next reconcile pass — Alpaca rejects the
+    second submission with a duplicate-client-order-id error.
     """
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
     qty = sizing["qty"]
     direction = signal["direction"]
+    client_order_id = f"csb-entry-{signal['id']}"
+
     # For options the side is always BUY (you buy a call for bullish, a put
     # for bearish — the option_symbol encodes which). For stocks, bullish→BUY,
     # bearish→SELL (short).
@@ -95,6 +102,7 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
             side=side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(ask),
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
@@ -111,6 +119,7 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
@@ -220,17 +229,20 @@ def hard_fail_reason(signal: dict, sizing: dict, checks: list[tuple[str, str]]) 
 def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> str:
     """With --confirm: actually submit. Returns a human-readable status line."""
     sid = signal["id"]
-    mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
+    risk_mode = signal.get("risk_mode") or "standard"
+    mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
+                                risk_mode=risk_mode)
 
     opt_mid = pa._to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
-        sizing = pa.size_option_position(equity, mode, opt_mid)
+        sizing = pa.size_option_position(equity, mode, opt_mid, risk_mode=risk_mode)
     else:
         entry = pa._to_decimal(signal.get("trigger_price"))
         stop  = pa._to_decimal(signal.get("stop_price"))
         if entry is None or stop is None:
             return f"#{sid} SKIP — no trigger_price/stop_price for stock fallback"
-        sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"])
+        sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"],
+                                        risk_mode=risk_mode)
 
     checks = pa.preflight(signal, sizing, mode, conn=conn, equity=equity)
     blocker = hard_fail_reason(signal, sizing, checks)

@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import sys
-import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -369,9 +368,26 @@ def fetch_nearest_option(symbol: str, direction: str, budget: float = 2000.0) ->
 # ── DB persistence ──
 
 def save_signal(conn, sig: dict) -> int | None:
-    """Insert into market.signal_alerts. Returns row id or None on duplicate."""
+    """Insert into market.signal_alerts. Returns row id or None on duplicate.
+
+    Skips insert if an alert for the same (symbol, strategy, direction, timeframe)
+    fired within the last 4 hours — the table's UNIQUE constraint on
+    created_at never collides because the column defaults to NOW().
+    """
     cur = conn.cursor()
     try:
+        cur.execute("""
+            SELECT 1 FROM market.signal_alerts
+            WHERE symbol = %s AND strategy = %s
+              AND direction = %s AND timeframe = %s
+              AND created_at > NOW() - INTERVAL '4 hours'
+            LIMIT 1
+        """, (sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"]))
+        if cur.fetchone():
+            log.info("%s: cooldown active (%s %s %s alerted within 4h), skipping",
+                     sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"])
+            return None
+
         cur.execute("""
             INSERT INTO market.signal_alerts (
                 symbol, strategy, direction, status, timeframe,
@@ -414,93 +430,6 @@ def save_signal(conn, sig: dict) -> int | None:
         return None
     finally:
         cur.close()
-
-
-# ── Telegram ──
-
-def get_telegram_config():
-    env_path = Path("/app/.env.telegram")
-    if not env_path.exists():
-        env_path = Path("/app/config/.env.telegram")
-    if not env_path.exists():
-        env_path = PROJECT_ROOT / ".env.telegram"
-    config = {}
-    if not env_path.exists():
-        return config
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                config[k.strip()] = v.strip()
-    return config
-
-
-def send_telegram_message(token: str, chat_id: str, text: str, allowed_chat_id: str = "") -> dict | None:
-    if allowed_chat_id and str(chat_id) != str(allowed_chat_id):
-        log.warning("BLOCKED: attempt to send to unauthorized chat_id=%s", chat_id)
-        return None
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = json.dumps({
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }).encode("utf-8")
-    req = urllib.request.Request(url, data=data,
-                                headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8") if e.fp else ""
-        log.error("Telegram API error %d: %s", e.code, body[:200])
-        return None
-    except Exception as e:
-        log.error("Telegram send failed: %s", e)
-        return None
-
-
-# ── Alert formatting ──
-
-def format_liquidity_alert(sig: dict) -> str:
-    """Format a liquidity sweep signal as a Telegram HTML alert."""
-    direction = sig["_direction_raw"]
-    direction_emoji = "🟢" if direction == "long" else "🔴"
-    direction_word = "BUY" if direction == "long" else "SHORT"
-    sweep_kind = "Swing High" if sig["_sweep_kind"] == "high" else "Swing Low"
-    risk_dollars = sig["_risk_dollars"]
-    tp1_dollars = sig["_tp1_dollars"]
-    tp2_dollars = sig["_tp2_dollars"]
-
-    lines = [
-        f"{direction_emoji} <b>{direction_word} Signal: {sig['symbol']}</b>",
-        f"{'─' * 30}",
-        f"Strategy: Liquidity Sweep | Timeframe: 5m",
-        f"Stock: ${sig['trigger_price']:.2f} | ATR: ${sig['_atr']:.2f}",
-        f"Sweep: {sweep_kind} ${sig['_sweep_level']:.2f} breached + close-beyond ✅",
-        "",
-        f"Risk ${risk_dollars:.2f} → TP1 ${tp1_dollars:.2f} (3:1) | TP2 ${tp2_dollars:.2f} (5:1)",
-        f"Stop: ${sig['stop_price']:.2f} | TP1: ${sig['tp1_price']:.2f} | TP2: ${sig['tp2_price']:.2f}",
-    ]
-
-    # Add option if available
-    if sig.get("option_symbol"):
-        contract_letter = "C" if direction == "long" else "P"
-        lines.append("")
-        lines.append(
-            f"Contract: {sig['symbol']} {sig['option_expiry']} "
-            f"${sig['option_strike']:.0f}{contract_letter} @ ${sig['option_mid']:.2f}"
-        )
-        lines.append(
-            f"Delta {sig['option_delta']:.2f} | Theta {sig['option_theta']:.2f} | DTE {sig.get('option_dte', '?')}"
-        )
-
-    lines.append("")
-    lines.append("⚡ Close-beyond confirmation passed")
-    lines.append("Backtest: PF 1.56 | WR 32.4% | avg +0.16R (259 trades)")
-
-    return "\n".join(lines)
 
 
 # ── Main ──
@@ -567,54 +496,31 @@ def main() -> int:
             else:
                 log.info("%s: no suitable option found within budget", sig["symbol"])
 
-    # Format alerts
-    for sig in all_signals:
-        print("=" * 60)
-        print(format_liquidity_alert(sig))
-        print("=" * 60)
-
+    # Dry-run: print a one-line summary per signal and exit.
     if args.dry_run:
-        log.info("Dry run — no DB writes or Telegram sends.")
+        for sig in all_signals:
+            opt_str = ""
+            if sig.get("option_symbol"):
+                opt_str = (f" | {sig['option_symbol']} @ ${sig['option_mid']:.2f}"
+                           f" Δ{sig['option_delta']:.2f}")
+            print(f"{sig['symbol']:6s} {sig['direction']:8s} "
+                  f"@ ${sig['trigger_price']:.2f}  "
+                  f"stop ${sig['stop_price']:.2f}  "
+                  f"TP1 ${sig['tp1_price']:.2f}  TP2 ${sig['tp2_price']:.2f}  "
+                  f"R:R {sig['risk_reward']}:1{opt_str}")
+        log.info("Dry run — no DB writes.")
         conn.close()
         return 0
 
-    # Save to DB + send Telegram
-    tg_config = get_telegram_config()
-    tg_token = tg_config.get("TELEGRAM_BOT_TOKEN")
-    tg_chat_id = tg_config.get("TELEGRAM_CHAT_ID")
-
-    if not tg_token or not tg_chat_id:
-        log.error("Missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — alerts saved to DB but not sent")
-        # Still save to DB
-        for sig in all_signals:
-            save_signal(conn, sig)
-        conn.close()
-        return 1
-
-    cur = conn.cursor()
+    # Real run: write to DB only. alert_telegram.py is the sole dispatcher
+    # — it reads telegram_sent=FALSE rows and sends with the 4-button keyboard.
     for sig in all_signals:
         sig_id = save_signal(conn, sig)
         if sig_id is None:
-            log.info("%s: duplicate signal, skipping send", sig["symbol"])
+            log.info("%s: duplicate / cooldown active, skipping", sig["symbol"])
             continue
-
-        text = format_liquidity_alert(sig)
-        result = send_telegram_message(tg_token, tg_chat_id, text,
-                                       allowed_chat_id=tg_chat_id)
-        if result and result.get("ok"):
-            msg_id = result["result"]["message_id"]
-            cur.execute(
-                "UPDATE market.signal_alerts "
-                "SET telegram_sent = TRUE, telegram_msg_id = %s WHERE id = %s",
-                (msg_id, sig_id),
-            )
-            conn.commit()
-            log.info("Sent %s sweep alert for %s (msg_id=%s)",
-                     sig["direction"], sig["symbol"], msg_id)
-        else:
-            log.error("Telegram send failed for %s", sig["symbol"])
-
-    cur.close()
+        log.info("Saved %s sweep for %s (id=%s) — awaiting alert_telegram dispatch",
+                 sig["direction"], sig["symbol"], sig_id)
     conn.close()
     return 0
 

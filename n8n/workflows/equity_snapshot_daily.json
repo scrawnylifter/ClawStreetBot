@@ -1,5 +1,5 @@
 {
-  "name": "ohlcv_daily",
+  "name": "equity_snapshot_daily",
   "nodes": [
     {
       "parameters": {
@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 15 * * 1-5"
+              "expression": "30 14 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 15:00 PDT",
+      "name": "Weekdays 14:30 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -23,10 +23,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/ingest_polygon_ohlcv.py --timeframe 1d"
+        "command": "docker exec clawstreet-worker python /app/scripts/snapshot_equity.py"
       },
       "id": "run",
-      "name": "ingest 1d bars",
+      "name": "snapshot equity",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -36,11 +36,11 @@
     }
   ],
   "connections": {
-    "Weekdays 15:00 PDT": {
+    "Weekdays 14:30 PDT": {
       "main": [
         [
           {
-            "node": "ingest 1d bars",
+            "node": "snapshot equity",
             "type": "main",
             "index": 0
           }
@@ -51,8 +51,9 @@
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "executionTimeout": 1800,
+    "executionTimeout": 120,
     "timezone": "America/Los_Angeles"
   },
-  "active": false
+  "active": true,
+  "id": "e7pB7VWqN7RXUlx8"
 }

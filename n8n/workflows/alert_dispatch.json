@@ -1,5 +1,5 @@
 {
-  "name": "options_daily",
+  "name": "alert_dispatch",
   "nodes": [
     {
       "parameters": {
@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "55 14 * * 1-5"
+              "expression": "* 6-13 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 14:55 PDT",
+      "name": "Every minute market hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -23,10 +23,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/ingest_polygon_options.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --limit 20"
       },
-      "id": "run",
-      "name": "ingest options + greeks",
+      "id": "dispatch",
+      "name": "dispatch unsent alerts",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -36,11 +36,11 @@
     }
   ],
   "connections": {
-    "Weekdays 14:55 PDT": {
+    "Every minute market hours": {
       "main": [
         [
           {
-            "node": "ingest options + greeks",
+            "node": "dispatch unsent alerts",
             "type": "main",
             "index": 0
           }
@@ -51,8 +51,9 @@
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "executionTimeout": 1800,
+    "executionTimeout": 60,
     "timezone": "America/Los_Angeles"
   },
-  "active": false
+  "active": true,
+  "id": "MUAgQqoGsMa7zQUH"
 }

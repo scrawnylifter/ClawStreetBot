@@ -262,7 +262,11 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
         gex_row = cur.fetchone()
         net_gex = float(gex_row[0]) if gex_row and gex_row[0] else None
 
-        # Best option contract (DTE≥30, delta 0.50-0.70, calls for bullish / puts for bearish)
+        # Best option contract (DTE≥30, |delta| 0.50-0.70, calls for bullish /
+        # puts for bearish). Alpaca returns negative delta for puts so we
+        # filter on ABS(delta) plus a sign check that matches the contract type
+        # (mirror of fetch_alpaca_snapshot.select_best_option). Without this
+        # sign check, bearish signals returned no option contract.
         contract_type = 'C' if direction == 'bullish' else 'P'
         cur.execute("""
             SELECT o.occ_symbol, o.strike, o.expiration,
@@ -273,8 +277,10 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
               AND o.expiration >= %s + INTERVAL '30 days'
               AND o.contract_type = %s
               AND g.delta IS NOT NULL
-              AND g.delta BETWEEN 0.50 AND 0.70
-            ORDER BY g.theta ASC, ABS(g.delta - 0.60) ASC
+              AND ABS(g.delta) BETWEEN 0.50 AND 0.70
+              AND ((o.contract_type = 'C' AND g.delta > 0)
+                OR (o.contract_type = 'P' AND g.delta < 0))
+            ORDER BY g.theta ASC, ABS(ABS(g.delta) - 0.60) ASC
             LIMIT 1
         """, (cross_date, symbol, cross_date, contract_type))
         option_row = cur.fetchone()
@@ -284,6 +290,7 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
             "strategy": "ema_crossover",
             "direction": direction,
             "status": "new",
+            "timeframe": "1d",
             "regime": current_regime,
             "trigger_price": close_f,
             "ema_9": float(ema_9) if ema_9 else None,
@@ -346,9 +353,24 @@ def save_signals(conn, signals: list[dict]) -> int:
 
     for s in signals:
         try:
+            # 4-hour cooldown: skip if same-direction alert fired within 4h.
+            # The UNIQUE constraint uses created_at (default NOW()) so it never
+            # collides in practice — this SELECT is the real dedup.
+            cur.execute("""
+                SELECT 1 FROM market.signal_alerts
+                WHERE symbol = %s AND strategy = %s
+                  AND direction = %s AND timeframe = '1d'
+                  AND created_at > NOW() - INTERVAL '4 hours'
+                LIMIT 1
+            """, (s["symbol"], s["strategy"], s["direction"]))
+            if cur.fetchone():
+                log.info("Skipped (4h cooldown): %s %s %s",
+                         s["symbol"], s["strategy"], s["direction"])
+                continue
+
             cur.execute("""
                 INSERT INTO market.signal_alerts (
-                    symbol, strategy, direction, status, regime,
+                    symbol, strategy, direction, status, timeframe, regime,
                     trigger_price, ema_9, ema_21, adx, rsi, atr_14, volume_ratio,
                     stop_price, tp1_price, tp2_price, risk_reward,
                     micro_trend, intermediate_trend, primary_trend,
@@ -358,7 +380,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     option_delta, option_theta,
                     iv_rank, iv_rv_spread, net_gex
                 ) VALUES (
-                    %(symbol)s, %(strategy)s, %(direction)s, %(status)s, %(regime)s,
+                    %(symbol)s, %(strategy)s, %(direction)s, %(status)s,
+                    %(timeframe)s, %(regime)s,
                     %(trigger_price)s, %(ema_9)s, %(ema_21)s, %(adx)s, %(rsi)s,
                     %(atr_14)s, %(volume_ratio)s,
                     %(stop_price)s, %(tp1_price)s, %(tp2_price)s, %(risk_reward)s,
@@ -369,7 +392,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     %(option_delta)s, %(option_theta)s,
                     %(iv_rank)s, %(iv_rv_spread)s, %(net_gex)s
                 )
-                ON CONFLICT (symbol, strategy, direction, created_at) DO NOTHING
+                ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
+                DO NOTHING
             """, s)
             if cur.rowcount > 0:
                 inserted += 1

@@ -10,11 +10,11 @@ Decision tree (first match wins; full close unless noted):
     1. underlying breached stop   → full close
     2. option premium ≤ 50% entry → full close (option positions only)
     3. underlying reached tp2     → full close
-    4. underlying reached tp1     → partial close (50%)  ◀ NOT YET WIRED
-                                      action is detected and the position is
-                                      flagged with tp1_hit_at, but the
-                                      actual partial sell is deferred to a
-                                      follow-up slice
+    4. underlying reached tp1     → partial close (50%)
+                                      submit a SELL for qty//2 and stamp
+                                      tp1_sell_order_id + tp1_hit_at;
+                                      reconcile_exits reduces positions.quantity
+                                      when the partial fills.
     5. day-trade time stop        → full close (mode=day, ≥ 12:55 PDT)
     6. option DTE ≤ 1             → full close (Law 5)
 
@@ -55,9 +55,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("exit_monitor")
 
-# Day-trade time stop: 12:55 PDT/PST (5 min before US equities close).
+# Day-trade time stop: 12:45 PDT/PST (15 min before US equities close).
+# 15-min buffer so the SELL doesn't have to fight the worst-liquidity
+# window of the session and gets at least two more 5-min cron ticks
+# (12:45, 12:50, 12:55) to retry if Alpaca rejects the first attempt.
 # zoneinfo handles DST correctly so this works year-round.
-TIME_STOP_LOCAL = time(12, 55)
+TIME_STOP_LOCAL = time(12, 45)
 EQUITIES_TZ = ZoneInfo("America/Los_Angeles")
 
 OPTION_PREMIUM_STOP_FRACTION = Decimal("0.50")  # close if mid ≤ 50% of entry
@@ -221,7 +224,7 @@ def decide_exit(
     if mode == "day":
         stop_utc = _today_time_stop_utc(now)
         if now >= stop_utc:
-            return ACTION_FULL_CLOSE, f"time_stop: {now.isoformat()} ≥ 12:55 PDT"
+            return ACTION_FULL_CLOSE, f"time_stop: {now.isoformat()} ≥ 12:45 PDT"
 
     # 6. Option expiry imminent.
     if is_option:
@@ -245,13 +248,16 @@ _POSITION_SELECT = """
            p.entry_price, p.quantity, p.stop_loss, p.take_profit,
            p.status AS pos_status, p.opened_at, p.tp1_hit_at,
            p.sell_order_id, p.exit_submitted_at, p.exit_reason,
+           p.tp1_sell_order_id, p.tp1_filled_at,
            s.id AS signal_id, s.symbol, s.strategy, s.direction,
            s.timeframe, s.trigger_price, s.stop_price, s.tp1_price,
            s.tp2_price, s.option_symbol, s.option_strike, s.option_expiry,
            s.option_delta, s.option_mid
       FROM trading.positions p
       LEFT JOIN market.signal_alerts s ON s.position_id = p.id
-     WHERE p.status = 'open' AND p.sell_order_id IS NULL
+     WHERE p.status = 'open'
+       AND p.sell_order_id IS NULL
+       AND p.tp1_sell_order_id IS NULL
 """
 
 
@@ -312,17 +318,28 @@ def stamp_full_close(
         )
 
 
-def stamp_tp1_hit(conn, position_id: int, reason: str) -> None:
-    """Record that TP1 fired (partial sell action is deferred to a future slice).
-    Caller owns the transaction."""
+def stamp_tp1_partial(
+    conn, position_id: int, sell_order_id: str, reason: str,
+) -> None:
+    """Record a TP1 50% partial SELL submission.
+
+    Sets tp1_hit_at (sticky — TP1 only fires once) and tp1_sell_order_id
+    (the partial close in flight). exit_monitor skips rows with a pending
+    partial; reconcile_exits polls Alpaca for the fill and, when filled,
+    reduces positions.quantity and clears tp1_sell_order_id.
+
+    Caller owns the transaction.
+    """
     now = datetime.now(timezone.utc)
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE trading.positions
-                  SET tp1_hit_at  = %s,
-                      exit_reason = COALESCE(exit_reason, %s)
+                  SET tp1_hit_at         = %s,
+                      tp1_sell_order_id  = %s,
+                      exit_submitted_at  = %s,
+                      exit_reason        = %s
                 WHERE id = %s""",
-            (now, reason, position_id),
+            (now, sell_order_id, now, reason, position_id),
         )
 
 
@@ -330,8 +347,15 @@ def stamp_tp1_hit(conn, position_id: int, reason: str) -> None:
 # Close-order submission
 # ---------------------------------------------------------------------------
 
-def submit_close(client, row: dict, qty: Decimal) -> dict:
-    """Submit a SELL (or BUY-to-cover) for `qty` of the position. Raises on failure."""
+def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
+    """Submit a SELL (or BUY-to-cover) for `qty` of the position. Raises on failure.
+
+    `reason` is the short exit reason (e.g. 'stop', 'tp1_partial', 'tp2',
+    'time_stop'). It's baked into a deterministic client_order_id so
+    a process crash between Alpaca submit and DB commit doesn't produce
+    a duplicate SELL on the next monitor pass — Alpaca rejects duplicate
+    client_order_ids while the original is still in-flight.
+    """
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
 
@@ -344,6 +368,11 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
         side = OrderSide.SELL
     else:
         side = OrderSide.BUY
+
+    # Deterministic id: one Alpaca order per (position, exit reason). After an
+    # Alpaca-side terminal status (rejected/canceled/etc) the same id can be
+    # reused — Alpaca enforces uniqueness only for currently-open orders.
+    client_order_id = f"csb-exit-{row['position_id']}-{reason}"
 
     if is_option:
         sym = row["option_symbol"]
@@ -365,6 +394,7 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
             side=side,
             time_in_force=TimeInForce.DAY,
             limit_price=float(limit_price),
+            client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
@@ -378,6 +408,7 @@ def submit_close(client, row: dict, qty: Decimal) -> dict:
     sym = row["symbol"]
     req = MarketOrderRequest(
         symbol=sym, qty=int(qty), side=side, time_in_force=TimeInForce.DAY,
+        client_order_id=client_order_id,
     )
     order = client.submit_order(req)
     return {
@@ -420,14 +451,47 @@ def process_one(
         return f"position #{pid} {sym} HOLD — {reason} [{quote_str}]"
 
     if action == ACTION_TP1_PARTIAL:
-        # Action is detected but the actual partial sell is deferred to a
-        # follow-up slice. Stamp tp1_hit_at so we don't re-detect it forever.
-        msg = f"position #{pid} {sym} TP1 detected — partial action deferred — {reason}"
+        # Close 50% of the remaining quantity. Integer floor — if there's only
+        # 1 contract/share left there's nothing meaningful to partial-close, so
+        # we just stamp tp1_hit_at and wait for TP2 / stop / time to flatten.
+        partial_qty = qty_remaining // Decimal("2") if qty_remaining >= 2 else Decimal("0")
+        if partial_qty <= 0:
+            msg = (f"position #{pid} {sym} TP1 hit but qty_remaining={qty_remaining}"
+                   f" — partial skipped (will full-close at TP2)")
+            if dry_run:
+                return f"position #{pid} {sym} DRY-RUN {msg}"
+            # Stamp tp1_hit_at without a sell order so TP1 won't re-fire and
+            # exit_monitor still picks the row up (tp1_sell_order_id stays NULL).
+            now_ts = datetime.now(timezone.utc)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE trading.positions
+                          SET tp1_hit_at = %s,
+                              exit_reason = COALESCE(exit_reason, 'tp1_skipped_qty1')
+                        WHERE id = %s""",
+                    (now_ts, pid),
+                )
+            log.info(msg)
+            return msg
+
         if dry_run:
-            return f"position #{pid} {sym} DRY-RUN {msg}"
-        stamp_tp1_hit(conn, pid, "tp1_partial_pending")
-        log.info(msg)
-        return msg
+            return (f"position #{pid} {sym} DRY-RUN would partial-close "
+                    f"x{partial_qty} (TP1) — {reason} [{quote_str}]")
+
+        try:
+            result = submit_close(trading_client, row, partial_qty, "tp1_partial")
+        except Exception as e:
+            log.exception("position #%s TP1 partial submission failed", pid)
+            return f"position #{pid} {sym} ERROR — TP1 partial: {type(e).__name__}: {e}"
+
+        stamp_tp1_partial(conn, pid, result["order_id"], "tp1_partial")
+        price_str = (f" @ ${result['submitted_price']}"
+                     if result["submitted_price"] is not None else "")
+        log.info("#%s %s TP1 PARTIAL — %s x%s%s order_id=%s",
+                 pid, sym, result["order_type"], partial_qty, price_str,
+                 result["order_id"])
+        return (f"position #{pid} {sym} TP1 PARTIAL — {result['order_type']} "
+                f"x{partial_qty}{price_str} order_id={result['order_id']}")
 
     # Full close.
     short_reason = reason.split(":", 1)[0]  # "stop" / "tp2" / "premium_stop" / ...
@@ -436,7 +500,7 @@ def process_one(
                 f"{reason} [{quote_str}]")
 
     try:
-        result = submit_close(trading_client, row, qty_remaining)
+        result = submit_close(trading_client, row, qty_remaining, short_reason)
     except Exception as e:
         log.exception("position #%s close submission failed", pid)
         return f"position #{pid} {sym} ERROR — {type(e).__name__}: {e}"
@@ -541,10 +605,10 @@ def main() -> int:
             continue
         print(line)
     closing = sum(1 for line in results if "CLOSING" in line)
-    tp1     = sum(1 for line in results if "TP1 detected" in line)
+    tp1     = sum(1 for line in results if "TP1 PARTIAL" in line)
     errored = sum(1 for line in results if "ERROR" in line)
     held    = sum(1 for line in results if "HOLD" in line)
-    print(f"\nDONE — closing={closing}, tp1_detected={tp1}, "
+    print(f"\nDONE — closing={closing}, tp1_partial={tp1}, "
           f"error={errored}, hold={held}")
     return 0
 

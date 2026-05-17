@@ -224,24 +224,28 @@ ClawStreetBot/
 ├── config/
 │   ├── rss_feeds.yml           ← RSS feeds + Reddit subs for scraper
 │   └── watchlist.yml           ← YAML source-of-truth for tracked symbols
-├── db/init/
-│   ├── 01_init_databases.sql
-│   ├── 02_create_tables.sql
-│   ├── 03_polygon_tables.sql   ← Options, greeks, IV rank, fundamentals, ingest_state
-│   ├── 04_rv_gex_tables.sql    ← Realized volatility, GEX/DEX tables
-│   ├── 05_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
-│   ├── 06_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
-│   ├── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
-│   ├── 08_backtest.sql           ← Backtest engine tables (runs, trades, metrics)
-│   ├── 09_regime.sql             ← Regime classification + weights + factor analysis
-│   ├── 10_trend.sql              ← Trend status table (micro/intermediate/primary)
+├── db/init/                      ← lex order = Docker init run order
+│   ├── 001_init_databases.sql
+│   ├── 002_create_tables.sql
+│   ├── 003_polygon_tables.sql   ← Options, greeks, IV rank, fundamentals, ingest_state
+│   ├── 004_rv_gex_tables.sql    ← Realized volatility, GEX/DEX tables
+│   ├── 005_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
+│   ├── 006_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
+│   ├── 007_signals_scoring.sql     ← Signal scoring columns + unique constraint
+│   ├── 008_backtest.sql           ← Backtest engine tables (runs, trades, metrics)
+│   ├── 009_regime.sql             ← Regime classification + weights + factor analysis
+│   ├── 010_trend.sql              ← Trend status table (micro/intermediate/primary)
 │   ├── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
 │   ├── 016_signal_alerts_15m.sql ← 15m intraday signal alerts
 │   ├── 017_ohlcv_alpaca_columns.sql  ← trade_count, vwap for Alpaca bars
 │   ├── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
-│   └── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
-│   └── 020_alert_lifecycle.sql     ← alert approval lifecycle (status enum, executed_at, approval columns)
-│   └── 021_position_exit_columns.sql ← position exit tracking (sell_order_id, exit_submitted_at, exit_reason, tp1_hit_at)
+│   ├── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
+│   ├── 020_alert_lifecycle.sql     ← alert approval lifecycle (status enum, executed_at, approval columns)
+│   ├── 021_position_exit_columns.sql ← position exit tracking (sell_order_id, exit_submitted_at, exit_reason, tp1_hit_at)
+│   ├── 022_composite_score.sql      ← composite_score column on signal_alerts
+│   ├── 023_risk_mode.sql            ← risk_mode column on signal_alerts (4-button keyboard)
+│   ├── 024_position_tp1_partial.sql ← TP1 50% partial close columns (tp1_sell_order_id, tp1_filled_*)
+│   └── 025_equity_snapshots.sql     ← daily equity snapshots for drawdown denominator
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -252,9 +256,6 @@ ClawStreetBot/
 │       ├── alpaca_ohlcv_daily.json     ← Mon-Fri 15:00 PDT (1d bars w/ trade_count, VWAP)
 │       ├── alpaca_ohlcv_intraday.json ← Mon-Fri hourly :05 (7-13 PDT) (15m + 5m bars)
 │       ├── alpaca_options_daily.json   ← Mon-Fri 14:55 PDT (options + greeks + bid/ask)
-│       ├── ohlcv_daily.json            ← DEACTIVATED (replaced by alpaca_ohlcv_daily)
-│       ├── ohlcv_intraday.json         ← DEACTIVATED (replaced by alpaca_ohlcv_intraday)
-│       ├── options_daily.json          ← DEACTIVATED (replaced by alpaca_options_daily)
 │       ├── derived_daily.json          ← Mon-Fri 15:30 PDT (7 nodes)
 │       ├── fundamentals_daily.json     ← Mon-Fri 16:00 PDT
 │       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
@@ -264,10 +265,12 @@ ClawStreetBot/
 │       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
 │       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
+│       ├── alert_dispatch.json          ← ★ Mon-Fri every 1min 6-13 PDT (alert_telegram.py — dispatches unsent rows)
 │       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
 │       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-13 PDT (Alpaca fill state → trading.positions)
 │       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-13 PDT (SELL fill → closed + realized_pnl)
 │       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
+│       ├── equity_snapshot_daily.json    ← Mon-Fri 14:30 PDT (snapshot equity for drawdown denominator)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -353,7 +356,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (18 workflows, 15 active, 3 deactivated)
+- [x] n8n scheduler (22 workflows; decommissioned Polygon JSONs removed in this branch)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)

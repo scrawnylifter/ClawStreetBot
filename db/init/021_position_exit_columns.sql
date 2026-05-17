@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_monitor_queue
     WHERE status = 'open' AND sell_order_id IS NULL;
 
 COMMENT ON COLUMN trading.positions.tp1_hit_at IS
-    'Set when the underlying first reached tp1 and a partial exit fired. Sticky so the partial only happens once.';
+    'Set when the underlying first reached tp1 and a partial exit fired. Acts as a one-shot guard for TP1 detection in exit_monitor.decide_exit, but reconcile_exits.clear_tp1_partial wipes it on a dead/canceled TP1 partial SELL so the monitor can re-detect TP1 on the next pass.';
 COMMENT ON COLUMN trading.positions.exit_reason IS
     'Branch of the exit decision tree that closed (or partial-closed) this position.';
 COMMENT ON COLUMN trading.positions.sell_order_id IS
