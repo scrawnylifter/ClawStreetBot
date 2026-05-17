@@ -13,7 +13,7 @@
         }
       },
       "id": "trigger",
-      "name": "Weekdays 7:00 PDT (after ohlcv_daily 15:00 UTC)",
+      "name": "Weekdays 7:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [240, 300]
@@ -40,7 +40,7 @@
     }
   ],
   "connections": {
-    "Weekdays 7:00 PDT (after ohlcv_daily 15:00 UTC)": {
+    "Weekdays 7:00 PDT": {
       "main": [
         [
           {
@@ -64,6 +64,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
   }
 }

@@ -76,7 +76,13 @@ ClawStreetBot/
 │   ├── 02_create_tables.sql
 │   ├── 03_polygon_tables.sql   # Options, greeks, IV rank, fundamentals, ingest_state
 │   ├── 04_rv_gex_tables.sql    # Realized volatility, GEX/DEX tables
-│   └── 05_watchlist_lifecycle.sql # active/added_at/deactivated_at/backfill_status
+│   ├── 05_watchlist_lifecycle.sql # active/added_at/deactivated_at/backfill_status
+│   ├── 06_derived_analytics.sql   # Technical indicators, greeks filter, IV outliers
+│   ├── 07_signals_scoring.sql     # Signal scoring columns + unique constraint
+│   ├── 08_backtest.sql           # Backtest engine tables (runs, trades, metrics)
+│   ├── 09_regime.sql             # Regime classification + weights + factor analysis
+│   ├── 10_trend.sql              # Trend status table (micro/intermediate/primary)
+│   └── 015_signal_alerts.sql     # Signal alerts (EMA, ORB, Dip trade plans)
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
@@ -89,17 +95,34 @@ ClawStreetBot/
 │       ├── ohlcv_daily.json
 │       ├── ohlcv_intraday.json
 │       ├── options_daily.json
-│       └── derived_daily.json
+│       ├── derived_daily.json
+│       ├── fundamentals_daily.json
+│       ├── rss_news_scanner.json
+│       ├── signals_daily.json
+│       ├── intraday_signal_5m.json
+│       ├── trend_daily.json
+│       ├── regime_weekly.json
+│       └── ema_crossover_detector.json
 ├── scripts/                    # Python scripts
 │   ├── explore_data.py         # Alpaca data explorer
 │   ├── setup_watchlist.py      # Sync config/watchlist.yml → Alpaca + Postgres
 │   ├── backfill_symbol.py      # Full ingestion chain for one symbol
+│   ├── backfill_runner.py      # n8n wrapper: queries pending symbols, runs backfill_symbol.py
 │   ├── ingest_polygon_ohlcv.py # OHLCV bars → market.ohlcv (1d/5m/15m)
 │   ├── ingest_polygon_options.py # Options contracts + greeks snapshots
 │   ├── compute_iv_rank.py        # IV rank from historical IV percentiles
 │   ├── compute_realized_vol.py   # 20d/5d realized volatility + IV-RV spread
 │   ├── compute_gex_dex.py        # GEX/DEX by strike/expiry + overview per underlying
-│   └── backfill_historical_iv.py # Historical IV backfill
+│   ├── compute_technical_indicators.py # EMA/RSI/MACD/ATR/VWAP/Bollinger
+│   ├── compute_greeks_filter.py   # IV regime + delta/theta-budget gating
+│   ├── compute_trend.py           # Multi-timeframe trend detection
+│   ├── generate_signals.py        # Composite signal scoring (6-factor, 0-100)
+│   ├── intraday_signal.py         # 5-min intraday tech re-score + threshold alerts
+│   ├── detect_ema_crossover.py    # Phase 5A: EMA 9/21 crossover + ADX>25 detector
+│   ├── alert_telegram.py          # Phase 5A: Telegram alert sender for signal_alerts
+│   ├── backfill_historical_iv.py  # Historical IV backfill
+│   ├── backtest.py                 # Backtesting engine
+│   └── regime_backtest.py          # Regime classification + dynamic weights
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
@@ -173,16 +196,23 @@ docker exec -it clawstreet-redis redis-cli -a <password>
 
 ## Continuous Ingestion (n8n)
 
-The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`.
+The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`. All cron schedules use **America/Los_Angeles (PDT)** timezone.
 
-| Workflow            | Schedule (ET)              | Action                                                       |
-|---------------------|----------------------------|--------------------------------------------------------------|
-| `watchlist_sync`    | every 5 min                | `setup_watchlist.py` (no-op when YAML unchanged)             |
-| `backfill_pending`  | every 5 min                | Picks `backfill_status='pending'` symbols → `backfill_symbol.py` |
-| `ohlcv_daily`       | Mon–Fri 18:00              | 1d OHLCV bars                                                |
-| `ohlcv_intraday`    | Mon–Fri hourly :05 (09–16) | 5m + 15m OHLCV bars                                          |
-| `options_daily`     | Mon–Fri 17:55              | Options contracts + greeks snapshot                          |
-| `derived_daily`     | Mon–Fri 18:30              | RV → IV-rank → GEX chain                                     |
+| Workflow            | Schedule (PDT)              | Action                                                       |
+|---------------------|-----------------------------|--------------------------------------------------------------|
+| `watchlist_sync`    | every 5 min                  | `setup_watchlist.py` (no-op when YAML unchanged)             |
+| `backfill_pending`  | every 5 min                  | `backfill_runner.py` (queries pending symbols, runs backfill) |
+| `ohlcv_daily`       | Mon–Fri 15:00                | 1d OHLCV bars                                                |
+| `ohlcv_intraday`    | Mon–Fri hourly :05 (7–13)   | 5m + 15m OHLCV bars                                          |
+| `options_daily`     | Mon–Fri 14:55                | Options contracts + greeks snapshot                          |
+| `derived_daily`     | Mon–Fri 15:30                | RV → IV-rank → GEX → tech → greeks → outliers chain          |
+| `fundamentals_daily`| Mon–Fri 16:00                | Polygon quarterly financials                                 |
+| `rss_news_scanner`  | Mon–Fri every 30m 6–13      | RSS + Reddit ingestion                                       |
+| `signals_daily`     | Mon–Fri 16:30                | Composite signals + daily backtests                          |
+| `intraday_signal_5m`| Mon–Fri every 5min 6–12     | 5-min intraday tech re-score + threshold alerts               |
+| `trend_daily`       | Mon–Fri 11:00                | Multi-timeframe trend detection + status                     |
+| `regime_weekly`     | Sat 8:00                     | Classify regime + optimize weights + compare                  |
+| `ema_crossover_detector`| Mon–Fri 7:00             | EMA 9/21 crossover detection → Telegram alert                |
 
 n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
 
@@ -190,10 +220,11 @@ n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.p
 
 n8n does **not** mount the host Docker socket. It talks to a dedicated `docker-proxy` service (`wollomatic/socket-proxy`) on `tcp://docker-proxy:2375`. The proxy uses per-endpoint regex allowlists pinned to the worker container only:
 
-| Method | Allowed path                                                            |
-|--------|--------------------------------------------------------------------------|
-| GET    | `/_ping`, `/version`, `/containers/clawstreet-worker/json`               |
-| POST   | `/containers/clawstreet-worker/exec`, `/exec/{hex-id}/(start\|resize)`   |
+| Method | Allowed path                                                                            |
+|--------|------------------------------------------------------------------------------------------|
+| GET    | `/_ping`, `/version`, `/containers/clawstreet-worker/json`, `/exec/{hex-id}/json`       |
+| HEAD   | `/_ping`, `/version`                                                                     |
+| POST   | `/containers/clawstreet-worker/exec`, `/exec/{hex-id}/(start\|resize)`                   |
 
 Everything else is denied — n8n cannot `docker ps`, `stop`, `rm`, `run`, mount the host filesystem, or exec into any container other than `clawstreet-worker`. The proxy itself runs read-only, with all capabilities dropped, `no-new-privileges`, and as an unprivileged user in the host's `docker` group (set `DOCKER_GID` in `.env.n8n` to `stat -c '%g' /var/run/docker.sock`).
 
@@ -241,34 +272,29 @@ We use **Alpaca for execution** and **Polygon.io for deep historical data and an
 
 ## TODO
 
-### Phase 2 — Data Ingestion & Signals (in progress)
-- [x] Connect Polygon.io API (historical OHLCV, options, fundamentals)
-- [x] Create `.env.polygon` with API key + Flat Files credentials
-- [x] Build OHLCV ingestion script (`ingest_polygon_ohlcv.py` — 1d/5m/15m)
-- [x] Build options + greeks ingestion script (`ingest_polygon_options.py`)
-- [x] Store Polygon data in `market.*` Postgres tables (ohlcv, options, greeks, iv_rank, fundamentals)
-- [x] Backfill historical data for 15 watchlist symbols
-- [x] Claude Code + Postgres MCP — direct DB access for research & analysis
-- [x] IV rank computation (`compute_iv_rank.py` — 1,576 rows in market.iv_rank)
-- [x] Realized volatility computation (`compute_realized_vol.py` — 3,465 rows in market.realized_vol)
-- [x] GEX/DEX computation (`compute_gex_dex.py` — 9,350 rows in market.gex_dex, 15 rows in market.gex_dex_overview)
-- [x] Watchlist lifecycle (`config/watchlist.yml`, `market.assets.active/backfill_status`, soft-deactivate on remove)
-- [x] Per-symbol backfill orchestrator (`scripts/backfill_symbol.py`)
-- [x] n8n scheduler with worker container (6 workflows: watchlist_sync, backfill_pending, ohlcv_daily, ohlcv_intraday, options_daily, derived_daily)
-- [ ] Historical IV backfill for IV rank calculation
-- [ ] Greeks filtering engine — IV regime, delta entry, theta budget
-- [ ] Technical analysis engine (EMA, MACD, RSI, VWAP, ATR, ORB)
-- [ ] Options flow scanner (unusual activity, IV rank)
-- [ ] RSS/News + Reddit scraper pipeline
-- [ ] Composite signal scoring & Laws compliance check
+### Phase 5A — Signal Detection (in progress)
+- [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25
+- [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage
+- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts
+- [x] Backfill runner (`backfill_runner.py`) — n8n wrapper for pending symbol backfills
+- [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
+- [x] All n8n cron schedules converted from ET to PDT
+- [ ] ORB breakout detector (`detect_orb.py`)
+- [ ] Buy the 5% Dip detector (`detect_dip.py`)
+- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
 
-### Phase 3 — Strategy & Backtesting
-- [ ] Backtesting engine (historical data + simulation)
-- [ ] Validate greeks filters against historical data (IV regime, delta ranges)
-- [ ] Paper trading mode (Alpaca Paper, 30-day minimum)
-- [ ] Position sizing & stop-loss automation (swing: 10%/3:1, long-term: 3-tranche)
-- [ ] Correlation analysis & sector exposure monitoring
-- [ ] Drawdown circuit breakers (10% daily, 20% weekly, 30% monthly)
+### Phase 5B — Exit Monitors & Alert Delivery
+- [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
+- [ ] Alert formatting + Telegram delivery (Y/N approval flow)
+- [ ] Pre-flight checks — Laws, PDT, drawdown, greeks
+- [ ] Alpaca execution — bracket orders, tiered exits
+- [ ] Risk alerts — drawdown halt, PDT warning, position breach
+- [ ] DB migrations: alert_history, positions, pdt_status
+
+### Remaining Items
+- [ ] Position sizing calculator (backtest has it, no standalone tool)
+- [ ] Monitoring/dashboards (no visibility beyond raw DB queries)
+- [ ] Regime optimizer needs more diverse data (underperforms static with full history — not a code fix)
 
 ## Contributing
 

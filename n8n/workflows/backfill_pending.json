@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker sh -lc 'set -e; export $(grep -v \"^#\" /app/.env.db | xargs); SYMS=$(PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -h postgres -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -tA -c \"SELECT symbol FROM market.assets WHERE active=TRUE AND backfill_status=''pending'' ORDER BY symbol\"); if [ -z \"$SYMS\" ]; then echo \"No pending symbols.\"; exit 0; fi; echo \"Pending: $SYMS\"; for S in $SYMS; do echo \"--- backfill $S ---\"; python /app/scripts/backfill_symbol.py \"$S\" || echo \"FAILED $S\"; done'"
+        "command": "docker exec clawstreet-worker python /app/scripts/backfill_runner.py"
       },
       "id": "run",
       "name": "backfill pending symbols",
@@ -53,7 +53,7 @@
     "saveExecutionProgress": false,
     "saveManualExecutions": true,
     "executionTimeout": 1800,
-    "timezone": "America/New_York"
+    "timezone": "America/Los_Angeles"
   },
   "active": true
 }

@@ -1,17 +1,17 @@
 {
   "name": "signals_daily",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800},
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800, "timezone": "America/Los_Angeles"},
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
-            {"field": "cronExpression", "expression": "30 19 * * 1-5"}
+            {"field": "cronExpression", "expression": "30 16 * * 1-5"}
           ]
         }
       },
       "id": "trigger",
-      "name": "Mon-Fri 19:30 ET",
+      "name": "Mon-Fri 16:30 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [240, 300]
@@ -48,7 +48,7 @@
     }
   ],
   "connections": {
-    "Mon-Fri 19:30 ET": {
+    "Mon-Fri 16:30 PDT": {
       "main": [[{"node": "generate signals", "type": "main", "index": 0}]]
     },
     "generate signals": {

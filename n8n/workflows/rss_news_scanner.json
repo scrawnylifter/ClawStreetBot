@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "*/30 9-16 * * 1-5"
+              "expression": "*/30 6-13 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Every 30m market hours",
+      "name": "Every 30m market hours PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -36,7 +36,7 @@
     }
   ],
   "connections": {
-    "Every 30m market hours": {
+    "Every 30m market hours PDT": {
       "main": [
         [
           {
@@ -52,7 +52,7 @@
     "executionOrder": "v1",
     "saveManualExecutions": true,
     "executionTimeout": 1800,
-    "timezone": "America/New_York"
+    "timezone": "America/Los_Angeles"
   },
   "active": true
 }

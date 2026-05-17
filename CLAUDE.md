@@ -28,6 +28,8 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/generate_signals.py --all` — generate daily signals
 - `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars)
 - `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
+- `python scripts/detect_ema_crossover.py --lookback 1` — detect EMA 9/21 crossovers
+- `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
 
 ## Credentials (gitignored)
 
@@ -74,6 +76,7 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip)
 
 ## Watchlist (16 symbols)
 
@@ -200,27 +203,30 @@ ClawStreetBot/
 │   └── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
 │   ├── 08_backtest.sql           ← Backtest engine tables (runs, trades, metrics)
 │   ├── 09_regime.sql             ← Regime classification + weights + factor analysis
-│   └── 10_trend.sql              ← Trend status table (micro/intermediate/primary)
+│   ├── 10_trend.sql              ← Trend status table (micro/intermediate/primary)
+│   └── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
 ├── n8n/
 │   └── workflows/              ← Source-of-truth JSON for n8n workflows
-│       ├── watchlist_sync.json     ← every 5 min
-│       ├── backfill_pending.json   ← every 5 min (picks pending symbols)
-│       ├── ohlcv_daily.json        ← Mon-Fri 18:00 ET
-│       ├── ohlcv_intraday.json     ← Mon-Fri hourly :05
-│       ├── options_daily.json      ← Mon-Fri 17:55 ET
-│       ├── derived_daily.json      ← Mon-Fri 18:30 ET (7 nodes)
-│       ├── fundamentals_daily.json ← Mon-Fri 19:00 ET
-│       ├── rss_news_scanner.json   ← Mon-Fri every 30m 9:30-16:00 ET
-│       ├── signals_daily.json      ← Mon-Fri 19:30 ET (includes daily backtest)
-│       ├── intraday_signal_5m.json ← Mon-Fri every 5 min 9:30-16:00 ET
-│       ├── trend_daily.json        ← Mon-Fri 18:00 ET (trend detection + status)
-│       └── regime_weekly.json      ← Sat 11:00 ET (classify + optimize + compare)
+│       ├── watchlist_sync.json         ← every 5 min
+│       ├── backfill_pending.json       ← every 5 min (backfill_runner.py per pending symbol)
+│       ├── ohlcv_daily.json            ← Mon-Fri 15:00 PDT
+│       ├── ohlcv_intraday.json         ← Mon-Fri hourly :05 (7-13 PDT)
+│       ├── options_daily.json          ← Mon-Fri 14:55 PDT
+│       ├── derived_daily.json          ← Mon-Fri 15:30 PDT (7 nodes)
+│       ├── fundamentals_daily.json     ← Mon-Fri 16:00 PDT
+│       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
+│       ├── signals_daily.json          ← Mon-Fri 16:30 PDT (includes daily backtest)
+│       ├── intraday_signal_5m.json     ← Mon-Fri every 5 min 6-12 PDT
+│       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
+│       ├── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
+│       └── ema_crossover_detector.json  ← Mon-Fri 7:00 PDT (detect + alert)
 ├── scripts/
 │   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
 │   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
+│   ├── backfill_runner.py      ← n8n wrapper: queries pending symbols, runs backfill_symbol.py
 │   ├── explore_data.py
 │   ├── explore_options.py
 │   ├── options_analysis.py
@@ -237,6 +243,8 @@ ClawStreetBot/
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
 │   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
+│   ├── detect_ema_crossover.py        ← Phase 5A: EMA 9/21 crossover + ADX>25 detector
+│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender for signal_alerts
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
@@ -257,9 +265,8 @@ ClawStreetBot/
 
 ## Current Phase
 
-Phase 1 (foundation) and Phase 2 (analytics) are complete. Phase 3 (backtesting) is complete:
+All phases 1-4 complete. Phase 5A (signal detection) in progress.
 
-All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline running daily/weekly.
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
 - [x] Options data explorers working
@@ -277,8 +284,10 @@ All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline runn
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (12 workflows + wollomatic socket-proxy)
+- [x] n8n scheduler (13 workflows + wollomatic socket-proxy)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
+- [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
+- [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
 - [x] Secrets management skill (NEVER hardcode API keys)
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
 - [x] Backtesting engine (day/swing/long_term with user trading rules, ATR-based SL/TP, partial exits, PDT tracking)
@@ -290,13 +299,18 @@ All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline runn
 - [x] Historical signal backfill (7,908 signals across 501 days)
 - [x] Trend-aware intraday adjustments (signal + aligned trend = boost, counter-trend = penalty)
 
-### Phase 5: Trade Alerts & Execution (in progress)
-- [ ] Strategy detector: EMA crossover (`detect_ema_crossover.py`)
-- [ ] Strategy detector: ORB breakout (`detect_orb.py`)
-- [ ] Strategy detector: Buy the 5% Dip (`detect_dip.py`)
+### Phase 5A: Signal Detection (in progress)
+- [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes `market.signal_alerts`
+- [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
+- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts (pending bot token)
+- [x] Backfill runner (`backfill_runner.py`) — n8n wrapper replacing inline shell in backfill_pending workflow
+- [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
+- [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
+
+### Phase 5B: Exit Monitors & Alert Delivery (upcoming)
 - [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
-- [ ] Alert formatting + Telegram delivery (`alert_telegram.py`) — Y/N approval flow
+- [ ] Alert formatting + Telegram delivery (Y/N approval flow)
 - [ ] Pre-flight checks (`preflight_checks.py`) — Laws, PDT, drawdown, greeks
 - [ ] Alpaca execution (`execute_trade.py`) — bracket orders, tiered exits
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach
@@ -311,7 +325,7 @@ All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline runn
 ## Security Architecture
 
 - **n8n does NOT have direct docker.sock access** — routes through `wollomatic/socket-proxy`
-- Proxy allowlists ONLY: `GET /containers/clawstreet-worker/json` and `POST /containers/clawstreet-worker/exec` + `/exec/*/start`
+- Proxy allowlists: `GET /_ping`, `GET /version`, `GET /containers/clawstreet-worker/json`, `GET /exec/{id}/json`, `HEAD /_ping`, `HEAD /version`, `POST /containers/clawstreet-worker/exec`, `POST /exec/{id}/start`, `POST /exec/{id}/resize`
 - Denied at proxy: `docker ps`, `docker stop/rm/kill`, `docker run` (no container creation), filesystem mounts, exec into any other container
 - Proxy container hardened: `read_only`, `cap_drop ALL`, `no-new-privileges`, runs as `65534:DOCKER_GID`
 - All credentials via `.env.*` files (gitignored), never hardcoded

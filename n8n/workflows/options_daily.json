@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "55 17 * * 1-5"
+              "expression": "55 14 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 17:55 ET",
+      "name": "Weekdays 14:55 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -36,7 +36,7 @@
     }
   ],
   "connections": {
-    "Weekdays 17:55 ET": {
+    "Weekdays 14:55 PDT": {
       "main": [
         [
           {
@@ -52,7 +52,7 @@
     "executionOrder": "v1",
     "saveManualExecutions": true,
     "executionTimeout": 1800,
-    "timezone": "America/New_York"
+    "timezone": "America/Los_Angeles"
   },
   "active": true
 }

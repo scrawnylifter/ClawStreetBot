@@ -1,13 +1,20 @@
 {
   "name": "intraday_signal_5m",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300},
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300, "timezone": "America/Los_Angeles"},
   "nodes": [
     {
       "parameters": {
-        "cronExpression": "*/5 9-15 * * 1-5"
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 6-12 * * 1-5"
+            }
+          ]
+        }
       },
       "id": "trigger",
-      "name": "Every 5min Market Hours",
+      "name": "Every 5min market hours PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [200, 300]
@@ -24,7 +31,7 @@
     }
   ],
   "connections": {
-    "Every 5min Market Hours": {
+    "Every 5min market hours PDT": {
       "main": [[{"node": "Intraday Signal Refresh", "type": "main", "index": 0}]]
     }
   }

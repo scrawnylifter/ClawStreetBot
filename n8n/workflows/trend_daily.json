@@ -1,13 +1,20 @@
 {
   "name": "trend_daily",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300},
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300, "timezone": "America/Los_Angeles"},
   "nodes": [
     {
       "parameters": {
-        "cronExpression": "0 18 * * 1-5"
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 11 * * 1-5"
+            }
+          ]
+        }
       },
       "id": "trigger",
-      "name": "Mon-Fri 18:00 UTC",
+      "name": "Mon-Fri 11:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [200, 300]
@@ -24,7 +31,7 @@
     }
   ],
   "connections": {
-    "Mon-Fri 18:00 UC": {
+    "Mon-Fri 11:00 PDT": {
       "main": [[{"node": "Compute Trend Status", "type": "main", "index": 0}]]
     }
   }

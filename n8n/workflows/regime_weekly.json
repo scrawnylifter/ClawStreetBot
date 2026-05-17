@@ -1,13 +1,20 @@
 {
   "name": "regime_weekly",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800},
+  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800, "timezone": "America/Los_Angeles"},
   "nodes": [
     {
       "parameters": {
-        "cronExpression": "0 15 * * 6"
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 6"
+            }
+          ]
+        }
       },
       "id": "trigger",
-      "name": "Saturday 15:00 UTC",
+      "name": "Saturday 8:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [200, 300]
@@ -24,7 +31,7 @@
     }
   ],
   "connections": {
-    "Saturday 15:00 UTC": {
+    "Saturday 8:00 PDT": {
       "main": [[{"node": "Classify + Analyze + Optimize + Compare", "type": "main", "index": 0}]]
     }
   }

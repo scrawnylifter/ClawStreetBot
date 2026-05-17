@@ -26,7 +26,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 | [[04-API-References]] | Broker/exchange API docs — **[[Alpaca API]]** · **[[Polygon.io API]]** |
 | [[05-Risk-Management]] | **[[Risk Management]]** · **[[Position Sizing]]** · **[[Loss Limits]]** · **[[Correlation Risk]]** |
 | [[06-Indicators]] | Technical indicators, calculations, usage notes |
-|| [[07-Infrastructure]] | **[[Database Architecture]]** · **[[n8n Scheduler]]** · **[[Telegram Alert System]]** (v2 trade setups + exits) · **[[Order Execution Engine]]** · **[[Monitoring & Dashboards]]** |
+| [[07-Infrastructure]] | **[[Database Architecture]]** · **[[n8n Scheduler]]** · **[[Telegram Alert System]]** (v2 trade setups + exits) · **[[Order Execution Engine]]** · **[[Monitoring & Dashboards]]** |
 | [[08-Templates]] | Reusable note templates |
 
 ## Quick Links
@@ -40,7 +40,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [[Polygon.io API]] — Historical data, fundamentals, options chains
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 12 workflows, Docker socket isolation, API management
+- [[n8n Scheduler]] — 13 workflows, Docker socket isolation, API management
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -64,7 +64,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] **PDT rules documented** — 3 day-trade limit, emergency-only 3rd, NEVER 4th
 - [x] **IV rank / realized vol / GEX-DEX computed** — `market.iv_rank` (1,576), `market.realized_vol` (3,465), `market.gex_dex` (9,350) + overview (15)
 - [x] **Watchlist lifecycle** — `config/watchlist.yml` source-of-truth; add / soft-deactivate / re-add via `market.assets.active` + `backfill_status`
-- [x] **n8n scheduler** — 12 workflows drive all ingestion, compute, and signal generation
+- [x] **n8n scheduler** — 13 workflows drive all ingestion, compute, and signal generation
 - [x] **Docker socket isolation** — n8n no longer mounts `/var/run/docker.sock`; it talks to a `wollomatic/socket-proxy` sidecar that whitelists only worker exec
 - [x] **Greeks filtering engine** — IV regime + delta/theta-budget gating per contract
 - [x] **Technical analysis engine** — EMA/RSI/MACD/ATR/VWAP/Bollinger
@@ -88,12 +88,13 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] Trend-aware intraday adjustments — aligned trend boosts, counter-trend penalizes
 - [x] 5-minute intraday signal refresh — re-scores tech from 5m bars, threshold alerts
 
-**Phase 5A — Trade Alerts (in progress)**
-- [ ] **Strategy Detectors** (see [[Telegram Alert System]])
-  - EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25
-  - ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
-  - Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
-  - Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
+**Phase 5A — Signal Detection & Alerts (in progress)**
+- [x] **EMA crossover detector** (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes to `market.signal_alerts`
+- [x] **Signal alerts table** (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
+- [x] **Telegram alert sender** (`alert_telegram.py`) — strategy-specific trade alerts (pending bot token)
+- [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume+VWAP
+- [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
+- [ ] **Options chain filter** (`filter_options.py`) — DTE≥30, delta range, theta budget
 - [ ] **Exit Monitors** (see [[Telegram Alert System]])
   - Price-based exits: TP1/TP2/stop, trailing after TP2
   - Invalidation exits: EMA reversal, ORB false breakout, thesis break

@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "5 10-16 * * 1-5"
+              "expression": "5 7-13 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Hourly :05 09:30-16 ET",
+      "name": "Hourly :05 6:30-13:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -49,7 +49,7 @@
     }
   ],
   "connections": {
-    "Hourly :05 09:30-16 ET": {
+    "Hourly :05 6:30-13:00 PDT": {
       "main": [
         [
           {
@@ -70,7 +70,7 @@
     "executionOrder": "v1",
     "saveManualExecutions": true,
     "executionTimeout": 900,
-    "timezone": "America/New_York"
+    "timezone": "America/Los_Angeles"
   },
   "active": true
 }
