@@ -347,6 +347,179 @@ def format_ema_crossover_alert(signal: dict) -> str:
     return "\n".join(lines)
 
 
+def format_setup_scanner_alert(signal: dict) -> str:
+    """Format an 8-gate setup scanner signal (scan_setups.py)."""
+    symbol = signal["symbol"]
+    direction = signal["direction"]
+    price = signal["trigger_price"]
+    stop = signal["stop_price"]
+    tp1 = signal["tp1_price"]
+    tp2 = signal["tp2_price"]
+    rr = signal["risk_reward"]
+    adx = signal["adx"]
+    rsi = signal["rsi"]
+    regime = signal["regime"]
+
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    action = "BUY" if direction == "bullish" else "SHORT"
+
+    # --- Header ---
+    lines = [
+        f"{emoji} <b>{action} Signal: {symbol}</b>",
+        f"{'─' * 30}",
+    ]
+
+    # --- Composite + Regime ---
+    composite = signal.get("composite_score")
+    if composite is not None:
+        lines.append(f"Composite: {float(composite):.1f}/100 | Regime: {regime}")
+    else:
+        lines.append(f"Regime: {regime}")
+
+    # --- Price + Trend ---
+    micro = _trend_english(signal.get("micro_trend", "?"))
+    inter = _trend_english(signal.get("intermediate_trend", "?"))
+    prim = _trend_english(signal.get("primary_trend", "?"))
+    lines.append(f"Stock: ${float(price):.2f} | RSI: {float(rsi):.0f} | ADX: {float(adx):.0f}")
+    lines.append(f"Trend: short {micro}, mid {inter}, long {prim}")
+
+    # --- Trade Plan ---
+    risk_dollars = float(price) - float(stop) if direction == "bullish" else float(stop) - float(price)
+    reward_dollars = float(tp1) - float(price) if direction == "bullish" else float(price) - float(tp1)
+    rr_check = "✅" if float(rr) >= 3 else "⚠️"
+    lines.append(f"")
+    lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
+    lines.append(f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} ({float(rr):.1f}:1) {rr_check}")
+
+    # --- Option contract ---
+    opt_sym = signal.get("option_symbol")
+    if opt_sym:
+        opt_strike = signal.get("option_strike", 0)
+        opt_expiry = signal.get("option_expiry", "?")
+        opt_delta = signal.get("option_delta", 0)
+        opt_mid = signal.get("option_mid")
+        contract_type = "C" if direction == "bullish" else "P"
+        lines.append(f"")
+        lines.append(f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} exp {opt_expiry} (Δ{float(opt_delta):.2f})")
+        opt_bid = signal.get("option_bid")
+        opt_ask = signal.get("option_ask")
+        if opt_bid is not None and opt_ask is not None:
+            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
+            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
+
+    # --- Vol & Gamma context ---
+    context_bits = []
+    iv_rank = signal.get("iv_rank")
+    if iv_rank is not None:
+        iv_rank = float(iv_rank)
+        if iv_rank < 30:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → cheap premium, good time to buy options")
+        elif iv_rank < 50:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → moderate premium")
+        else:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → expensive premium (consider selling)")
+
+    iv_rv = signal.get("iv_rv_spread")
+    if iv_rv is not None:
+        iv_rv = float(iv_rv)
+        if iv_rv < -0.15:
+            context_bits.append(f"Options cheap vs realized ({iv_rv:+.2f}) — good time to buy")
+        elif iv_rv > 0.15:
+            context_bits.append(f"Options pricey vs realized ({iv_rv:+.2f}) — consider credit spreads")
+        else:
+            context_bits.append(f"IV vs RV fairly priced ({iv_rv:+.2f})")
+
+    net_gex = signal.get("net_gex")
+    if net_gex is not None:
+        net_gex = float(net_gex)
+        if net_gex > 0:
+            context_bits.append(f"Dealers long gamma (${net_gex:,.0f}) → price sticks near strikes")
+        else:
+            context_bits.append(f"Dealers short gamma (${net_gex:,.0f}) → expect wider moves")
+
+    volume_ratio = signal.get("volume_ratio")
+    if volume_ratio is not None:
+        context_bits.append(f"Volume: {float(volume_ratio):.1f}x average")
+
+    if context_bits:
+        lines.append("")
+        lines.append("<b>Context:</b>")
+        for bit in context_bits:
+            lines.append(f"  • {bit}")
+
+    # --- Bail conditions ---
+    invalidation = signal.get("invalidation")
+    if invalidation:
+        if isinstance(invalidation, str):
+            try:
+                invalidation = json.loads(invalidation)
+            except (json.JSONDecodeError, TypeError):
+                invalidation = None
+        if invalidation:
+            # Handle both list format and dict with "rules" key
+            rules = invalidation if isinstance(invalidation, list) else invalidation.get("rules", [])
+            if rules:
+                lines.append("")
+                lines.append("<b>Bail if:</b>")
+                for rule in rules:
+                    lines.append(f"  ⛔ {rule}")
+
+    return "\n".join(lines)
+
+
+def format_liquidity_sweep_alert(signal: dict) -> str:
+    """Format a liquidity sweep signal (detect_liquidity_sweep.py)."""
+    symbol = signal["symbol"]
+    direction = signal["direction"]
+    price = signal["trigger_price"]
+    stop = signal["stop_price"]
+    tp1 = signal["tp1_price"]
+    tp2 = signal["tp2_price"]
+    rr = signal["risk_reward"]
+
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    action = "BUY" if direction == "bullish" else "SHORT"
+
+    lines = [
+        f"{emoji} <b>{action} Signal: {symbol}</b>",
+        f"{'─' * 30}",
+        f"Strategy: Liquidity Sweep | Timeframe: {signal.get('timeframe', '5m')}",
+        f"Stock: ${float(price):.2f}",
+    ]
+
+    # ATR-based stop/target
+    atr = signal.get("atr_14")
+    if atr is not None:
+        lines.append(f"ATR: ${float(atr):.2f}")
+
+    risk_dollars = float(price) - float(stop) if direction == "bullish" else float(stop) - float(price)
+    reward_dollars = float(tp1) - float(price) if direction == "bullish" else float(price) - float(tp1)
+    rr_check = "✅" if float(rr) >= 3 else "⚠️"
+    lines.append(f"")
+    lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
+    lines.append(f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} ({float(rr):.1f}:1) {rr_check}")
+
+    # Option contract
+    opt_sym = signal.get("option_symbol")
+    if opt_sym:
+        opt_strike = signal.get("option_strike", 0)
+        opt_expiry = signal.get("option_expiry", "?")
+        opt_delta = signal.get("option_delta", 0)
+        opt_mid = signal.get("option_mid")
+        contract_type = "C" if direction == "bullish" else "P"
+        lines.append(f"")
+        lines.append(f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} exp {opt_expiry} (Δ{float(opt_delta):.2f})")
+        if opt_mid is not None:
+            lines.append(f"Mid: ${float(opt_mid):.2f}")
+
+    # Sweep-specific context
+    lines.append("")
+    lines.append("⚡ Close-beyond confirmation passed")
+    lines.append("Backtest: PF 1.56 | WR 32.4% | avg +0.16R (259 trades)")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -369,6 +542,7 @@ def main():
     query = """
         SELECT id, symbol, strategy, direction, status, regime,
                trigger_price, ema_9, ema_21, adx, rsi, atr_14, volume_ratio,
+               composite_score,
                stop_price, tp1_price, tp2_price, risk_reward,
                micro_trend, intermediate_trend, primary_trend,
                trend_score, ema_stack, invalidation,
@@ -413,6 +587,7 @@ def main():
     columns = [
         "id", "symbol", "strategy", "direction", "status", "regime",
         "trigger_price", "ema_9", "ema_21", "adx", "rsi", "atr_14", "volume_ratio",
+        "composite_score",
         "stop_price", "tp1_price", "tp2_price", "risk_reward",
         "micro_trend", "intermediate_trend", "primary_trend",
         "trend_score", "ema_stack", "invalidation",
@@ -434,6 +609,10 @@ def main():
             alert_text = format_15m_crossover_alert(signal)
         elif signal["strategy"] == "ema_crossover":
             alert_text = format_ema_crossover_alert(signal)
+        elif signal["strategy"] == "setup_scanner":
+            alert_text = format_setup_scanner_alert(signal)
+        elif signal["strategy"] == "liquidity_sweep":
+            alert_text = format_liquidity_sweep_alert(signal)
         else:
             # Generic fallback
             emoji = "📈" if signal["direction"] == "bullish" else "📉"

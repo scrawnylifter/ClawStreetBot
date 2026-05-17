@@ -391,6 +391,19 @@ def evaluate_symbol(
             "Stock breaks above ATR stop → EXIT immediately",
         ])
 
+    # Compute composite: 8 gates, each passed = ~12.5 points (max 100)
+    gates_passed = sum([
+        1,  # Gate 1: trend (always passed if we got here)
+        1 if adx is not None and adx >= ADX_MIN else 0,
+        1,  # Gate 3: RSI (always passed if we got here)
+        1,  # Gate 4: IV pctile (always passed)
+        1,  # Gate 5: IV-RV spread (always passed)
+        1,  # Gate 6: affordability (always passed)
+        1,  # Gate 7: DTE (always passed)
+        1,  # Gate 8: R:R (always passed)
+    ])
+    composite = round(gates_passed * 12.5, 1)
+
     return {
         "symbol": sym,
         "strategy": "setup_scanner",
@@ -409,10 +422,13 @@ def evaluate_symbol(
         "iv_rank": iv_rank,
         "rv_20d": rv20,
         "iv_rv_spread": round(iv_rv_spread, 4),
+        "composite_score": composite,
+        "_composite": composite,
         "stop_price": stop,
         "tp1_price": tp1,
         "tp2_price": tp2,
         "stock_risk_reward": stock_rr,
+        "risk_reward": stock_rr,
         "risk_dollars": risk_dollars,
         "reward_dollars": reward_dollars,
         "invalidation": invalidation,
@@ -451,6 +467,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 trigger_price, ema_9, ema_21, adx, rsi, atr_14,
                 volume_ratio,
                 stop_price, tp1_price, tp2_price, risk_reward,
+                composite_score,
                 invalidation,
                 micro_trend, intermediate_trend, primary_trend,
                 trend_score, ema_stack,
@@ -463,6 +480,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 %s, %s, %s, %s, %s, %s,
                 %s,
                 %s, %s, %s, %s,
+                %s,
                 %s,
                 %s, %s, %s,
                 %s, %s,
@@ -482,6 +500,7 @@ def save_signal(conn, sig: dict) -> int | None:
             sig.get("volume_ratio"),
             sig["stop_price"], sig["tp1_price"], sig["tp2_price"],
             sig["stock_risk_reward"],
+            sig.get("_composite"),
             sig["invalidation"],
             sig.get("micro_trend"), sig.get("intermediate_trend"),
             sig.get("primary_trend"),
