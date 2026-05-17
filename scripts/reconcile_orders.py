@@ -81,11 +81,17 @@ def _alpaca_client():
 def fetch_executing(conn, signal_id: int | None, limit: int) -> list[dict]:
     """Rows that submit_to_alpaca returned successfully on but haven't been
     reconciled yet. Filter requires alpaca_order_id so we have something to
-    look up."""
+    look up.
+
+    Uses FOR UPDATE SKIP LOCKED so two overlapping 1-min cron runs see
+    DIFFERENT rows — eliminates the race where both inserted a position
+    for the same fill (phantom position). The lock is held by the caller's
+    transaction and released at conn.commit/rollback in main().
+    """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if signal_id is not None:
             cur.execute(
-                "SELECT * FROM market.signal_alerts WHERE id = %s",
+                "SELECT * FROM market.signal_alerts WHERE id = %s FOR UPDATE",
                 (signal_id,),
             )
         else:
@@ -95,7 +101,8 @@ def fetch_executing(conn, signal_id: int | None, limit: int) -> list[dict]:
                       AND alpaca_order_id IS NOT NULL
                       AND position_id IS NULL
                     ORDER BY executed_at ASC NULLS LAST, id ASC
-                    LIMIT %s""",
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED""",
                 (limit,),
             )
         return list(cur.fetchall())
