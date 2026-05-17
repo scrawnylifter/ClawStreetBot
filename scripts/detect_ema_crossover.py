@@ -284,6 +284,7 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
             "strategy": "ema_crossover",
             "direction": direction,
             "status": "new",
+            "timeframe": "1d",
             "regime": current_regime,
             "trigger_price": close_f,
             "ema_9": float(ema_9) if ema_9 else None,
@@ -363,7 +364,7 @@ def save_signals(conn, signals: list[dict]) -> int:
 
             cur.execute("""
                 INSERT INTO market.signal_alerts (
-                    symbol, strategy, direction, status, regime,
+                    symbol, strategy, direction, status, timeframe, regime,
                     trigger_price, ema_9, ema_21, adx, rsi, atr_14, volume_ratio,
                     stop_price, tp1_price, tp2_price, risk_reward,
                     micro_trend, intermediate_trend, primary_trend,
@@ -373,7 +374,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     option_delta, option_theta,
                     iv_rank, iv_rv_spread, net_gex
                 ) VALUES (
-                    %(symbol)s, %(strategy)s, %(direction)s, %(status)s, %(regime)s,
+                    %(symbol)s, %(strategy)s, %(direction)s, %(status)s,
+                    %(timeframe)s, %(regime)s,
                     %(trigger_price)s, %(ema_9)s, %(ema_21)s, %(adx)s, %(rsi)s,
                     %(atr_14)s, %(volume_ratio)s,
                     %(stop_price)s, %(tp1_price)s, %(tp2_price)s, %(risk_reward)s,
@@ -384,7 +386,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     %(option_delta)s, %(option_theta)s,
                     %(iv_rank)s, %(iv_rv_spread)s, %(net_gex)s
                 )
-                ON CONFLICT (symbol, strategy, direction, created_at) DO NOTHING
+                ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
+                DO NOTHING
             """, s)
             if cur.rowcount > 0:
                 inserted += 1
