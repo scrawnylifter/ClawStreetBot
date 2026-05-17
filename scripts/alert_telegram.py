@@ -144,9 +144,11 @@ def format_15m_crossover_alert(signal: dict) -> str:
     ]
 
     # --- Trade Plan ---
-    lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
+    risk_dollars = price - stop if direction == "bullish" else stop - price
+    reward_dollars = tp1 - price if direction == "bullish" else price - tp1
     rr_check = "✅" if rr >= 3 else "⚠️"
-    lines.append(f"Risk/Reward: {rr:.1f}:1 {rr_check}")
+    lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
+    lines.append(f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} ({rr:.1f}:1) {rr_check}")
 
     # --- Why this signal fired ---
     cross_dir = "above" if direction == "bullish" else "below"
@@ -170,7 +172,6 @@ def format_15m_crossover_alert(signal: dict) -> str:
         opt_delta = signal.get("option_delta", 0)
         contract_type = "C" if direction == "bullish" else "P"
         lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
-    lines.append(f"Or buy {'100 shares' if direction == 'bullish' else 'puts on 100 shares'} @ ${price:.2f}")
 
     # --- Vol & Gamma context ---
     context_bits = []
@@ -237,9 +238,11 @@ def format_ema_crossover_alert(signal: dict) -> str:
     ]
 
     # --- Trade Plan (the most important numbers upfront) ---
-    lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
+    risk_dollars = price - stop if direction == "bullish" else stop - price
+    reward_dollars = tp1 - price if direction == "bullish" else price - tp1
     rr_check = "✅" if rr >= 3 else "⚠️"
-    lines.append(f"Risk/Reward: {rr:.1f}:1 {rr_check}")
+    lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
+    lines.append(f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} ({rr:.1f}:1) {rr_check}")
 
     # --- Why this signal fired ---
     cross_dir = "above" if direction == "bullish" else "below"
@@ -260,7 +263,6 @@ def format_ema_crossover_alert(signal: dict) -> str:
         opt_delta = signal.get("option_delta", 0)
         contract_type = "C" if direction == "bullish" else "P"
         lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
-    lines.append(f"Or buy {'100 shares' if direction == 'bullish' else 'puts on 100 shares'} @ ${price:.2f}")
 
     # --- Vol & Gamma context ---
     context_bits = []
