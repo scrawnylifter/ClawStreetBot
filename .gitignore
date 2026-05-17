@@ -11,6 +11,9 @@ db/data/
 
 # n8n runtime state (workflows themselves live under n8n/workflows/ and ARE tracked)
 n8n/data/
+
+# Local listener state (Telegram update offset, etc.)
+state/
 *.key
 *.pem
 *.p12
