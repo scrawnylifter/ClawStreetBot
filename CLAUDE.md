@@ -96,7 +96,10 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at, composite_score)
+  - Alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`
+  - ⚠️ `scan_setups.py`, `detect_liquidity_sweep.py`, and `intraday_signal.py` send Telegram directly (bypass `alert_telegram.py` — no approval keyboard)
+  - See [[Telegram Alert System]] in Obsidian for full pipeline diagram
 - `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
 - `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
 - `trading.backtest_liquidity_trades` — liquidity sweep backtest individual trades
