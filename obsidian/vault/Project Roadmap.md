@@ -51,15 +51,21 @@ tags: [roadmap, mOC]
 
 ## Phase 5 — Execution & Alerts (NEXT)
 
-### 5A: Telegram Alert System (see [[Telegram Alert System]])
-- [ ] Create Telegram bot + store credentials in `.env.telegram`
-- [ ] `scripts/alert_telegram.py` — format + send alerts via Telegram Bot API
-- [ ] Alert deduplication via `trading.alert_history` table
-- [ ] Trade signal alerts: composite > 60, factor breakdown, regime/trend context
-- [ ] Risk alerts: drawdown halts, PDT warnings, position breaches
-- [ ] Pipeline health: daily summary, failures, data freshness
-- [ ] Regime/trend/IV threshold change notifications
-- [ ] 2 n8n workflows: `alerts_daily`, `alerts_intraday`
+### 5A: Signal Detection & Data Pipeline ✅ (Alpaca migration complete)
+- [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25
+- [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage
+- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid
+- [x] **Alpaca data migration** — OHLCV + options moved from Polygon to Alpaca (free tier)
+  - `ingest_alpaca_ohlcv.py` — 1d/15m/5m bars with trade_count + VWAP
+  - `ingest_alpaca_options.py` — option chains + greeks + bid/ask
+  - `fetch_alpaca_snapshot.py` — real-time stock price + best option at signal time
+  - `detect_ema_crossover_15m.py` — 15m crossover with live option enrichment
+  - 3 new n8n workflows: `alpaca_ohlcv_daily`, `alpaca_ohlcv_intraday`, `alpaca_options_daily`
+  - 3 old Polygon workflows deactivated
+  - DB migrations: `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
+- [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
+- [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
+- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
 
 ### 5B: Order Execution Engine (see [[Order Execution Engine]])
 - [ ] `scripts/execute_trades.py` — full execution engine with subcommands
@@ -96,4 +102,4 @@ tags: [roadmap, mOC]
 - [[Backtesting Architecture]] — Data pipeline, Postgres schema, backtest engine design
 - [[Watchlist]] — Current tracked assets
 - [[Database Architecture]] — Storage design
-- [[n8n Scheduler]] — 12 workflows driving all pipelines
+- [[n8n Scheduler]] — 17 workflows (14 active, 3 deactivated) driving all pipelines

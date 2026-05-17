@@ -5,8 +5,8 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 ## Architecture
 
 - **Language:** Python 3.11
-- **Broker:** Alpaca (alpaca-py v0.43.4) — paper trading
-- **Market Data:** Polygon.io / Massive API — historical OHLCV, options, fundamentals
+- **Broker:** Alpaca (alpaca-py v0.43.4) — paper trading, OHLCV bars, options chains, greeks, real-time snapshots
+- **Market Data:** Alpaca (primary — OHLCV, options, snapshots) + Polygon.io (secondary — fundamentals, flat-file backfill)
 - **Database:** PostgreSQL 16 (Docker on clawnet, port 5432)
   - `clawstreet` db: schemas `market`, `scraper`, `trading`
   - `scraped` db: schemas `feeds`, `social`, `analytics`
@@ -28,7 +28,9 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/generate_signals.py --all` — generate daily signals
 - `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars)
 - `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
-- `python scripts/detect_ema_crossover.py --lookback 1` — detect EMA 9/21 crossovers
+- `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers
+- `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot
+- `python scripts/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
 - `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
 
 ## Credentials (gitignored)
@@ -41,20 +43,27 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Data Sources
 
-- **Polygon.io — Stocks $79/mo + Options Starter $29/mo = $108/mo**
+- **Alpaca (PRIMARY — free tier, IEX 15-min delayed)**
+  - OHLCV bars: 1d, 15m, 5m via `StockHistoricalDataClient` (includes `trade_count` + `VWAP`)
+  - Options chains: full chain snapshots with greeks (delta, gamma, theta, vega, IV) + bid/ask via `OptionHistoricalDataClient`
+  - Real-time snapshots: stock price + best filtered option at signal time via `fetch_alpaca_snapshot.py`
+  - Paper trading: `$100K equity, $200K buying power
+  - API keys in `.env.alpaca`
+- **Polygon.io (SECONDARY — $108/mo, fundamentals + backfill only)**
   - REST API: `POLYGON_API_KEY` in `.env.polygon`
   - Flat Files: S3-compatible at `https://files.massive.com`, bucket `flatfiles`, boto3 s3v4 auth
-  - Stocks: 10yr OHLCV, fundamentals, technical indicators, corporate actions, news, WebSockets
-  - Options: 2yr history, greeks (delta/gamma/theta/vega), IV, daily open interest, snapshots, Flat Files
+  - Fundamentals: quarterly financials (revenue, EPS, market cap) — `fundamentals_daily` workflow still active
+  - Flat-file backfill: initial historical OHLCV + options data (now complemented by Alpaca)
+  - **DECOMMISSIONED for ingestion**: `ingest_polygon_ohlcv.py` and `ingest_polygon_options.py` replaced by Alpaca equivalents
   - See `04-API-References/Polygon.io API.md` for full API details
 
 ## Database Schema
 
 Key tables (see `db/init/` for full DDL):
 - `market.assets` — watchlist symbols with lifecycle columns (active, added_at, deactivated_at, backfill_status)
-- `market.ohlcv` — OHLCV bars (1d, 5m, 15m; fk → assets)
+- `market.ohlcv` — OHLCV bars (1d, 5m, 15m; fk → assets; includes `trade_count` + `vwap` from Alpaca)
 - `market.options` — options contracts with strike, expiry, type, settlement
-- `market.greeks` — greeks snapshots (delta, gamma, theta, vega, IV) per contract/date
+- `market.greeks` — greeks snapshots (delta, gamma, theta, vega, IV, bid, ask) per contract/date
 - `market.iv_rank` — IV rank percentiles per symbol/date (1,576 rows)
 - `market.realized_vol` — 20d/5d annualized RV + IV-RV spread per symbol/date (3,465 rows)
 - `market.gex_dex` — GEX/DEX per strike/expiry per symbol/date (9,350 rows)
@@ -199,12 +208,15 @@ ClawStreetBot/
 │   ├── 03_polygon_tables.sql   ← Options, greeks, IV rank, fundamentals, ingest_state
 │   ├── 04_rv_gex_tables.sql    ← Realized volatility, GEX/DEX tables
 │   ├── 05_watchlist_lifecycle.sql ← active/added_at/deactivated_at/backfill_status
-│   └── 06_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
-│   └── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
+│   ├── 06_derived_analytics.sql   ← Technical indicators, greeks filter, IV outliers
+│   ├── 07_signals_scoring.sql     ← Signal scoring columns + unique constraint
 │   ├── 08_backtest.sql           ← Backtest engine tables (runs, trades, metrics)
 │   ├── 09_regime.sql             ← Regime classification + weights + factor analysis
 │   ├── 10_trend.sql              ← Trend status table (micro/intermediate/primary)
-│   └── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
+│   ├── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
+│   ├── 016_signal_alerts_15m.sql ← 15m intraday signal alerts
+│   ├── 017_ohlcv_alpaca_columns.sql  ← trade_count, vwap for Alpaca bars
+│   └── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -212,17 +224,21 @@ ClawStreetBot/
 │   └── workflows/              ← Source-of-truth JSON for n8n workflows
 │       ├── watchlist_sync.json         ← every 5 min
 │       ├── backfill_pending.json       ← every 5 min (backfill_runner.py per pending symbol)
-│       ├── ohlcv_daily.json            ← Mon-Fri 15:00 PDT
-│       ├── ohlcv_intraday.json         ← Mon-Fri hourly :05 (7-13 PDT)
-│       ├── options_daily.json          ← Mon-Fri 14:55 PDT
+│       ├── alpaca_ohlcv_daily.json     ← Mon-Fri 15:00 PDT (1d bars w/ trade_count, VWAP)
+│       ├── alpaca_ohlcv_intraday.json ← Mon-Fri hourly :05 (7-13 PDT) (15m + 5m bars)
+│       ├── alpaca_options_daily.json   ← Mon-Fri 14:55 PDT (options + greeks + bid/ask)
+│       ├── ohlcv_daily.json            ← DEACTIVATED (replaced by alpaca_ohlcv_daily)
+│       ├── ohlcv_intraday.json         ← DEACTIVATED (replaced by alpaca_ohlcv_intraday)
+│       ├── options_daily.json          ← DEACTIVATED (replaced by alpaca_options_daily)
 │       ├── derived_daily.json          ← Mon-Fri 15:30 PDT (7 nodes)
 │       ├── fundamentals_daily.json     ← Mon-Fri 16:00 PDT
 │       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
 │       ├── signals_daily.json          ← Mon-Fri 16:30 PDT (includes daily backtest)
 │       ├── intraday_signal_5m.json     ← Mon-Fri every 5 min 6-12 PDT
+│       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert)
+│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
-│       ├── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
-│       └── ema_crossover_detector.json  ← Mon-Fri 7:00 PDT (detect + alert)
+│       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
 │   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
 │   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
@@ -230,9 +246,12 @@ ClawStreetBot/
 │   ├── explore_data.py
 │   ├── explore_options.py
 │   ├── options_analysis.py
-│   ├── ingest_polygon_ohlcv.py        ← Phase 2: Polygon data ingestion
-│   ├── ingest_polygon_options.py      ← Phase 2: Options + greeks ingestion
-│   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion
+│   ├── ingest_alpaca_ohlcv.py        ← ★ Alpaca OHLCV ingestion (1d/15m/5m) with trade_count + VWAP
+│   ├── ingest_alpaca_options.py       ← ★ Alpaca options chains + greeks + bid/ask
+│   ├── fetch_alpaca_snapshot.py        ← ★ Real-time stock + best option snapshot at signal time
+│   ├── ingest_polygon_ohlcv.py        ← DECOMMISSIONED (replaced by ingest_alpaca_ohlcv.py)
+│   ├── ingest_polygon_options.py      ← DECOMMISSIONED (replaced by ingest_alpaca_options.py)
+│   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion (still active)
 │   ├── ingest_rss_news.py              ← Phase 2: RSS + Reddit scraper
 │   ├── compute_iv_rank.py             ← Phase 2: IV rank calculation
 │   ├── compute_realized_vol.py        ← Phase 2: Realized volatility (20d/5d + IV-RV spread)
@@ -243,8 +262,9 @@ ClawStreetBot/
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
 │   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
-│   ├── detect_ema_crossover.py        ← Phase 5A: EMA 9/21 crossover + ADX>25 detector
-│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender for signal_alerts
+│   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector
+│   ├── detect_ema_crossover_15m.py    ← ★ Phase 5A: 15m EMA crossover + real-time Alpaca snapshot enrichment
+│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (shows bid/ask/mid from snapshot)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
@@ -265,7 +285,7 @@ ClawStreetBot/
 
 ## Current Phase
 
-All phases 1-4 complete. Phase 5A (signal detection) in progress.
+All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpaca migration complete.**
 
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
@@ -277,6 +297,13 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress.
 - [x] Postgres MCP server configured for Claude Code
 - [x] Polygon.io credentials verified (REST API + Flat Files S3)
 - [x] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres)
+- [x] Alpaca data migration — OHLCV + options ingestion moved from Polygon to Alpaca (free tier)
+- [x] Alpaca OHLCV ingestion (`ingest_alpaca_ohlcv.py`) — 1d/15m/5m with trade_count + VWAP
+- [x] Alpaca options ingestion (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
+- [x] Real-time snapshot enrichment (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
+- [x] 15m EMA crossover detector (`detect_ema_crossover_15m.py`) — intraday signals with live option data
+- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
+- [x] DB migrations — trade_count/vwap on ohlcv, bid/ask on greeks
 - [x] IV rank / realized vol / GEX-DEX computed
 - [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
 - [x] Greeks filtering engine (IV regime, delta, theta-budget per contract)
@@ -284,7 +311,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress.
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (13 workflows + wollomatic socket-proxy)
+- [x] n8n scheduler (17 workflows, 14 active, 3 deactivated)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
@@ -302,11 +329,15 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress.
 ### Phase 5A: Signal Detection (in progress)
 - [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes `market.signal_alerts`
 - [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
-- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts (pending bot token)
+- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
 - [x] Backfill runner (`backfill_runner.py`) — n8n wrapper replacing inline shell in backfill_pending workflow
+- [x] **Alpaca data migration** — OHLCV + options moved from Polygon ($108/mo) to Alpaca (free)
+- [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals + real-time option enrichment
+- [x] **Real-time snapshot** (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
+- [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
-- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
+- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
 
 ### Phase 5B: Exit Monitors & Alert Delivery (upcoming)
 - [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration

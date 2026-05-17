@@ -8,7 +8,7 @@ tags: [api, alpaca, trading, mOC]
 
 ## Overview
 
-[Alpaca](https://alpaca.markets) is our broker and market data provider. We use the official `alpaca-py` SDK (v0.43.4).
+[Alpaca](https://alpaca.markets) is our **broker and primary market data provider**. We use the official `alpaca-py` SDK (v0.43.4). As of Phase 5, Alpaca provides all OHLCV bars, options chains, greeks, and real-time snapshots — replacing Polygon.io for these data types (see [[Alpaca Data Pipeline]] for migration details).
 
 - **SDK:** [alpacahq/alpaca-py](https://github.com/alpacahq/alpaca-py)
 - **Docs:** [https://docs.alpaca.markets](https://docs.alpaca.markets)
@@ -263,7 +263,7 @@ print(f"Market open: {clock.is_open}")
 
 ## See Also
 
-- [[Alpaca Data Pipeline]] — Our ingestion scripts
+- [[Alpaca Data Pipeline]] — Our ingestion scripts, n8n workflows, and migration details
 - [[Trading Strategies]] — Strategy implementation
 - [[Risk Framework]] — Position sizing and limits
 

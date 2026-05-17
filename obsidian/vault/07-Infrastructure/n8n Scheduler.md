@@ -14,58 +14,71 @@ ClawStreetBot uses **n8n** as its workflow scheduler, running inside Docker alon
 - **Credentials:** See `.env.n8n` (gitignored)
 - **API:** REST API at `<n8n-url>/api/v1/` with `X-N8N-API-KEY` header
 
-## Workflows (12 total)
+## Workflows (17 total, 14 active, 3 deactivated)
 
 ### Core Sync
-| Workflow | Schedule (ET) | Script | Purpose |
-|----------|---------------|--------|---------|
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
 | `watchlist_sync` | Every 5 min | `setup_watchlist.py` | Sync `config/watchlist.yml` → Alpaca + Postgres |
 | `backfill_pending` | Every 5 min | `backfill_symbol.py` | Pick up symbols with `backfill_status='pending'` and run full ingestion |
 
-### Daily Data Ingestion
-| Workflow | Schedule (ET) | Script | Purpose |
-|----------|---------------|--------|---------|
-| `options_daily` | Mon–Fri 17:55 | `ingest_polygon_options.py` | Options contracts + greeks snapshot |
-| `ohlcv_daily` | Mon–Fri 18:00 | `ingest_polygon_ohlcv.py --timeframe 1d` | Daily OHLCV bars |
-| `fundamentals_daily` | Mon–Fri 19:00 | `ingest_polygon_fundamentals.py` | Quarterly financials (revenue, EPS, market cap) |
+### Alpaca Data Ingestion (Primary)
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `alpaca_ohlcv_daily` | Mon–Fri 15:00 | `ingest_alpaca_ohlcv.py --timeframe 1d` | Daily OHLCV bars (1d) with trade_count + VWAP |
+| `alpaca_ohlcv_intraday` | Mon–Fri hourly :05 (7–13) | `ingest_alpaca_ohlcv.py --timeframe 15m` then `--timeframe 5m` | Intraday bars (15m + 5m) |
+| `alpaca_options_daily` | Mon–Fri 14:55 | `ingest_alpaca_options.py --all` | Options chains + greeks + bid/ask snapshots |
 
-### Intraday
-| Workflow | Schedule (ET) | Script | Purpose |
-|----------|---------------|--------|---------|
-| `ohlcv_intraday` | Mon–Fri hourly :05 (09–16) | `ingest_polygon_ohlcv.py --timeframe 5m` + `--timeframe 15m` | Intraday bars |
-| `rss_news_scanner` | Mon–Fri every 30m 9:30–16:00 | `ingest_rss_news.py` | RSS + Reddit scraper (articles + posts) |
-| `intraday_signal_5m` | Mon–Fri every 5 min 9:30–16:00 | `intraday_signal.py` | Re-score tech factor from 5m bars, threshold alerts |
+### Polygon Data (Secondary — Fundamentals Only)
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `fundamentals_daily` | Mon–Fri 16:00 | `ingest_polygon_fundamentals.py` | Quarterly financials (revenue, EPS, market cap) |
+
+### ⛔ Deactivated Polygon Workflows (Replaced by Alpaca)
+| Workflow | Former Schedule | Replacement |
+|----------|---------------|-------------|
+| `ohlcv_daily` | Mon–Fri 15:00 | `alpaca_ohlcv_daily` |
+| `ohlcv_intraday` | Mon–Fri hourly :05 | `alpaca_ohlcv_intraday` |
+| `options_daily` | Mon–Fri 14:55 | `alpaca_options_daily` |
+
+### Intraday Signal Detection
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `intraday_signal_5m` | Mon–Fri every 5 min 6–12 | `intraday_signal.py` | Re-score tech factor from 5m bars, threshold alerts |
+| `ema_crossover_15m` | Mon–Fri every 15 min 6:30–13 | `detect_ema_crossover_15m.py` | 15m EMA crossover + real-time Alpaca snapshot enrichment |
+| `rss_news_scanner` | Mon–Fri every 30 min 6–13 | `ingest_rss_news.py` | RSS + Reddit scraper (articles + posts) |
 
 ### Derived Compute Chain
-| Workflow | Schedule (ET) | Scripts (chained) | Purpose |
-|----------|---------------|-------------------|---------|
-| `derived_daily` | Mon–Fri 18:30 | `compute_realized_vol.py` → `compute_iv_rank.py` → `compute_gex_dex.py` → `compute_technical_indicators.py` → `compute_greeks_filter.py` → `compute_iv_outliers.py` | Full derived analytics pipeline |
-| `trend_daily` | Mon–Fri 18:00 | `compute_trend.py` | Multi-timeframe trend detection (micro/intermediate/primary) |
+| Workflow | Schedule (PDT) | Scripts (chained) | Purpose |
+|----------|----------------|-------------------|---------|
+| `derived_daily` | Mon–Fri 15:30 | `compute_realized_vol.py` → `compute_iv_rank.py` → `compute_gex_dex.py` → `compute_technical_indicators.py` → `compute_greeks_filter.py` → `compute_iv_outliers.py` | Full derived analytics pipeline |
+| `trend_daily` | Mon–Fri 11:00 | `compute_trend.py` | Multi-timeframe trend detection (micro/intermediate/primary) |
 
 ### Signal Generation
-| Workflow | Schedule (ET) | Script | Purpose |
-|----------|---------------|--------|---------|
-| `signals_daily` | Mon–Fri 19:30 | `generate_signals.py` → `backtest.py` | Composite signal scoring + daily backtest |
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `ema_crossover_detector` | Mon–Fri 7:00 | `detect_ema_crossover.py` | Daily EMA 9/21 crossover detection → Telegram alert |
+| `signals_daily` | Mon–Fri 16:30 | `generate_signals.py` → `backtest.py` | Composite signal scoring + daily backtest |
 
 ### Weekly
-| Workflow | Schedule (ET) | Script | Purpose |
-|----------|---------------|--------|---------|
-| `regime_weekly` | Sat 11:00 | `regime_backtest.py all` | Regime classification + factor analysis + weight optimization + comparison |
+| Workflow | Schedule (PDT) | Script | Purpose |
+|----------|----------------|--------|---------|
+| `regime_weekly` | Sat 8:00 | `regime_backtest.py all` | Regime classification + factor analysis + weight optimization + comparison |
 
 ### Pipeline Order
 
 The daily pipeline runs in sequence to ensure data dependencies are met:
 
 ```
-17:55  options_daily      → market.options, market.greeks
-18:00  ohlcv_daily        → market.ohlcv (1d bars)
-18:00  trend_daily        → market.trend_status
-18:30  derived_daily      → market.realized_vol → market.iv_rank → market.gex_dex → technical_indicators → greeks_filter → iv_outliers
-19:00  fundamentals_daily → market.fundamentals
-19:30  signals_daily      → trading.signals + backtest
+14:55  alpaca_options_daily → market.options, market.greeks (with bid/ask)
+15:00  alpaca_ohlcv_daily   → market.ohlcv (1d bars with trade_count, VWAP)
+15:00  trend_daily           → market.trend_status
+15:30  derived_daily         → market.realized_vol → market.iv_rank → market.gex_dex → technical_indicators → greeks_filter → iv_outliers
+16:00  fundamentals_daily    → market.fundamentals (Polygon)
+16:30  signals_daily         → trading.signals + backtest
 ```
 
-Intraday bars, intraday signals, RSS scanner, and watchlist syncs run independently in parallel.
+Intraday bars, intraday signals, EMA crossover detection, RSS scanner, and watchlist syncs run independently in parallel.
 
 ### Watchlist Lifecycle
 
@@ -114,7 +127,7 @@ The proxy itself runs:
 
 ## Troubleshooting
 
-- **Workflows not firing:** Check they're Active (toggle in UI or API). Verify schedule cron expressions match Eastern time.
+- **Workflows not firing:** Check they're Active (toggle in UI or API). Verify schedule cron expressions match PDT timezone.
 - **Exec command fails:** Check worker container is running (`docker ps`). Check `.env.db` is present inside worker container. Check proxy logs (`docker logs clawstreet-docker-proxy`).
 - **Duplicate workflows:** Can happen from repeated imports. Delete via API or UI — keep only the active version of each.
 - **n8n owner account:** Must be created via UI at `http://localhost:5678` before API access works. After that, all operations can use the API key.
@@ -122,5 +135,6 @@ The proxy itself runs:
 ## See Also
 
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[Polygon.io API]] — Data ingestion scripts and API details
+- [[Alpaca Data Pipeline]] — Alpaca ingestion scripts (OHLCV, options, snapshots)
+- [[Polygon.io API]] — Still active for fundamentals and flat-file backfill
 - [[Watchlist]] — Tracked symbols and lifecycle

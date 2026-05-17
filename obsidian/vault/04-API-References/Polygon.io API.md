@@ -8,9 +8,14 @@ tags: [api, polygon, massive, market-data, mOC]
 
 ## Overview
 
-[Polygon.io](https://polygon.io) is our **historical and real-time market data provider**, accessed via the **Massive** API platform ([massive.com/docs](https://massive.com/docs)). We use it alongside Alpaca — Alpaca handles **trading and orders**, Massive handles **deep historical data and analysis**.
+[Polygon.io](https://polygon.io) is a **secondary/legacy data source** for ClawStreetBot. As of Phase 5, Alpaca provides all OHLCV bars, options chains, and greeks (see [[Alpaca Data Pipeline]]). Polygon.io is still used for:
 
-> **Massive.com = Polygon.io's API platform.** The endpoints, response structure, and authentication are identical. Only the base URL differs (`api.massive.com` vs `api.polygon.io`). All Polygon.io SDKs and client libraries work with both.
+- **Fundamentals** — quarterly financials via `fundamentals_daily` workflow
+- **Flat Files** — S3 bulk backfill for initial historical data loads
+
+The OHLCV and options ingestion scripts (`ingest_polygon_ohlcv.py`, `ingest_polygon_options.py`) and their n8n workflows (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been **decommissioned** and replaced by Alpaca equivalents.
+
+> **Massive.com = Polygon.io's API platform.** The endpoints, response structure, and authentication are identical. Only the base URL differs (`api.massive.com` vs `api.polygon.io`).
 
 - **API Docs:** [https://massive.com/docs](https://massive.com/docs)
 - **REST Base URL:** `https://api.polygon.io` (or `https://api.massive.com`)
@@ -19,25 +24,19 @@ tags: [api, polygon, massive, market-data, mOC]
 - **Install:** `pip install polygon-api-client`
 - **3 Access Methods:** REST API (on-demand queries), WebSocket (real-time streaming), Flat Files (bulk CSV downloads)
 
-## Why Polygon.io / Massive alongside Alpaca?
+## Why Polygon.io alongside Alpaca? (Updated for Phase 5+)
 
-|| Data | Alpaca | Polygon.io |
-|------|--------|-----------|
+Alpaca is now the **primary data source** for OHLCV, options, and real-time snapshots. Polygon.io remains for fundamentals and backfill only.
+
+| Data | Alpaca (Primary) | Polygon.io (Secondary) |
+|------|-------------------|------------------------|
 | Trading / orders | ✅ Broker | ❌ Data only |
-| Real-time quotes | 15-min delayed (free) | ✅ Real-time (paid) |
-| Historical bars | Limited (2 years free) | ✅ Full history (decades) |
-| Options greeks | ✅ Snapshots only | ✅ Full historical chains + greeks |
-| Fundamentals | ❌ | ✅ Financials, earnings, dividends |
-| News | ✅ Basic | ✅ Full news feed + sentiment |
-| Corporate actions | ✅ Basic | ✅ Splits, dividends, spinoffs |
-| Aggregates (OHLCV) | ✅ Intraday | ✅ All timescales, tick-level |
-| Technical indicators | ❌ | ✅ SMA, EMA, MACD, RSI, BB, ATR |
-| Economy data | ❌ | ✅ Treasuries, CPI, GDP, unemployment |
-| Alternative data | ❌ | ✅ Consumer spending (EU) |
-| Futures/Forex/Crypto | ❌ | ✅ All asset classes |
-| Partner data | ❌ | ✅ Benzinga, ETF Global, TMX |
-
-**Rule:** Alpaca for execution. Polygon.io for research, backtesting, and analysis.
+| OHLCV bars | ✅ Free (1d/15m/5m) | ⛔ Decommissioned for ingestion |
+| Options + greeks | ✅ Free (snapshots + bid/ask) | ⛔ Decommissioned for ingestion |
+| Real-time snapshots | ✅ Free (15-min delayed) | ❌ Paid |
+| Fundamentals | ❌ | ✅ Still active (Polygon) |
+| Flat-file backfill | ❌ | ✅ Still active (S3) |
+| trade_count + VWAP | ✅ In bars | ❌ Not available |
 
 ## Three Access Methods
 

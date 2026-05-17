@@ -25,9 +25,9 @@ ClawStreetBot uses a **PostgreSQL + Redis** stack, both running in Docker.
 
 **`market` schema** — Asset prices, options, and derived analytics
 - `market.assets` — Watchlist symbols with lifecycle columns: `active`, `added_at`, `deactivated_at`, `backfill_status`
-- `market.ohlcv` — OHLCV candle data (1d, 5m, 15m). Index on `(asset_id, timeframe, timestamp DESC)`
+- `market.ohlcv` — OHLCV candle data (1d, 5m, 15m; fk → assets). Includes `trade_count` and `vwap` columns from Alpaca bars
 - `market.options` — Options contracts with strike, expiry, type, settlement
-- `market.greeks` — Greeks snapshots (delta, gamma, theta, vega, IV) per contract/date
+- `market.greeks` — Greeks snapshots (delta, gamma, theta, vega, IV, bid, ask) per contract/date. Bid/ask populated by Alpaca options ingestion
 - `market.iv_rank` — IV rank percentiles per symbol/date (1,576 rows)
 - `market.realized_vol` — 20-day and 5-day annualized realized volatility + IV-RV spread per symbol/date (3,465 rows)
 - `market.gex_dex` — GEX/DEX per strike/expiry per symbol/date (9,350 rows)
