@@ -226,13 +226,14 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
 
     opt_mid = pa._to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
-        sizing = pa.size_option_position(equity, mode, opt_mid)
+        sizing = pa.size_option_position(equity, mode, opt_mid, risk_mode=risk_mode)
     else:
         entry = pa._to_decimal(signal.get("trigger_price"))
         stop  = pa._to_decimal(signal.get("stop_price"))
         if entry is None or stop is None:
             return f"#{sid} SKIP — no trigger_price/stop_price for stock fallback"
-        sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"])
+        sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"],
+                                        risk_mode=risk_mode)
 
     checks = pa.preflight(signal, sizing, mode, conn=conn, equity=equity)
     blocker = hard_fail_reason(signal, sizing, checks)
