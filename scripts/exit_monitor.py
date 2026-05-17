@@ -238,21 +238,51 @@ def decide_exit(
 # DB
 # ---------------------------------------------------------------------------
 
-def fetch_open_positions(conn, position_id: int | None, limit: int) -> list[dict]:
-    """Open positions with no exit in flight, joined to their originating signal."""
-    sql = """
-        SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
-               p.entry_price, p.quantity, p.stop_loss, p.take_profit,
-               p.status AS pos_status, p.opened_at, p.tp1_hit_at,
-               p.sell_order_id, p.exit_submitted_at, p.exit_reason,
-               s.id AS signal_id, s.symbol, s.strategy, s.direction,
-               s.timeframe, s.trigger_price, s.stop_price, s.tp1_price,
-               s.tp2_price, s.option_symbol, s.option_strike, s.option_expiry,
-               s.option_delta, s.option_mid
-          FROM trading.positions p
-          LEFT JOIN market.signal_alerts s ON s.position_id = p.id
-         WHERE p.status = 'open' AND p.sell_order_id IS NULL
+# Columns selected by both fetchers. Kept in one place so the locked single-row
+# fetcher and the unlocked batch fetcher (used by tests) stay in sync.
+_POSITION_SELECT = """
+    SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
+           p.entry_price, p.quantity, p.stop_loss, p.take_profit,
+           p.status AS pos_status, p.opened_at, p.tp1_hit_at,
+           p.sell_order_id, p.exit_submitted_at, p.exit_reason,
+           s.id AS signal_id, s.symbol, s.strategy, s.direction,
+           s.timeframe, s.trigger_price, s.stop_price, s.tp1_price,
+           s.tp2_price, s.option_symbol, s.option_strike, s.option_expiry,
+           s.option_delta, s.option_mid
+      FROM trading.positions p
+      LEFT JOIN market.signal_alerts s ON s.position_id = p.id
+     WHERE p.status = 'open' AND p.sell_order_id IS NULL
+"""
+
+
+def fetch_open_position_locked(conn, position_id: int | None) -> dict | None:
+    """Acquire the next unprocessed open position with a row-level lock.
+
+    Uses SELECT FOR UPDATE OF p SKIP LOCKED so two concurrent monitor runs
+    each see different rows — eliminating the window where both could submit
+    a closing SELL for the same position. The lock is held by the caller's
+    transaction and released by the next commit/rollback.
+
+    The caller must commit (or rollback) before requesting the next row,
+    otherwise the lock is held longer than needed.
     """
+    sql = _POSITION_SELECT
+    params: list = []
+    if position_id is not None:
+        sql += " AND p.id = %s"
+        params.append(position_id)
+    sql += " ORDER BY p.opened_at ASC LIMIT 1 FOR UPDATE OF p SKIP LOCKED"
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, params)
+        return cur.fetchone()
+
+
+def fetch_open_positions(conn, position_id: int | None, limit: int) -> list[dict]:
+    """Plain (unlocked) batch fetch — retained for read-only inspection / tests.
+
+    The live main loop uses fetch_open_position_locked instead.
+    """
+    sql = _POSITION_SELECT
     params: list = []
     if position_id is not None:
         sql += " AND p.id = %s"
@@ -267,6 +297,9 @@ def fetch_open_positions(conn, position_id: int | None, limit: int) -> list[dict
 def stamp_full_close(
     conn, position_id: int, sell_order_id: str, reason: str,
 ) -> None:
+    """Record the close submission. Caller owns the transaction (so the row
+    lock acquired by fetch_open_position_locked stays held through submit
+    and is released on the caller's next commit)."""
     now = datetime.now(timezone.utc)
     with conn.cursor() as cur:
         cur.execute(
@@ -277,11 +310,11 @@ def stamp_full_close(
                 WHERE id = %s""",
             (sell_order_id, now, reason, position_id),
         )
-    conn.commit()
 
 
 def stamp_tp1_hit(conn, position_id: int, reason: str) -> None:
-    """Record that TP1 fired without submitting a partial sell yet (deferred slice)."""
+    """Record that TP1 fired (partial sell action is deferred to a future slice).
+    Caller owns the transaction."""
     now = datetime.now(timezone.utc)
     with conn.cursor() as cur:
         cur.execute(
@@ -291,7 +324,6 @@ def stamp_tp1_hit(conn, position_id: int, reason: str) -> None:
                 WHERE id = %s""",
             (now, reason, position_id),
         )
-    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -437,22 +469,6 @@ def main() -> int:
     args = parser.parse_args()
 
     conn = pa.get_connection()
-    try:
-        rows = fetch_open_positions(conn, args.id, args.limit)
-    except Exception:
-        conn.close()
-        raise
-
-    if not rows:
-        if args.id is not None:
-            print(f"No open position with id={args.id} (no exit in flight).")
-        else:
-            print("No open positions to monitor.")
-        conn.close()
-        return 0
-
-    log.info("Monitoring %d open position(s)%s", len(rows),
-             " (DRY RUN)" if not args.confirm else "")
 
     try:
         trading_client = _trading_client() if args.confirm else None
@@ -465,20 +481,57 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     results: list[str] = []
+    started_logged = False
+
+    # Pull rows one at a time with SELECT FOR UPDATE SKIP LOCKED so two
+    # concurrent monitor runs each see different rows. The lock is held by
+    # this transaction through the decision + submit + stamp, and released
+    # by our commit at the end of each iteration. That eliminates the
+    # double-SELL race that existed when fetch+iterate did a plain SELECT.
     try:
-        for r in rows:
+        while len(results) < args.limit:
             try:
-                results.append(process_one(
-                    conn, trading_client, stock_client, opt_client,
-                    r, dry_run=not args.confirm, verbose=args.verbose, now=now,
-                ))
+                row = fetch_open_position_locked(conn, args.id)
             except Exception:
-                log.exception("Unhandled error monitoring position #%s", r["position_id"])
-                results.append(f"position #{r['position_id']} ERROR — internal")
+                log.exception("Lock fetch failed; aborting run")
+                conn.rollback()
+                break
+
+            if row is None:
+                # No more unlocked rows. Could be: nothing to do, or every
+                # remaining row is held by another monitor instance.
+                conn.commit()
+                break
+
+            if not started_logged:
+                log.info("Monitoring open positions%s",
+                         " (DRY RUN)" if not args.confirm else "")
+                started_logged = True
+
+            try:
+                result = process_one(
+                    conn, trading_client, stock_client, opt_client,
+                    row, dry_run=not args.confirm, verbose=args.verbose, now=now,
+                )
+                # Commit releases the row lock (and persists any stamp_*
+                # UPDATE that ran inside process_one).
+                conn.commit()
+                results.append(result)
+            except Exception:
+                log.exception("Unhandled error monitoring position #%s",
+                              row["position_id"])
+                results.append(f"position #{row['position_id']} ERROR — internal")
                 try:
                     conn.rollback()
                 except Exception:
                     pass
+
+        if not results:
+            if args.id is not None:
+                print(f"No open position with id={args.id} (none unlocked).")
+            else:
+                print("No open positions to monitor.")
+            return 0
     finally:
         conn.close()
 
