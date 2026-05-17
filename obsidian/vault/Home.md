@@ -90,32 +90,35 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [x] Trend-aware intraday adjustments — aligned trend boosts, counter-trend penalizes
 - [x] 5-minute intraday signal refresh — re-scores tech from 5m bars, threshold alerts
 
-**Phase 5A — Signal Detection & Alerts (in progress)** 🔧
-- [x] **EMA crossover detector** (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes to `market.signal_alerts` *(supplementary)*
-- [x] **Signal alerts table** (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
-- [x] **Telegram alert sender** (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
+**Phase 5A — Signal Detection & Alerts ✅**
+- [x] **EMA crossover detector** (`detect_ema_crossover.py`) — 9/21 cross + ADX>25 *(supplementary)*
+- [x] **Signal alerts table** (`015_signal_alerts.sql`) — full trade plan storage
+- [x] **Telegram alert sender** (`alert_telegram.py`) — strategy-specific alerts with bid/ask/mid + 4-button approval keyboard
 - [x] **Alpaca data migration** — OHLCV + options ingestion moved from Polygon ($108/mo) to Alpaca (free); see [[Alpaca Data Pipeline]]
-- [x] **Alpaca OHLCV ingestion** (`ingest_alpaca_ohlcv.py`) — 1d/15m/5m bars with trade_count + VWAP
-- [x] **Alpaca options ingestion** (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
-- [x] **Real-time snapshot** (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
+- [x] **Alpaca OHLCV/options/snapshot ingestion** — `ingest_alpaca_ohlcv.py`, `ingest_alpaca_options.py`, `fetch_alpaca_snapshot.py`
 - [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals with live option enrichment *(supplementary)*
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, VWAP), `018_alpaca_options_columns.sql` (bid, ask)
-- [x] **n8n workflow migration** — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
-- [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY alert mechanism** — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal
-- [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
-- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
-- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = key filter
-- [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume+VWAP
-- [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
-- [ ] **Options chain filter** (`filter_options.py`) — DTE≥30, delta range, theta budget
-- [ ] **Exit Monitors** (see [[Telegram Alert System]])
-  - Price-based exits: TP1/TP2/stop, trailing after TP2
-  - Invalidation exits: EMA reversal, ORB false breakout, thesis break
-  - Greeks deterioration: delta <0.30, theta over budget, IV rank >75%
-  - Time stops: ORB flatten before close, EMA 5-10 day review
-- [ ] **Alert Delivery + Execution** (see [[Telegram Alert System]])
-  - Telegram Y/N approval flow with full trade context (entry + exit plan)
-  - Pre-flight checks: Laws 3/5, PDT, drawdown, greeks filters
-  - Alpaca bracket orders with tiered exits
-  - Risk alerts: drawdown halt, PDT warning, position breach
-  - Entry + exit alerts (not just entry — every position has a close plan)
+- [x] **n8n workflow migration** — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon JSONs deleted
+- [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY** 8-gate BUY signal scanner; silence = no signal
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56)
+- [x] **4-hour de-dup cooldown** in every scanner — prevents per-cron-tick alert spam
+
+**Phase 5B — Execution & Exits ✅**
+- [x] **Telegram approval flow** — 4-button keyboard via `alert_dispatch` cron; `telegram_callback_listener.py` flips `status` and persists `risk_mode`
+- [x] **Pre-flight checks** (`process_approved.py`) — Laws 3/5, PDT (projected, business-day-aware, excludes self-row), drawdown halts (period-start equity + unrealized P&L), greeks filters
+- [x] **Alpaca paper execution** (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing
+- [x] **BUY reconciliation** (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED` + UNIQUE on `alpaca_order_id` / `position_id` (no phantom positions)
+- [x] **Exit monitor** (`exit_monitor.py`) — stop / premium / TP2 / TP1-partial / time-stop (12:45 PDT) / DTE expiry
+- [x] **TP1 50% partial close** — submit, reconcile, reduce position quantity, separate `tp1_realized_pnl`
+- [x] **SELL reconciliation** (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`
+- [x] **Daily equity snapshots** (`snapshot_equity.py` + `equity_snapshot_daily` cron) — drawdown halt denominator
+- [x] DB migrations 020–026 + n8n workflows `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
+
+**Phase 5C — Backlog (deferred)** 🔧
+- [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume + VWAP
+- [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche scale-in
+- [ ] **Per-risk-mode option selection** — scanner currently binds 0.50-0.70 delta at scan time, before the user picks Conservative/Aggressive (audit M1)
+- [ ] **Bracket orders for stock entries** — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
+- [ ] **Trailing stop after TP2** for swing mode — currently TP2 full-closes
+- [ ] **Risk alerts** (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
+- [ ] **Aggressive button UX** — silently promotes a swing setup to day-mode for PDT purposes; surface in Telegram preview before approval

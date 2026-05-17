@@ -49,9 +49,9 @@ tags: [roadmap, mOC]
 - [x] 5-minute intraday signal refresh — re-scores technical factor from 5m bars, threshold alerts
 - [x] Trend-aware intraday adjustments — aligned trend boosts signal, counter-trend penalizes
 
-## Phase 5 — Execution & Alerts (NEXT)
+## Phase 5 — Execution & Alerts
 
-### 5A: Signal Detection & Data Pipeline ✅ (Alpaca migration complete)
+### 5A: Signal Detection & Data Pipeline ✅
 - [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25
 - [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage
 - [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid
@@ -61,26 +61,34 @@ tags: [roadmap, mOC]
   - `fetch_alpaca_snapshot.py` — real-time stock price + best option at signal time
   - `detect_ema_crossover_15m.py` — 15m crossover with live option enrichment
   - 3 new n8n workflows: `alpaca_ohlcv_daily`, `alpaca_ohlcv_intraday`, `alpaca_options_daily`
-  - 3 old Polygon workflows deactivated
+  - Old Polygon ingestion workflow JSONs deleted from repo
   - DB migrations: `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
-- [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
-- [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
-- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
+- [x] **★ Setup scanner** (`scan_setups.py`) — PRIMARY alert mechanism — 8-gate BUY signal scanner; silence = no signal
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56)
 
-### 5B: Order Execution Engine (see [[Order Execution Engine]])
-- [ ] `scripts/execute_trades.py` — full execution engine with subcommands
-- [ ] Pre-flight checks: Laws compliance (20% cap, DTE≥30, PDT, drawdown) + greeks filters
-- [ ] Contract selection: options with DTE≥30, delta in range, cheapest theta
-- [ ] Position sizing: per user rules (5% day, 10% swing, 5%/tranche LT)
-- [ ] Order construction: bracket orders with ATR-based SL, tiered TP
-- [ ] Telegram approval flow (first 30 days human-in-the-loop)
-- [ ] Exit management: SL, TP1/TP2/trail, time stops, greeks exits, thesis stops
-- [ ] PDT tracker module + drawdown circuit breakers
-- [ ] Extend `trading.positions` + `trading.execution_log` for audit trail
-- [ ] Paper-only default, `--mode live` explicit flag
-- [ ] 2 n8n workflows: `execute_daily`, `execute_intraday`
+### 5B: Order Execution Engine ✅ (see [[Order Execution Engine]])
+- [x] **Telegram approval flow** (`alert_telegram.py` + `alert_dispatch` cron) — 4-button keyboard: Approve / Conservative / Aggressive / Deny
+- [x] **Callback listener** (`telegram_callback_listener.py`) — long-poll daemon flips `status` and writes `risk_mode`
+- [x] **Pre-flight checks** (`process_approved.py`) — Laws 3/5, PDT projection (business-day-aware, excludes self-row), drawdown halts using period-start equity + unrealized P&L via Alpaca equity, greeks filters
+- [x] **Alpaca paper execution** (`execute_trade.py`) — `--confirm` required, `client_order_id`-deduped submits, risk_mode-aware sizing
+- [x] **BUY reconciliation** (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED` + UNIQUE indexes on `alpaca_order_id` / `position_id` prevent phantom positions
+- [x] **Exit monitor** (`exit_monitor.py`) — decision tree: stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry; row-level locked with `SELECT FOR UPDATE OF p SKIP LOCKED`
+- [x] **TP1 50% partial close** — submit, reconcile, reduce position quantity; `tp1_realized_pnl` recorded separately from full-close P&L
+- [x] **SELL reconciliation** (`reconcile_exits.py`) — closes position, records `realized_pnl`, flips signal_alerts to `status='exited'`
+- [x] **Daily equity snapshots** (`snapshot_equity.py` + `equity_snapshot_daily` cron) — drawdown halt denominator (`market.equity_snapshots`)
+- [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique
+- [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
 
-### 5C: Monitoring & Dashboards (see [[Monitoring & Dashboards]])
+### 5C: Backlog (deferred)
+- [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume + VWAP
+- [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche scale-in
+- [ ] Per-risk-mode option selection — scanner currently binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)
+- [ ] Bracket orders for stock entries — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
+- [ ] Trailing stop after TP2 for swing mode — currently TP2 full-closes
+- [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
+- [ ] Aggressive button UX — currently silently promotes a swing setup to day-mode for PDT purposes; surface in Telegram preview before approval
+
+### 5D: Monitoring & Dashboards (see [[Monitoring & Dashboards]])
 - [ ] Materialized views for dashboard queries (portfolio, signals, risk, freshness)
 - [ ] `scripts/dashboard_api.py` — FastAPI read-only JSON endpoints
 - [ ] HTML dashboard: positions, signals, context, pipeline, risk
