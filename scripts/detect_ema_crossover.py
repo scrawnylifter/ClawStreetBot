@@ -262,7 +262,11 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
         gex_row = cur.fetchone()
         net_gex = float(gex_row[0]) if gex_row and gex_row[0] else None
 
-        # Best option contract (DTE≥30, delta 0.50-0.70, calls for bullish / puts for bearish)
+        # Best option contract (DTE≥30, |delta| 0.50-0.70, calls for bullish /
+        # puts for bearish). Alpaca returns negative delta for puts so we
+        # filter on ABS(delta) plus a sign check that matches the contract type
+        # (mirror of fetch_alpaca_snapshot.select_best_option). Without this
+        # sign check, bearish signals returned no option contract.
         contract_type = 'C' if direction == 'bullish' else 'P'
         cur.execute("""
             SELECT o.occ_symbol, o.strike, o.expiration,
@@ -273,8 +277,10 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
               AND o.expiration >= %s + INTERVAL '30 days'
               AND o.contract_type = %s
               AND g.delta IS NOT NULL
-              AND g.delta BETWEEN 0.50 AND 0.70
-            ORDER BY g.theta ASC, ABS(g.delta - 0.60) ASC
+              AND ABS(g.delta) BETWEEN 0.50 AND 0.70
+              AND ((o.contract_type = 'C' AND g.delta > 0)
+                OR (o.contract_type = 'P' AND g.delta < 0))
+            ORDER BY g.theta ASC, ABS(ABS(g.delta) - 0.60) ASC
             LIMIT 1
         """, (cross_date, symbol, cross_date, contract_type))
         option_row = cur.fetchone()
