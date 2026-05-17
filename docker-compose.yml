@@ -67,6 +67,7 @@ services:
     environment:
       - POSTGRES_HOST=postgres
       - PYTHONPATH=/app
+      - TZ=America/Los_Angeles
     volumes:
       - ./scripts:/app/scripts:ro
       - ./config:/app/config:ro
