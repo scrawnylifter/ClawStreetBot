@@ -26,7 +26,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/options_analysis.py` — options greeks/IV analysis
 - `python scripts/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01` — run backtest
 - `python scripts/generate_signals.py --all` — generate daily signals
-- `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars)
+- `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars, dual-write to signal_alerts)
 - `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
 - `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers (supplementary)
 - `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot (supplementary)
@@ -91,7 +91,7 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner, liquidity_sweep)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at)
 - `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
 - `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
 - `trading.backtest_liquidity_trades` — liquidity sweep backtest individual trades
@@ -227,6 +227,7 @@ ClawStreetBot/
 │   ├── 017_ohlcv_alpaca_columns.sql  ← trade_count, vwap for Alpaca bars
 │   ├── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
 │   └── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
+│   └── 020_alert_lifecycle.sql     ← alert approval lifecycle (status enum, executed_at, approval columns)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -248,6 +249,7 @@ ClawStreetBot/
 │       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert, supplementary)
 │       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
+│       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -272,11 +274,12 @@ ClawStreetBot/
 │   ├── compute_iv_outliers.py          ← Phase 2: 3σ z-score IV outlier flags
 │   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
 │   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
-│   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts
+│   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts (dual-write: trading.signals + market.signal_alerts)
 │   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
-│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
-│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (shows bid/ask/mid from snapshot)
+│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R + volume_ratio, trend context, GEX)
+│   ├── alert_telegram.py              ← Phase 5A: Telegram alert sender (inline keyboard for approval/deny)
+│   ├── telegram_callback_listener.py  ← Phase 5B: Long-poll listener for Telegram callback queries (approve/deny)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
