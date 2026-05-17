@@ -16,10 +16,7 @@
       "name": "Hourly :05 6:30-13:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        240,
-        300
-      ]
+      "position": [240, 300]
     },
     {
       "parameters": {
@@ -29,10 +26,17 @@
       "name": "ingest 15m bars (Alpaca)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [
-        520,
-        300
-      ]
+      "position": [520, 240]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_alpaca_ohlcv.py --timeframe 5m"
+      },
+      "id": "run5m",
+      "name": "ingest 5m bars (Alpaca)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 360]
     }
   ],
   "connections": {
@@ -41,6 +45,11 @@
         [
           {
             "node": "ingest 15m bars (Alpaca)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "ingest 5m bars (Alpaca)",
             "type": "main",
             "index": 0
           }

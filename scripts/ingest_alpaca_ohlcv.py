@@ -70,12 +70,14 @@ DB_CONFIG = {
 TIMEFRAMES: dict[str, TimeFrame] = {
     "1d":  TimeFrame.Day,
     "15m": TimeFrame(15, TimeFrameUnit.Minute),
+    "5m":  TimeFrame(5, TimeFrameUnit.Minute),
 }
 
 # Default backfill window per timeframe when ingest_state has no prior entry.
 DEFAULT_DAYS = {
     "1d":  730,   # ~2 years
     "15m": 60,
+    "5m":  30,    # ~1 month (Alpaca limits intraday bars)
 }
 
 SOURCE = "alpaca_ohlcv"
