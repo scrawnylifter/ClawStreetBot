@@ -77,13 +77,15 @@ def load_env(name: str) -> dict[str, str]:
 
 
 def get_connection():
+    # POSTGRES_HOST is set by docker-compose (=postgres) but not in .env.db, so
+    # the OS env wins for host/port. The credentials always come from the file.
     cfg = load_env("db")
     return psycopg2.connect(
-        host=cfg.get("POSTGRES_HOST", "localhost"),
-        port=int(cfg.get("POSTGRES_PORT", "5432")),
-        user=cfg.get("POSTGRES_USER", "clawstreet"),
-        password=cfg.get("POSTGRES_PASSWORD", ""),
-        dbname=cfg.get("POSTGRES_DB", "clawstreet"),
+        host=os.environ.get("POSTGRES_HOST") or cfg.get("POSTGRES_HOST") or "localhost",
+        port=int(os.environ.get("POSTGRES_PORT") or cfg.get("POSTGRES_PORT") or 5432),
+        user=cfg.get("POSTGRES_USER") or os.environ.get("POSTGRES_USER", "clawstreet"),
+        password=cfg.get("POSTGRES_PASSWORD") or os.environ.get("POSTGRES_PASSWORD", ""),
+        dbname=cfg.get("POSTGRES_DB") or os.environ.get("POSTGRES_DB", "clawstreet"),
     )
 
 

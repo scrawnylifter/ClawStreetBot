@@ -1,0 +1,52 @@
+{
+  "name": "reconcile_orders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "* 6-14 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every minute market hours +1h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/reconcile_orders.py"
+      },
+      "id": "run",
+      "name": "reconcile BUY fills",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Every minute market hours +1h": {
+      "main": [
+        [
+          {
+            "node": "reconcile BUY fills",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 120,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": true
+}
