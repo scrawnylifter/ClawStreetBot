@@ -327,7 +327,7 @@ def count_day_trades(
             WITH realized AS (
                 SELECT COUNT(*) AS n
                 FROM trading.positions
-                WHERE status IN ('closed', 'filled')
+                WHERE status = 'closed'
                   AND opened_at IS NOT NULL
                   AND closed_at IS NOT NULL
                   AND opened_at >= NOW() - INTERVAL '1 day' * %s

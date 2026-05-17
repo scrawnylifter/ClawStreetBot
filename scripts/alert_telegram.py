@@ -44,7 +44,7 @@ def get_connection():
         host=conn_params.get("POSTGRES_HOST", "postgres"),
         user=conn_params.get("POSTGRES_USER", "clawstreet"),
         password=conn_params.get("POSTGRES_PASSWORD", ""),
-        dbname=conn_params.get("POSTGRES_DB", "clawstreetbot"),
+        dbname=conn_params.get("POSTGRES_DB", "clawstreet"),
     )
 
 
@@ -612,52 +612,10 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Fetch unsent signals
-    query = """
-        SELECT id, symbol, strategy, direction, status, regime,
-               trigger_price, ema_9, ema_21, adx, rsi, atr_14, volume_ratio,
-               composite_score,
-               stop_price, tp1_price, tp2_price, risk_reward,
-               micro_trend, intermediate_trend, primary_trend,
-               trend_score, ema_stack, invalidation,
-               option_symbol, option_strike, option_expiry,
-               option_delta, option_theta,
-               option_bid, option_ask, option_mid,
-               iv_rank, iv_rv_spread, net_gex,
-               timeframe, daily_trend, daily_ema_position,
-               intraday_ema_9, intraday_ema_21,
-               created_at
-        FROM market.signal_alerts
-        WHERE telegram_sent = FALSE AND status = 'new'
-    """
-    params = []
-    if args.strategy:
-        query += " AND strategy = %s"
-        params.append(args.strategy)
-    query += " ORDER BY created_at DESC LIMIT %s"
-    params.append(args.limit)
-
-    cur.execute(query, params)
-    rows = cur.fetchall()
-
-    if not rows:
-        print("No new unsent signals found.")
-        conn.close()
-        return
-
-    print(f"Found {len(rows)} unsent signal(s)")
-
-    # Load Telegram config
-    tg_config = get_telegram_config()
-    tg_token = tg_config.get("TELEGRAM_BOT_TOKEN")
-    tg_chat_id = tg_config.get("TELEGRAM_CHAT_ID")
-
-    if not args.dry_run and (not tg_token or not tg_chat_id):
-        log.error("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in .env.telegram")
-        print("Can't send: missing Telegram config. Use --dry-run to preview.")
-        conn.close()
-        return
-
+    # Pull one row at a time with FOR UPDATE SKIP LOCKED so two overlapping
+    # alert_dispatch cron runs (1-min cadence, ~200ms per Telegram send)
+    # never fetch the same row and double-send. The lock is released by
+    # the conn.commit() that follows the UPDATE on each iteration.
     columns = [
         "id", "symbol", "strategy", "direction", "status", "regime",
         "trigger_price", "ema_9", "ema_21", "adx", "rsi", "atr_14", "volume_ratio",
@@ -673,10 +631,48 @@ def main():
         "intraday_ema_9", "intraday_ema_21",
         "created_at",
     ]
+    select_cols = ", ".join(columns)
+    fetch_query = f"""
+        SELECT {select_cols}
+        FROM market.signal_alerts
+        WHERE telegram_sent = FALSE AND status = 'new'
+          AND id <> ALL(%s::int[])
+    """
+    fetch_strategy: str | None = args.strategy
+    if fetch_strategy:
+        fetch_query += " AND strategy = %s"
+    fetch_query += " ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+    # Track rows already visited THIS run so dry-run / send-failure rollbacks
+    # don't re-pick the same row in a busy loop.
+    seen_ids: list[int] = []
+
+    # Load Telegram config
+    tg_config = get_telegram_config()
+    tg_token = tg_config.get("TELEGRAM_BOT_TOKEN")
+    tg_chat_id = tg_config.get("TELEGRAM_CHAT_ID")
+
+    if not args.dry_run and (not tg_token or not tg_chat_id):
+        log.error("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in .env.telegram")
+        print("Can't send: missing Telegram config. Use --dry-run to preview.")
+        conn.close()
+        return
 
     sent_count = 0
-    for row in rows:
+    processed = 0
+    while processed < args.limit:
+        params = [seen_ids]
+        if fetch_strategy:
+            params.append(fetch_strategy)
+        cur.execute(fetch_query, params)
+        row = cur.fetchone()
+        if row is None:
+            # Either nothing to send, or every remaining row is locked by
+            # a concurrent run. Release any implicit transaction.
+            conn.commit()
+            break
+        processed += 1
         signal = dict(zip(columns, row))
+        seen_ids.append(signal["id"])
 
         # Format alert based on strategy
         if signal["strategy"] == "ema_crossover_15m":
@@ -701,6 +697,9 @@ def main():
             print(alert_text)
             print(f"{'='*60}")
             sent_count += 1
+            # Release the FOR UPDATE lock without persisting any change so a
+            # real cron run can still pick this row up.
+            conn.rollback()
             continue
 
         # Send via Telegram with Approve / Deny buttons
@@ -722,6 +721,10 @@ def main():
             sent_count += 1
             log.info("Sent alert for %s %s (msg_id=%s)", signal["symbol"], signal["strategy"], msg_id)
         else:
+            # Telegram send failed — release the lock so the next cron run
+            # can retry. The seen_ids guard keeps us from busy-looping on the
+            # same row within THIS run.
+            conn.rollback()
             log.error("Failed to send alert for %s %s", signal["symbol"], signal["strategy"])
 
     cur.close()

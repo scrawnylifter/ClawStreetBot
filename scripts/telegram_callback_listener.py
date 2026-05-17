@@ -259,10 +259,14 @@ def handle_callback(
         return
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # FOR UPDATE so a rapid double-tap (e.g. Approve then Aggressive
+        # within ~50ms) serializes: the second callback blocks here until
+        # the first commits, then hits the 'already actioned' branch
+        # below instead of silently overwriting risk_mode.
         cur.execute(
             """SELECT id, symbol, strategy, direction, status, user_action,
                       telegram_msg_id
-                 FROM market.signal_alerts WHERE id = %s""",
+                 FROM market.signal_alerts WHERE id = %s FOR UPDATE""",
             (signal_id,),
         )
         row = cur.fetchone()
@@ -270,6 +274,7 @@ def handle_callback(
         if row is None:
             log.warning("Callback for unknown signal_id=%s", signal_id)
             answer_callback(token, cb_id, "Signal not found.")
+            conn.rollback()
             return
 
         # Idempotency: only 'new' rows are actionable.
@@ -283,6 +288,7 @@ def handle_callback(
             # Make sure the buttons are gone even if we got here by accident.
             if row["telegram_msg_id"]:
                 clear_message_keyboard(token, chat_id, row["telegram_msg_id"])
+            conn.rollback()
             return
 
         # Optional sanity check: the message the user pressed should be the
