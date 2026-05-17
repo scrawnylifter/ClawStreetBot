@@ -114,8 +114,16 @@ def send_telegram_message(token: str, chat_id: str, text: str, allowed_chat_id: 
 # Alert formatters (per strategy)
 # ---------------------------------------------------------------------------
 
+def _trend_arrow(val):
+    """Convert trend value to arrow emoji."""
+    if val == "bull":
+        return "🟢↑"
+    elif val == "bear":
+        return "🔴↓"
+    return "➡️"
+
 def format_ema_crossover_alert(signal: dict) -> str:
-    """Format an EMA crossover signal as a Phase 5A trade alert."""
+    """Format an EMA crossover signal as a clean, readable trade alert."""
     symbol = signal["symbol"]
     direction = signal["direction"]
     price = signal["trigger_price"]
@@ -125,96 +133,92 @@ def format_ema_crossover_alert(signal: dict) -> str:
     rr = signal["risk_reward"]
     adx = signal["adx"]
     rsi = signal["rsi"]
-    atr = signal["atr_14"]
     regime = signal["regime"]
 
-    emoji = "📈" if direction == "bullish" else "📉"
-    direction_label = "Bullish 9/21 cross confirmed" if direction == "bullish" else "Bearish 9/21 cross confirmed"
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    side = "LONG" if direction == "bullish" else "SHORT"
 
+    # --- Header ---
     lines = [
-        f"{emoji} <b>EMA CROSSOVER — {symbol}</b>",
-        "",
-        f"Signal: {direction_label}",
-        f"Price: ${price:.2f} | ATR(14): ${atr:.2f}",
-        f"Stop: ${stop:.2f} (ATR × 2.0 {'below' if direction == 'bullish' else 'above'})",
-        f"TP1: ${tp1:.2f} (+30%) | TP2: ${tp2:.2f} (+50%) | Trail after TP2",
-        f"R:R: {rr:.1f}:1 ✅",
-        f"ADX: {adx:.0f} (trending ✅) | RSI: {rsi:.0f}",
+        f"{emoji} <b>{symbol} — EMA Cross {side}</b>",
+        f"{'─' * 30}",
     ]
 
-    # Trend context
+    # --- Trade Plan ---
+    lines.append(f"<b>Entry:</b>  ${price:.2f}")
+    lines.append(f"<b>Stop:</b>   ${stop:.2f} (ATR×2 {'below' if direction == 'bullish' else 'above'} entry)")
+    lines.append(f"<b>TP1:</b>    ${tp1:.2f} (+30%)  |  <b>TP2:</b> ${tp2:.2f} (+50%, then trail)")
+    rr_check = "✅" if rr >= 3 else "⚠️"
+    lines.append(f"<b>R:R:</b>    {rr:.1f}:1 {rr_check}")
+
+    # --- Why this signal? ---
+    lines.append(f"\n<b>Why:</b> 9/21 EMA crossed {'above' if direction == 'bullish' else 'below'} with ADX={adx:.0f} (trending)")
+
+    # Trend alignment
     micro = signal.get("micro_trend", "?")
     inter = signal.get("intermediate_trend", "?")
     prim = signal.get("primary_trend", "?")
-    trend_symbols = []
-    for t in [micro, inter, prim]:
-        if t == "bull":
-            trend_symbols.append("↑")
-        elif t == "bear":
-            trend_symbols.append("↓")
-        else:
-            trend_symbols.append("→")
-    trend_str = " ".join(trend_symbols)
-    lines.append(f"Trend: micro{trend_symbols[0]} inter{trend_symbols[1]} primary{trend_symbols[2]}")
+    lines.append(f"<b>Trend:</b> short {micro} | mid {inter} | long {prim}")
 
-    # IV rank
+    # Regime
+    regime_emoji = "🟢" if regime == "bull" else ("🔴" if regime == "bear" else "⚪")
+    lines.append(f"<b>Regime:</b> {regime_emoji} {regime}")
+
+    # --- Options context ---
+    context_bits = []
+
+    # IV rank — plain English
     iv_rank = signal.get("iv_rank")
     if iv_rank is not None:
         if iv_rank < 30:
-            iv_zone = "buy zone ✅"
+            context_bits.append(f"IV rank {iv_rank:.0f}% → cheap premium (good for buying)")
         elif iv_rank < 50:
-            iv_zone = "moderate"
+            context_bits.append(f"IV rank {iv_rank:.0f}% → moderate premium")
         else:
-            iv_zone = "expensive ⚠️"
-        lines.append(f"IV Rank: {iv_rank:.0f}% ({iv_zone})")
+            context_bits.append(f"IV rank {iv_rank:.0f}% → expensive premium (consider selling)")
 
-    # IV-RV spread
+    # IV-RV spread — what it means for you
     iv_rv = signal.get("iv_rv_spread")
     if iv_rv is not None:
         if iv_rv < -0.15:
-            spread_note = "IV cheap vs RV ✅"
+            context_bits.append(f"Options are cheap vs actual vol ({iv_rv:+.2f}) — good time to buy")
         elif iv_rv > 0.15:
-            spread_note = "IV expensive vs RV ⚠️"
+            context_bits.append(f"Options are pricey vs actual vol ({iv_rv:+.2f}) — consider credit spreads")
         else:
-            spread_note = "fair value"
-        lines.append(f"IV-RV Spread: {iv_rv:+.3f} ({spread_note})")
+            context_bits.append(f"IV vs RV fairly priced ({iv_rv:+.2f})")
 
-    # GEX
+    # GEX — dealer positioning
     net_gex = signal.get("net_gex")
     if net_gex is not None:
-        gex_sign = "positive (dealer hedging suppresses vol)" if net_gex > 0 else "negative (dealer hedging amplifies vol)"
-        lines.append(f"Net GEX: ${net_gex:,.0f} ({gex_sign})")
+        if net_gex > 0:
+            context_bits.append(f"Dealers long gamma (${net_gex:,.0f}) → price likely sticks near strikes")
+        else:
+            context_bits.append(f"Dealers short gamma (${net_gex:,.0f}) → expect wider moves")
 
-    # Regime
-    lines.append(f"Regime: {regime}")
+    if context_bits:
+        lines.append("")
+        lines.append("<b>Vol & Gamma:</b>")
+        for bit in context_bits:
+            lines.append(f"  • {bit}")
 
-    # Best option contract
+    # --- Best option contract ---
     opt_sym = signal.get("option_symbol")
     if opt_sym:
         opt_strike = signal.get("option_strike", 0)
         opt_expiry = signal.get("option_expiry", "?")
         opt_delta = signal.get("option_delta", 0)
-        opt_theta = signal.get("option_theta", 0)
         lines.append("")
-        lines.append(f"<b>Best Option</b> (DTE≥30, Delta 0.50-0.70):")
-        lines.append(f"{opt_sym} C${opt_strike:.0f} exp {opt_expiry}")
-        lines.append(f"Delta: {opt_delta:.2f} | Theta: {opt_theta:.3f}/day")
+        lines.append(f"<b>Suggested option:</b> ${opt_strike:.0f}C exp {opt_expiry} (Δ{opt_delta:.2f})")
 
-    # Invalidation conditions
+    # --- When to bail ---
     invalidation = signal.get("invalidation")
     if invalidation:
         if isinstance(invalidation, str):
             invalidation = json.loads(invalidation)
         lines.append("")
-        lines.append("<b>Invalidation conditions:</b>")
+        lines.append("<b>Bail if:</b>")
         for cond in invalidation:
-            lines.append(f"  • {cond}")
-
-    # Approve/reject links (placeholder — will be interactive later)
-    signal_id = signal.get("id", 0)
-    lines.append("")
-    lines.append(f"/approve EMA_{symbol}_{signal_id}")
-    lines.append("/reject")
+            lines.append(f"  ⛔ {cond}")
 
     return "\n".join(lines)
 
