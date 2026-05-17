@@ -251,7 +251,7 @@ ClawStreetBot/
     ├── 04-API-References/   ← Alpaca API, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
     ├── 06-Indicators/       ← (empty, ready for TA docs)
-    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System, Order Execution Engine, Monitoring & Dashboards
+    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System (v2 trade setups), Order Execution Engine, Monitoring & Dashboards
     └── 08-Templates/
 ```
 
@@ -290,9 +290,20 @@ All phases 1-3 complete + Phase 4 (regime/trend) live. Operational pipeline runn
 - [x] Historical signal backfill (7,908 signals across 501 days)
 - [x] Trend-aware intraday adjustments (signal + aligned trend = boost, counter-trend = penalty)
 
-### Remaining Items
-- [ ] Telegram alert system (signals exist but no push notifications)
-- [ ] Order execution engine (still paper-only)
+### Phase 5: Trade Alerts & Execution (in progress)
+- [ ] Strategy detector: EMA crossover (`detect_ema_crossover.py`)
+- [ ] Strategy detector: ORB breakout (`detect_orb.py`)
+- [ ] Strategy detector: Buy the 5% Dip (`detect_dip.py`)
+- [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
+- [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
+- [ ] Alert formatting + Telegram delivery (`alert_telegram.py`) — Y/N approval flow
+- [ ] Pre-flight checks (`preflight_checks.py`) — Laws, PDT, drawdown, greeks
+- [ ] Alpaca execution (`execute_trade.py`) — bracket orders, tiered exits
+- [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach
+- [ ] DB migrations: alert_history, positions, pdt_status
+- [ ] n8n workflows: alerts_daily, alerts_orb, monitor_exits, monitor_greeks, alerts_risk
+
+### Remaining Items (non-Phase 5)
 - [ ] Position sizing calculator (backtest has it, no standalone tool)
 - [ ] Monitoring/dashboards (no visibility beyond raw DB queries)
 - [ ] Regime optimizer needs more diverse data (underperforms static with full history — not a code fix)
