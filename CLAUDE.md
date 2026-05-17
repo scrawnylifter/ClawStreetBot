@@ -44,6 +44,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `.env.alpaca` — Alpaca API key + secret
 - `.env.polygon` — Polygon.io API key + Flat Files S3 credentials (access_id, secret_key, endpoint)
 - `.env.obsidian` — Obsidian config
+- `.env.telegram` — Telegram bot token + chat ID
 - **DB passwords:** avoid `$` or `!` characters (Docker compose interpolation bug)
 
 ## Data Sources
@@ -91,6 +92,9 @@ Key tables (see `db/init/` for full DDL):
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
 - `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner, liquidity_sweep)
+- `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
+- `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
+- `trading.backtest_liquidity_trades` — liquidity sweep backtest individual trades
 
 ## Watchlist (16 symbols)
 
@@ -221,7 +225,8 @@ ClawStreetBot/
 │   ├── 015_signal_alerts.sql     ← Signal alerts (EMA, ORB, Dip trade plans)
 │   ├── 016_signal_alerts_15m.sql ← 15m intraday signal alerts
 │   ├── 017_ohlcv_alpaca_columns.sql  ← trade_count, vwap for Alpaca bars
-│   └── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
+│   ├── 018_alpaca_options_columns.sql ← bid, ask for Alpaca options
+│   └── 019_backtest_liquidity.sql   ← liquidity sweep backtest tables
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -282,17 +287,17 @@ ClawStreetBot/
 │   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
 │   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
 │   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
-└── obsidian/vault/         ← knowledge base (27 notes across 8 folders)
+└── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
-    ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria
-    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy, Liquidity 5m
+    ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria, Unified Entry & Exit Checklist
+    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy, Liquidity 5m, Risk Management Framework
     ├── 03-Market-Research/  ← Watchlist, Backtesting Architecture
-    ├── 04-API-References/   ← Alpaca API, Polygon.io API
+    ├── 04-API-References/   ← Alpaca API, Alpaca Data Pipeline, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
     ├── 06-Indicators/       ← (empty, ready for TA docs)
-    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System (v2 trade setups), Order Execution Engine, Monitoring & Dashboards
-    └── 08-Templates/
+    ├── 07-Infrastructure/   ← Database Architecture, n8n Scheduler, Telegram Alert System, Order Execution Engine, Monitoring & Dashboards
+    └── 08-Templates/        ← Strategy Template, API Reference Template
 ```
 
 ## Current Phase

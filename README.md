@@ -69,6 +69,7 @@ ClawStreetBot/
 ├── .env.polygon                # Polygon.io API key (gitignored)
 ├── .env.obsidian               # Obsidian config (gitignored)
 ├── .env.n8n                    # n8n basic-auth + encryption key (gitignored)
+├── .env.telegram               # Telegram bot token + chat ID (gitignored)
 ├── .venv/                      # Python venv (gitignored)
 ├── config/
 │   └── watchlist.yml           # YAML source-of-truth for tracked symbols
@@ -86,7 +87,8 @@ ClawStreetBot/
 │   ├── 015_signal_alerts.sql     # Signal alerts (EMA, ORB, Dip trade plans)
 │   ├── 016_signal_alerts_15m.sql # 15m intraday signal alerts
 │   ├── 017_ohlcv_alpaca_columns.sql  # trade_count, vwap columns for Alpaca bars
-│   └── 018_alpaca_options_columns.sql # bid/ask columns for Alpaca options snapshots
+│   ├── 018_alpaca_options_columns.sql # bid/ask columns for Alpaca options snapshots
+│   └── 019_backtest_liquidity.sql    # Liquidity sweep backtest tables
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
@@ -113,43 +115,48 @@ ClawStreetBot/
 │       ├── trend_daily.json
 │       └── regime_weekly.json
 ├── scripts/                    # Python scripts
-│   ├── explore_data.py         # Alpaca data explorer
-│   ├── setup_watchlist.py      # Sync config/watchlist.yml → Alpaca + Postgres
-│   ├── backfill_symbol.py      # Full ingestion chain for one symbol
-│   ├── backfill_runner.py      # n8n wrapper: queries pending symbols, runs backfill_symbol.py
-│   ├── ingest_alpaca_ohlcv.py  # Alpaca OHLCV bars → market.ohlcv (1d/15m/5m) ★
-│   ├── ingest_alpaca_options.py # Alpaca options chains + greeks + bid/ask ★
-│   ├── fetch_alpaca_snapshot.py # Real-time stock price + best option at signal time ★
-│   ├── ingest_polygon_ohlcv.py # DECOMMISSIONED — replaced by ingest_alpaca_ohlcv.py
-│   ├── ingest_polygon_options.py # DECOMMISSIONED — replaced by ingest_alpaca_options.py
-│   ├── ingest_polygon_fundamentals.py # Polygon quarterly financials (still active)
-│   ├── ingest_rss_news.py              # RSS + Reddit scraper
+│   ├── alert_telegram.py         # Telegram alert sender (shows bid/ask/mid) ★
+│   ├── backfill_historical_iv.py  # Historical IV backfill
+│   ├── backfill_runner.py        # n8n wrapper: queries pending symbols, runs backfill_symbol.py
+│   ├── backfill_signals.py       # Historical signal backfill across 501 days
+│   ├── backfill_symbol.py        # Full ingestion chain for one symbol
+│   ├── backtest.py                # Backtesting engine
+│   ├── backtest_liquidity.py     # Liquidity sweep v1 backtest (superseded by v3)
+│   ├── backtest_liquidity_v2.py   # Liquidity sweep v2 backtest (superseded by v3)
+│   ├── backtest_liquidity_v3.py  # Liquidity sweep v3 — refinement tests (close-beyond = PF 1.56)
+│   ├── compute_gex_dex.py        # GEX/DEX by strike/expiry + overview per underlying
+│   ├── compute_greeks_filter.py   # IV regime + delta/theta-budget gating
+│   ├── compute_iv_outliers.py     # 3σ z-score IV outlier flags
 │   ├── compute_iv_rank.py        # IV rank from historical IV percentiles
 │   ├── compute_realized_vol.py   # 20d/5d realized volatility + IV-RV spread
-│   ├── compute_gex_dex.py        # GEX/DEX by strike/expiry + overview per underlying
 │   ├── compute_technical_indicators.py # EMA/RSI/MACD/ATR/VWAP/Bollinger
-│   ├── compute_greeks_filter.py   # IV regime + delta/theta-budget gating
 │   ├── compute_trend.py           # Multi-timeframe trend detection
-│   ├── generate_signals.py        # Composite signal scoring (6-factor, 0-100)
-│   ├── intraday_signal.py         # 5-min intraday tech re-score + threshold alerts
 │   ├── detect_ema_crossover.py    # Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py # 15m EMA crossover + real-time snapshot enrichment (supplementary)
-│   ├── scan_setups.py            # ★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
-│   ├── alert_telegram.py          # Telegram alert sender (shows bid/ask/mid) ★
-│   ├── backfill_historical_iv.py  # Historical IV backfill
-│   ├── backtest.py                 # Backtesting engine
-│   ├── regime_backtest.py          # Regime classification + dynamic weights
-│   ├── backtest_liquidity.py       # Liquidity sweep v1 backtest (superseded by v3)
-│   ├── backtest_liquidity_v2.py    # Liquidity sweep v2 backtest (superseded by v3)
-│   ├── backtest_liquidity_v3.py    # Liquidity sweep v3 — refinement tests (close-beyond = PF 1.56)
+│   ├── detect_liquidity_sweep.py   # ★ LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram)
 │   ├── diagnose_liquidity_backtest.py  # v1 diagnostics
-│   └── detect_liquidity_sweep.py   # ★ LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram)
+│   ├── explore_data.py             # Alpaca data explorer
+│   ├── explore_options.py          # Options chain explorer
+│   ├── fetch_alpaca_snapshot.py     # Real-time stock price + best option at signal time ★
+│   ├── generate_signals.py         # Composite signal scoring (6-factor, 0-100)
+│   ├── ingest_alpaca_ohlcv.py      # Alpaca OHLCV bars → market.ohlcv (1d/15m/5m) ★
+│   ├── ingest_alpaca_options.py    # Alpaca options chains + greeks + bid/ask ★
+│   ├── ingest_polygon_fundamentals.py # Polygon quarterly financials (still active)
+│   ├── ingest_polygon_ohlcv.py     # DECOMMISSIONED — replaced by ingest_alpaca_ohlcv.py
+│   ├── ingest_polygon_options.py    # DECOMMISSIONED — replaced by ingest_alpaca_options.py
+│   ├── ingest_rss_news.py              # RSS + Reddit scraper
+│   ├── intraday_signal.py             # 5-min intraday tech re-score + threshold alerts
+│   ├── n8n_api.sh                     # n8n REST API helper (sources .env.n8n)
+│   ├── options_analysis.py            # Options greeks/IV analysis
+│   ├── regime_backtest.py            # Regime classification + dynamic weights
+│   └── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
     ├── 01-Fundamentals/
     │   ├── Laws of Trading.md
-    │   └── Trade Entry Criteria.md
+    │   ├── Trade Entry Criteria.md
+    │   └── Unified Entry & Exit Checklist.md
     ├── 02-Strategies/
     │   ├── Strategies.md
     │   ├── Day Trading.md
@@ -158,12 +165,15 @@ ClawStreetBot/
     │   ├── Greeks Strategy.md
     │   ├── EMA Crossover.md
     │   ├── ORB — Opening Range Breakout.md
-    │   └── Buy the 5% Dip.md
+    │   ├── Buy the 5% Dip.md
+    │   ├── Liquidity — 5m Day Trading.md
+    │   └── Risk Management Framework.md
     ├── 03-Market-Research/
     │   ├── Watchlist.md
     │   └── Backtesting Architecture.md
     ├── 04-API-References/
     │   ├── Alpaca API.md
+    │   ├── Alpaca Data Pipeline.md
     │   └── Polygon.io API.md
     ├── 05-Risk-Management/
     │   ├── Risk Management.md
@@ -172,8 +182,14 @@ ClawStreetBot/
     │   └── Correlation Risk.md
     ├── 06-Indicators/
     ├── 07-Infrastructure/
-    │   └── Database Architecture.md
+    │   ├── Database Architecture.md
+    │   ├── n8n Scheduler.md
+    │   ├── Telegram Alert System.md
+    │   ├── Order Execution Engine.md
+    │   └── Monitoring & Dashboards.md
     └── 08-Templates/
+        ├── API Reference Template.md
+        └── Strategy Template.md
 ```
 
 ## Quick Start
@@ -185,6 +201,7 @@ cp .env.obsidian.example .env.obsidian
 cp .env.alpaca.example .env.alpaca
 cp .env.polygon.example .env.polygon
 cp .env.n8n.example .env.n8n
+cp .env.telegram.example .env.telegram
 # Edit each with real passwords/keys.
 # For .env.n8n, set DOCKER_GID to `stat -c '%g' /var/run/docker.sock`
 # (used by docker-proxy, not n8n itself).
