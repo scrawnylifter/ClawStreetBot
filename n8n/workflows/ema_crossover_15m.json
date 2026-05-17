@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "command": "python /app/scripts/detect_ema_crossover_15m.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/detect_ema_crossover_15m.py"
       },
       "id": "detect-15m",
       "name": "Detect 15m Crossovers",
@@ -36,7 +36,7 @@
     },
     {
       "parameters": {
-        "command": "python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
+        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
       },
       "id": "alert-15m",
       "name": "Send 15m Alerts",

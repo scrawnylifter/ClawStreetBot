@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/compute_trend.py --backfill --days 400"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_trend.py --backfill --days 400"
       },
       "id": "trend",
       "name": "Compute Trend Status",

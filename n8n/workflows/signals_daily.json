@@ -42,7 +42,7 @@
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/backtest.py --mode swing --start 2025-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_swing_365d"
+        "command": "docker exec clawstreet-worker python /app/scripts/backtest.py --mode swing --start 2025-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_swing_365d"
       },
       "id": "swing-backtest",
       "name": "Swing Backtest (365d)",
@@ -55,7 +55,7 @@
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/backtest.py --mode long_term --start 2024-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_lt_730d"
+        "command": "docker exec clawstreet-worker python /app/scripts/backtest.py --mode long_term --start 2024-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_lt_730d"
       },
       "id": "lt-backtest",
       "name": "LT Backtest (730d)",

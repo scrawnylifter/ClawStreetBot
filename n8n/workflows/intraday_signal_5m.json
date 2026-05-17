@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/intraday_signal.py --threshold 60"
+        "command": "docker exec clawstreet-worker python /app/scripts/intraday_signal.py --threshold 60"
       },
       "id": "run",
       "name": "Intraday Signal Refresh",

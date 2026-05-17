@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/regime_backtest.py all --start 2024-05-01 --end $(date -d '-1 day' +%Y-%m-%d) --mode swing"
+        "command": "docker exec clawstreet-worker python /app/scripts/regime_backtest.py all --start 2024-05-01 --end $(date -d '-1 day' +%Y-%m-%d) --mode swing"
       },
       "id": "classify",
       "name": "Classify + Analyze + Optimize + Compare",
