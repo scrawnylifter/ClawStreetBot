@@ -1,0 +1,69 @@
+{
+  "name": "ema_crossover_detector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Weekdays 7:00 PDT (after ohlcv_daily 15:00 UTC)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/detect_ema_crossover.py --lookback 1"
+      },
+      "id": "detect",
+      "name": "detect EMA crossovers",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --strategy ema_crossover"
+      },
+      "id": "alert",
+      "name": "send Telegram alerts",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [800, 300]
+    }
+  ],
+  "connections": {
+    "Weekdays 7:00 PDT (after ohlcv_daily 15:00 UTC)": {
+      "main": [
+        [
+          {
+            "node": "detect EMA crossovers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "detect EMA crossovers": {
+      "main": [
+        [
+          {
+            "node": "send Telegram alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

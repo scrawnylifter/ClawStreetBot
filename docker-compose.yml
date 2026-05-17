@@ -100,7 +100,10 @@ services:
       - -socketpath=/var/run/docker.sock
       - -allowfrom=clawstreet-n8n
       # $$ is the docker-compose escape for a literal $ (regex end-anchor).
-      - -allowGET=^/(v[\d.]+/)?(_ping|version|containers/clawstreet-worker/json)$$
+      # Docker CLI sends HEAD /_ping during handshake; n8n's client also GETs exec/{id}/json
+      # to inspect results. Both must be allowed for `docker exec` to work end-to-end.
+      - -allowGET=^/(v[\d.]+/)?(_ping|version|containers/clawstreet-worker/json|exec/[a-f0-9]+/json)$$
+      - -allowHEAD=^/(v[\d.]+/)?(_ping|version)$$
       - -allowPOST=^/(v[\d.]+/)?(containers/clawstreet-worker/exec|exec/[a-f0-9]+/(start|resize))$$
     read_only: true
     cap_drop: [ALL]
