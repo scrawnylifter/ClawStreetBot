@@ -256,9 +256,6 @@ ClawStreetBot/
 │       ├── alpaca_ohlcv_daily.json     ← Mon-Fri 15:00 PDT (1d bars w/ trade_count, VWAP)
 │       ├── alpaca_ohlcv_intraday.json ← Mon-Fri hourly :05 (7-13 PDT) (15m + 5m bars)
 │       ├── alpaca_options_daily.json   ← Mon-Fri 14:55 PDT (options + greeks + bid/ask)
-│       ├── ohlcv_daily.json            ← DEACTIVATED (replaced by alpaca_ohlcv_daily)
-│       ├── ohlcv_intraday.json         ← DEACTIVATED (replaced by alpaca_ohlcv_intraday)
-│       ├── options_daily.json          ← DEACTIVATED (replaced by alpaca_options_daily)
 │       ├── derived_daily.json          ← Mon-Fri 15:30 PDT (7 nodes)
 │       ├── fundamentals_daily.json     ← Mon-Fri 16:00 PDT
 │       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
@@ -268,10 +265,12 @@ ClawStreetBot/
 │       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
 │       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
+│       ├── alert_dispatch.json          ← ★ Mon-Fri every 1min 6-13 PDT (alert_telegram.py — dispatches unsent rows)
 │       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
 │       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-13 PDT (Alpaca fill state → trading.positions)
 │       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-13 PDT (SELL fill → closed + realized_pnl)
 │       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
+│       ├── equity_snapshot_daily.json    ← Mon-Fri 14:30 PDT (snapshot equity for drawdown denominator)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
 │       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
 ├── scripts/
@@ -357,7 +356,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (18 workflows, 15 active, 3 deactivated)
+- [x] n8n scheduler (22 workflows; decommissioned Polygon JSONs removed in this branch)
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
