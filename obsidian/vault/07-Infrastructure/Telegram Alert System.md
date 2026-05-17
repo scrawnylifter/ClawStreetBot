@@ -1,6 +1,6 @@
 ---
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-19
 tags: [alerts, telegram, strategy, execution, implementation-plan, mOC]
 ---
 
@@ -70,7 +70,9 @@ Invalidation conditions:
   • ADX drops below 20 → EXIT
   • Volume dries up after entry → caution
 
-/approve WDC_EMA_0517
+/approve WDC_EMA_0517        → standard sizing (5% day / 10% swing)
+🔵 Conservative WDC_EMA_0517 → half sizing (2.5% day / 5% swing)
+🟡 Aggressive WDC_EMA_0517    → double sizing (10% day / 20% swing, capped at 20% notional)
 /reject
 ```
 
@@ -711,6 +713,86 @@ Before any alert fires, the strategy detectors MUST produce signals consistent w
 - **Exit conditions in alerts = exit conditions in strategy playbooks**
 
 If any of these disagree, the alerts are lying to you. We'll validate against the last 30 days of backtest data before going live.
+
+---
+
+## Implementation Reference
+
+### Scanner → Alert → Approval Pipeline (as of 2026-05-19)
+
+```
+n8n Schedule
+    │
+    ├── setup_scanner (*/15 6-12 * * 1-5)
+    │   → scripts/scan_setups.py
+    │   → writes market.signal_alerts (strategy='setup_scanner')
+    │   → sends via own Telegram (format_buy_alert)
+    │   → DOES NOT go through alert_telegram.py
+    │
+    ├── liquidity_sweep (*/5 6-12 * * 1-5)
+    │   → scripts/detect_liquidity_sweep.py
+    │   → writes market.signal_alerts (strategy='liquidity_sweep')
+    │   → sends via own Telegram (format_liquidity_alert)
+    │   → DOES NOT go through alert_telegram.py
+    │
+    ├── signals_daily (30 16 * * 1-5) [INACTIVE]
+    │   → scripts/generate_signals.py
+    │   → writes market.signal_alerts (strategy='daily_signal')
+    │   → NO Telegram send (writes DB only)
+    │
+    ├── intraday_signal_5m (*/5 6-12 * * 1-5) [INACTIVE]
+    │   → scripts/intraday_signal.py
+    │   → writes market.signal_alerts (strategy='intraday_5m')
+    │   → sends via own Telegram (format_intraday_alert)
+    │
+    └── Alert dispatcher (manual or on-demand)
+        → scripts/alert_telegram.py --strategy <name>
+        → reads market.signal_alerts WHERE telegram_sent=FALSE
+        → formats per strategy:
+        │   ema_crossover     → format_ema_crossover_alert()
+        │   ema_crossover_15m → format_15m_crossover_alert()
+        │   setup_scanner     → format_setup_scanner_alert()
+        │   liquidity_sweep   → format_liquidity_sweep_alert()
+        │   other             → 3-line generic fallback
+        → sends with ✅ Approve / ❌ Deny keyboard
+        → updates telegram_msg_id
+```
+
+### Key Files & Formatters
+
+| File | Function | Strategy | Format Function |
+|------|----------|----------|-----------------|
+| `scripts/generate_signals.py` | `format_daily_alert()` | `daily_signal` | ⚠️ Not used by alert_telegram.py (formats inline) |
+| `scripts/alert_telegram.py` | `format_ema_crossover_alert()` | `ema_crossover` | ✅ Full trade plan, IV/GEX context, bail rules |
+| `scripts/alert_telegram.py` | `format_15m_crossover_alert()` | `ema_crossover_15m` | ✅ Intraday EMA, daily trend filter |
+| `scripts/alert_telegram.py` | `format_setup_scanner_alert()` | `setup_scanner` | ✅ 8-gate composite, option contract, bail rules |
+| `scripts/alert_telegram.py` | `format_liquidity_sweep_alert()` | `liquidity_sweep` | ✅ Sweep confirmation, backtest stats |
+| `scripts/scan_setups.py` | `format_buy_alert()` | `setup_scanner` | ⚠️ Sends directly (bypasses alert_telegram.py) |
+| `scripts/detect_liquidity_sweep.py` | `format_liquidity_alert()` | `liquidity_sweep` | ⚠️ Sends directly (bypasses alert_telegram.py) |
+| `scripts/intraday_signal.py` | `format_intraday_alert()` | `intraday_5m` | ⚠️ Sends directly (bypasses alert_telegram.py) |
+
+### Known Gap: Dual Alert Path
+
+Three scanners (`scan_setups.py`, `detect_liquidity_sweep.py`, `intraday_signal.py`) send Telegram via their own `send_telegram_message()` — they **do not** go through `alert_telegram.py`. This means:
+
+1. **No approval keyboard** — those scanners don't attach `✅ Approve / ❌ Deny` buttons
+2. **No composite_score persistence** — `scan_setups.py` now writes it (fixed 2026-05-19), but `detect_liquidity_sweep.py` and `intraday_signal.py` may not
+3. **Duplicated formatting logic** — each script has its own formatter; changes must be made in multiple places
+
+**Long-term fix:** Unify all scanners to write to DB first, then route through `alert_telegram.py` for consistent approval keyboards and formatting.
+
+### DB Schema: `market.signal_alerts` Key Columns
+
+| Column | Type | Source | Used In Formatter |
+|--------|------|--------|-------------------|
+| `composite_score` | numeric(5,2) | generate_signals, scan_setups | All formatters |
+| `invalidation` | jsonb | All scanners (list or {rules:[...]}) | All formatters |
+| `volume_ratio` | numeric | scan_setups (via SQL JOIN) | setup_scanner |
+| `net_gex` | numeric | scan_setups (via SQL JOIN) | setup_scanner |
+| `micro_trend` / `intermediate_trend` / `primary_trend` | varchar | trend_status JOIN | All formatters |
+| `option_*` columns | various | Alpaca snapshot (all scanners) | All formatters (nullable) |
+| `iv_rank` | numeric | iv_rank table JOIN | All formatters |
+| `iv_rv_spread` | numeric | realized_vol JOIN | All formatters |
 
 ---
 

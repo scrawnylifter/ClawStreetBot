@@ -96,7 +96,10 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired, approval/chat columns, executed_at, composite_score)
+  - Alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`
+  - ⚠️ `scan_setups.py`, `detect_liquidity_sweep.py`, and `intraday_signal.py` send Telegram directly (bypass `alert_telegram.py` — no approval keyboard)
+  - See [[Telegram Alert System]] in Obsidian for full pipeline diagram
 - `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
 - `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
 - `trading.backtest_liquidity_trades` — liquidity sweep backtest individual trades
@@ -148,7 +151,7 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - No `feed=` param on Alpaca option requests (raises error)
 - Paper tier returns `open_interest=None` sometimes
 
-### PDT Rule (Account < $25K)
+### PDT Rule (Account < $25K) — ✅ ENFORCED IN `process_approved.py`
 - **3 day trades max in a rolling 5-business-day window**
 - 1st DT: normal, planned trade
 - 2nd DT: cautious, only strong setups
@@ -156,6 +159,11 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - **4th DT = PDT ban** — never trigger this
 - Swing positions (held overnight) and long-term holds do NOT count as day trades
 - PDT lock resets when oldest trade in window ages past 5 business days
+
+### Drawdown Halts — ✅ ENFORCED IN `process_approved.py`
+- **10% daily loss** → halt all new trades
+- **20% weekly loss** → halt all new trades
+- **30% monthly loss** → halt all new trades
 
 ### Greeks Strategy (see `02-Strategies/Greeks Strategy.md`)
 - **IV Rank < 25%** → option buying zone (cheap premium)
@@ -380,7 +388,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 ### Phase 5B: Exit Monitors & Alert Delivery (upcoming)
 - [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
 - [ ] Alert formatting + Telegram delivery (Y/N approval flow)
-- [ ] Pre-flight checks (`preflight_checks.py`) — Laws, PDT, drawdown, greeks
+- [x] Pre-flight checks (`process_approved.py`) — Laws, PDT, drawdown, greeks ✅ (PDT counter + drawdown halts implemented)
 - [ ] Alpaca execution (`execute_trade.py`) — bracket orders, tiered exits
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach
 - [ ] DB migrations: alert_history, positions, pdt_status

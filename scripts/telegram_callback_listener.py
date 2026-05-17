@@ -190,17 +190,41 @@ def save_offset(offset: int) -> None:
 # Callback handler
 # ---------------------------------------------------------------------------
 
-def parse_callback_data(data: str) -> tuple[str, int] | None:
-    """'approve:42' -> ('approve', 42).  Returns None on malformed input."""
+def parse_callback_data(data: str) -> tuple[str, int, str] | None:
+    """Parse callback_data from approval keyboard buttons.
+
+    Formats:
+        approve:<id>            -> ('approve', <id>, 'standard')   # backwards compat
+        approve:<id>:standard    -> ('approve', <id>, 'standard')
+        approve:<id>:conservative -> ('approve', <id>, 'conservative')
+        approve:<id>:aggressive  -> ('approve', <id>, 'aggressive')
+        deny:<id>                -> ('deny', <id>, '')
+
+    Returns None on malformed input.
+    """
     if not data or ":" not in data:
         return None
-    action, _, rest = data.partition(":")
+
+    parts = data.split(":")
+    action = parts[0]
+
     if action not in ("approve", "deny"):
         return None
+
     try:
-        return action, int(rest)
-    except ValueError:
+        signal_id = int(parts[1])
+    except (ValueError, IndexError):
         return None
+
+    if action == "deny":
+        return "deny", signal_id, ""
+
+    # approve — extract risk mode
+    risk_mode = parts[2] if len(parts) >= 3 else "standard"
+    if risk_mode not in ("standard", "conservative", "aggressive"):
+        risk_mode = "standard"  # fallback for unknown modes
+
+    return "approve", signal_id, risk_mode
 
 
 def handle_callback(
@@ -224,7 +248,7 @@ def handle_callback(
         answer_callback(token, cb_id, "Unrecognized button.")
         return
 
-    action, signal_id = parsed
+    action, signal_id, risk_mode = parsed
 
     if chat_id != allowed_chat_id:
         log.warning(
@@ -278,12 +302,19 @@ def handle_callback(
                           status           = 'approved',
                           approved_at      = %s,
                           approval_chat_id = %s,
-                          approval_user_id = %s
+                          approval_user_id = %s,
+                          risk_mode        = %s
                     WHERE id = %s""",
-                (now, chat_id, user_id, signal_id),
+                (now, chat_id, user_id, risk_mode, signal_id),
             )
+            # Label for reply message
+            mode_labels = {
+                "conservative": "🔵 CONSERVATIVE",
+                "aggressive": "🟡 AGGRESSIVE",
+                "standard": "✅ APPROVED",
+            }
             verdict_emoji = "✅"
-            verdict_label = "APPROVED"
+            verdict_label = mode_labels.get(risk_mode, "✅ APPROVED")
         else:
             cur.execute(
                 """UPDATE market.signal_alerts
