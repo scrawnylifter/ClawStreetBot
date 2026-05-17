@@ -177,8 +177,25 @@ def get_alpaca_equity() -> Decimal:
 # Mode + sizing
 # ---------------------------------------------------------------------------
 
-def infer_trade_mode(strategy: str | None, timeframe: str | None) -> str:
-    """Map (strategy, timeframe) to one of: day / swing / long_term."""
+def infer_trade_mode(
+    strategy: str | None,
+    timeframe: str | None,
+    risk_mode: str | None = None,
+) -> str:
+    """Map (strategy, timeframe, risk_mode) to one of: day / swing / long_term.
+
+    The user-selected risk_mode overrides strategy/timeframe inference when it
+    expresses explicit intent:
+      - aggressive   → day   (intraday scalp; flatten before close)
+      - conservative → swing (slower hold, lower risk)
+      - standard / None → fall through to strategy/timeframe inference
+    """
+    rm = (risk_mode or "").lower()
+    if rm == "aggressive":
+        return "day"
+    if rm == "conservative":
+        return "swing"
+
     s = (strategy or "").lower()
     t = (timeframe or "").lower()
 
@@ -278,28 +295,66 @@ def size_stock_position(
 # PDT counter & drawdown halts
 # ---------------------------------------------------------------------------
 
-def count_day_trades(conn, window_days: int = PDT_WINDOW_DAYS) -> int:
-    """Count day trades (same-day open+close) in the last N business days.
+def count_day_trades(
+    conn,
+    window_days: int = PDT_WINDOW_DAYS,
+    projected_mode: str = "swing",
+) -> int:
+    """Count realized + projected day trades in the rolling N-business-day window.
 
-    A day trade is defined as: a position that opened AND closed on the same
-    calendar date (US market hours). Swing positions held overnight don't count.
+    FINRA counts a day trade the moment the closing leg executes; this function
+    projects forward conservatively so we never trigger the 4th-DT ban (Law 5).
 
-    This queries trading.positions for closed positions where the open and close
-    happened on the same trading day, within the rolling business-day window.
+    Components of the returned count:
+      1. Realized — closed positions that opened AND closed on the same calendar
+         day, within the last (window_days + 4) days (+4 covers weekend gaps).
+      2. Open intraday today — positions opened today (not yet closed) whose
+         originating signal had an intraday timeframe (5m/15m). These can still
+         become day trades if flatted before close.
+      3. Pending intraday approvals — signal_alerts with timeframe 5m/15m that
+         are 'approved' or 'executing' and were created today.
+      4. The pending trade itself — +1 if projected_mode == 'day'.
     """
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT COUNT(*) AS day_trade_count
-            FROM trading.positions
-            WHERE status IN ('closed', 'filled')
-              AND opened_at IS NOT NULL
-              AND closed_at IS NOT NULL
-              AND opened_at >= NOW() - interval '%s days'
-              AND DATE(opened_at AT TIME ZONE 'America/Los_Angeles')
-                  = DATE(closed_at AT TIME ZONE 'America/Los_Angeles')
-        """, (window_days + 4,))  # +4 to cover weekends in the window
+        cur.execute(
+            """
+            WITH realized AS (
+                SELECT COUNT(*) AS n
+                FROM trading.positions
+                WHERE status IN ('closed', 'filled')
+                  AND opened_at IS NOT NULL
+                  AND closed_at IS NOT NULL
+                  AND opened_at >= NOW() - INTERVAL '1 day' * %s
+                  AND DATE(opened_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(closed_at AT TIME ZONE 'America/Los_Angeles')
+            ),
+            open_intraday_today AS (
+                SELECT COUNT(*) AS n
+                FROM trading.positions p
+                LEFT JOIN market.signal_alerts sa ON sa.position_id = p.id
+                WHERE p.closed_at IS NULL
+                  AND p.opened_at IS NOT NULL
+                  AND DATE(p.opened_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(NOW() AT TIME ZONE 'America/Los_Angeles')
+                  AND sa.timeframe IN ('5m', '15m')
+            ),
+            pending_intraday_today AS (
+                SELECT COUNT(*) AS n
+                FROM market.signal_alerts
+                WHERE status IN ('approved', 'executing')
+                  AND timeframe IN ('5m', '15m')
+                  AND DATE(created_at AT TIME ZONE 'America/Los_Angeles')
+                      = DATE(NOW() AT TIME ZONE 'America/Los_Angeles')
+            )
+            SELECT (SELECT n FROM realized)
+                 + (SELECT n FROM open_intraday_today)
+                 + (SELECT n FROM pending_intraday_today)
+            """,
+            (window_days + 4,),  # +4 to cover weekend gaps in the rolling window
+        )
         row = cur.fetchone()
-        return row[0] if row else 0
+        base = row[0] if row else 0
+    return base + (1 if projected_mode == "day" else 0)
 
 
 def calc_drawdown(conn, equity: Decimal) -> dict[str, Decimal]:
@@ -405,24 +460,39 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
     else:
         out.append((CHECK_WARN, "no option_symbol on signal — falling back to stock trade"))
 
-    # 5) PDT counter — count same-day trades in the last 5 business days
+    # 5) PDT counter — projected count of day trades in the rolling 5-business-day
+    # window. Includes the pending trade (+1 if day mode), open intraday positions
+    # opened today, and pending intraday approvals — see count_day_trades.
     if conn is not None and mode == "day":
-        dt_count = count_day_trades(conn)
-        if dt_count >= PDT_MAX_TOTAL:
+        dt_count = count_day_trades(conn, projected_mode=mode)
+        if dt_count >= PDT_MAX_TOTAL + 1:
+            # Projected count already includes +1 for this trade. Crossing
+            # PDT_MAX_TOTAL means submitting this would be the 4th DT.
             out.append((CHECK_FAIL,
-                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
-                        f"4th would trigger PDT ban (Law 5)"))
-        elif dt_count >= PDT_MAX_NORMAL:
+                        f"PDT: projected {dt_count} day trades in last "
+                        f"{PDT_WINDOW_DAYS} business days — submitting would be "
+                        f"the 4th DT (PDT ban, Law 5)"))
+        elif dt_count >= PDT_MAX_NORMAL + 1:
             out.append((CHECK_WARN,
-                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
-                        f"3rd = emergency only (exit or hedge), no new speculative entries"))
+                        f"PDT: projected {dt_count} day trades in last "
+                        f"{PDT_WINDOW_DAYS} business days — this would be the 3rd "
+                        f"DT (emergency only: exit or hedge, no new speculation)"))
         else:
             out.append((CHECK_PASS,
-                        f"PDT: {dt_count}/{PDT_MAX_TOTAL} day trades in last {PDT_WINDOW_DAYS} business days"))
+                        f"PDT: projected {dt_count}/{PDT_MAX_TOTAL} day trades in "
+                        f"last {PDT_WINDOW_DAYS} business days"))
     elif mode == "day":
         out.append((CHECK_WARN, "PDT: no DB connection — cannot count day trades"))
     else:
-        out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
+        # Swing/long_term don't trigger the PDT counter, but surface the projected
+        # count so the user can see if a same-day flatten would push them over.
+        if conn is not None:
+            dt_count = count_day_trades(conn, projected_mode=mode)
+            out.append((CHECK_PASS,
+                        f"PDT: {dt_count}/{PDT_MAX_TOTAL} projected day trades "
+                        f"(mode={mode}; this trade doesn't count unless flatted today)"))
+        else:
+            out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
 
     # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly
     if conn is not None and equity is not None and equity > 0:
@@ -600,8 +670,9 @@ def render_plan(
 # ---------------------------------------------------------------------------
 
 def process_one(signal: dict, equity: Decimal, verbose: bool, conn=None) -> str:
-    mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
     risk_mode = signal.get("risk_mode") or "standard"
+    mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
+                            risk_mode=risk_mode)
 
     opt_mid = _to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:

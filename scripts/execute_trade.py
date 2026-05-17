@@ -220,7 +220,9 @@ def hard_fail_reason(signal: dict, sizing: dict, checks: list[tuple[str, str]]) 
 def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> str:
     """With --confirm: actually submit. Returns a human-readable status line."""
     sid = signal["id"]
-    mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
+    risk_mode = signal.get("risk_mode") or "standard"
+    mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
+                                risk_mode=risk_mode)
 
     opt_mid = pa._to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
