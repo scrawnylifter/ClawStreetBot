@@ -70,7 +70,9 @@ Invalidation conditions:
   • ADX drops below 20 → EXIT
   • Volume dries up after entry → caution
 
-/approve WDC_EMA_0517
+/approve WDC_EMA_0517        → standard sizing (5% day / 10% swing)
+🔵 Conservative WDC_EMA_0517 → half sizing (2.5% day / 5% swing)
+🟡 Aggressive WDC_EMA_0517    → double sizing (10% day / 20% swing, capped at 20% notional)
 /reject
 ```
 
