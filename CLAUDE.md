@@ -42,6 +42,8 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/reconcile_orders.py --dry-run` — check BUY fill state from Alpaca (dry-run)
 - `python scripts/reconcile_exits.py --dry-run` — check SELL fill state + realized P&L (dry-run)
 - `python scripts/exit_monitor.py --dry-run` — check TP/SL/time-stop exit conditions (dry-run)
+- `python scripts/process_approved.py` — pre-flight checks (PDT, drawdown) + approve/deny signals
+- `python scripts/snapshot_equity.py` — snapshot Alpaca equity for drawdown denominator
 
 ## Credentials (gitignored)
 
@@ -245,7 +247,8 @@ ClawStreetBot/
 │   ├── 022_composite_score.sql      ← composite_score column on signal_alerts
 │   ├── 023_risk_mode.sql            ← risk_mode column on signal_alerts (4-button keyboard)
 │   ├── 024_position_tp1_partial.sql ← TP1 50% partial close columns (tp1_sell_order_id, tp1_filled_*)
-│   └── 025_equity_snapshots.sql     ← daily equity snapshots for drawdown denominator
+│   ├── 025_equity_snapshots.sql     ← daily equity snapshots for drawdown denominator
+│   └── 026_signal_alerts_unique.sql ← unique constraint on signal_alerts (dedup)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -314,7 +317,9 @@ ClawStreetBot/
 │   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (dry-run by default, --confirm to submit)
 │   ├── reconcile_orders.py           ← Phase 5B: Polls Alpaca for BUY fill state → trading.positions
 │   ├── reconcile_exits.py            ← Phase 5B: Polls Alpaca for SELL fill state → closed + realized_pnl
-│   └── exit_monitor.py              ← Phase 5B: TP/SL/time-stop monitor (SELECT FOR UPDATE SKIP LOCKED)
+│   ├── exit_monitor.py              ← Phase 5B: TP/SL/time-stop monitor (SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard)
+│   ├── process_approved.py          ← Phase 5B: Pre-flight checks — PDT counter, drawdown halts, risk_mode → position sizing
+│   ├── snapshot_equity.py           ← Phase 5B: Alpaca equity snapshot for drawdown denominator
 └── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
@@ -330,7 +335,7 @@ ClawStreetBot/
 
 ## Current Phase
 
-All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpaca migration complete.**
+All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execution loop) shipped.**
 
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
@@ -356,7 +361,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler — **22 active workflows** (ingestion, compute, signal detection, alert dispatch, execution, reconciliation, exit monitoring); decommissioned Polygon JSONs deleted
+- [x] n8n scheduler — **22 active workflows** (ingestion, compute, signal detection, alert dispatch, execution, reconciliation, exit monitoring, equity snapshots); decommissioned Polygon JSONs deleted; all 22 currently active, 0 inactive
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
@@ -371,7 +376,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Historical signal backfill (7,908 signals across 501 days)
 - [x] Trend-aware intraday adjustments (signal + aligned trend = boost, counter-trend = penalty)
 
-### Phase 5A: Signal Detection (in progress)
+### Phase 5A: Signal Detection ✅ (complete)
 - [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes `market.signal_alerts`
 - [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
 - [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
@@ -393,13 +398,23 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Telegram alert dispatch (`alert_telegram.py` + `alert_dispatch` n8n cron) — 4-button approval keyboard (Approve / Conservative / Aggressive / Deny)
 - [x] Telegram callback listener (`telegram_callback_listener.py`) — long-poll daemon, writes `risk_mode`
 - [x] Alpaca paper execution (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing
-- [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, partial UNIQUE indexes on `alpaca_order_id` / `position_id`
-- [x] Exit monitor (`exit_monitor.py`) — stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry
+- [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, per-row commit, partial UNIQUE indexes on `alpaca_order_id` / `position_id`
+- [x] Exit monitor (`exit_monitor.py`) — stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry; `seen_ids` livelock guard; `risk_mode`-aware time-stop (aggressive = day-trade flattening)
 - [x] TP1 50% partial close — submit, reconcile, reduce position quantity
 - [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`
 - [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator
 - [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique
 - [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
+
+#### PR #14 — Third-Pass Audit Fixes
+- **CRITICAL** — `exit_monitor` livelock: `fetch_open_position_locked` re-selected the same HOLD row every iteration; fixed with `seen_ids` list passed as `p.id <> ALL(%s)` exclusion
+- **HIGH** — `exit_monitor` ignored `risk_mode` in time-stop: aggressive setups (day-trade scalp) weren't flattened at 12:45 PDT; `risk_mode` now flows through `_POSITION_SELECT` to `decide_exit`
+- **HIGH** — `reconcile_orders` lock leak: PENDING rows held `FOR UPDATE` locks across the entire batch (no per-row commit); added `conn.commit()` after each row
+- **HIGH** — `process_approved` PDT counter referenced dead status `'filled'` (only exists on `signal_alerts`, not `trading_positions`); removed the stale `'filled'` check
+- **MEDIUM** — `alert_telegram` double-send: SELECT-then-UPDATE without row lock let overlapping 1-min crons grab the same row; refactored to one-row-at-a-time `SELECT … FOR UPDATE SKIP LOCKED` + `seen_ids` guard
+- **MEDIUM** — `telegram_callback_listener` double-tap: rapid Approve→Aggressive could both read `status='new'` and the later overwrote `risk_mode`; added `FOR UPDATE` so the second callback blocks then hits "already actioned"
+- **LOW** — `alert_telegram` `POSTGRES_DB` default was `"clawstreetbot"` (typo); corrected to `"clawstreet"` matching all other scripts
+- **LOW** — `.gitignore` mojibake: `Thumbs.db` + `.venv/` concatenated on one line; split into separate entries
 
 ### Phase 5C: Backlog (deferred)
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume + VWAP
@@ -409,6 +424,8 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [ ] Trailing stop after TP2 for swing mode — currently TP2 full-closes
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
 - [ ] Aggressive button UX — currently silently promotes a swing setup to day-mode for PDT purposes; surface this in the Telegram preview before approval
+- [ ] Idempotency keys for Telegram API — `alert_telegram` has no message-id dedup at the API level; relies on DB locking only (audit M5 residual)
+- [ ] Exit-monitor graceful degradation — if Alpaca API is down, HOLD rows accumulate; consider exponential backoff + max-hold timer (audit C1 residual)
 
 ### Remaining Items (non-Phase 5)
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

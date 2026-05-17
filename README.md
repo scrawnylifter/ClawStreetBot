@@ -94,7 +94,8 @@ ClawStreetBot/
 │   ├── 022_composite_score.sql       # composite_score column on signal_alerts
 │   ├── 023_risk_mode.sql             # risk_mode column on signal_alerts
 │   ├── 024_position_tp1_partial.sql  # TP1 50% partial close columns
-│   └── 025_equity_snapshots.sql      # Daily equity snapshots (drawdown denominator)
+│   ├── 025_equity_snapshots.sql      # Daily equity snapshots (drawdown denominator)
+│   └── 026_signal_alerts_unique.sql  # UNIQUE on alpaca_order_id, position_id (prevent double-fill)
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
@@ -159,7 +160,14 @@ ClawStreetBot/
 │   ├── n8n_api.sh                     # n8n REST API helper (sources .env.n8n)
 │   ├── options_analysis.py            # Options greeks/IV analysis
 │   ├── regime_backtest.py            # Regime classification + dynamic weights
-│   └── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
+│   ├── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
+│   ├── snapshot_equity.py            # Daily Alpaca equity snapshot (drawdown denominator)
+│   ├── execute_trade.py              # Alpaca paper order submission (approved → executing)
+│   ├── exit_monitor.py              # TP/SL/time-stop decision tree
+│   ├── reconcile_orders.py          # BUY fill → trading.positions
+│   ├── reconcile_exits.py          # SELL fill → closed + realized_pnl + status='exited'
+│   ├── process_approved.py          # Drawdown halts + pre-flight checks before execution
+│   └── telegram_callback_listener.py # Telegram callback server for inline-approve/deny
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md

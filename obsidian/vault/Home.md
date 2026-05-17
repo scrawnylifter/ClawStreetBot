@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-19
+updated: 2026-05-20
 tags: [home, mOC]
 ---
 
@@ -42,7 +42,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 22 active workflows, Docker socket isolation
+- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 22 migrations; Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -122,3 +122,5 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [ ] **Trailing stop after TP2** for swing mode — currently TP2 full-closes
 - [ ] **Risk alerts** (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
 - [ ] **Aggressive button UX** — silently promotes a swing setup to day-mode for PDT purposes; surface in Telegram preview before approval
+- [ ] **status=expired cron** — schedule a periodic job to flip `signal_alerts` rows stuck in `pending`/`approved` past EOD to `status='expired'` (prevents stale execution)
+- [ ] **Orphan executing rows** — add a reconciler or guard in `execute_trade.py` / `reconcile_orders.py` that detects and recovers `signal_alerts` stuck in `executing` status (e.g., no matching `alpaca_order_id` after a timeout), resetting to `approved` or marking `expired`
