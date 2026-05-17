@@ -1,6 +1,11 @@
 {
   "name": "trend_daily",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 300, "timezone": "America/Los_Angeles"},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "timezone": "America/Los_Angeles"
+  },
   "nodes": [
     {
       "parameters": {
@@ -17,22 +22,37 @@
       "name": "Mon-Fri 11:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/compute_trend.py --backfill --days 400"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_trend.py --backfill --days 400"
       },
       "id": "trend",
       "name": "Compute Trend Status",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     }
   ],
   "connections": {
     "Mon-Fri 11:00 PDT": {
-      "main": [[{"node": "Compute Trend Status", "type": "main", "index": 0}]]
+      "main": [
+        [
+          {
+            "node": "Compute Trend Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
-  }
+  },
+  "active": true
 }

@@ -16,7 +16,10 @@
       "name": "Weekdays 6:00 PDT (pre-market)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -26,7 +29,10 @@
       "name": "detect EMA crossovers",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [
+        520,
+        300
+      ]
     },
     {
       "parameters": {
@@ -36,7 +42,10 @@
       "name": "send Telegram alerts",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [800, 300]
+      "position": [
+        800,
+        300
+      ]
     }
   ],
   "connections": {
@@ -64,6 +73,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
-  }
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  },
+  "active": true
 }

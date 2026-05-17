@@ -347,7 +347,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Alpaca options ingestion (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
 - [x] Real-time snapshot enrichment (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
 - [x] 15m EMA crossover detector (`detect_ema_crossover_15m.py`) — intraday signals with live option data
-- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
+- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon ingestion JSONs deleted from repo
 - [x] DB migrations — trade_count/vwap on ohlcv, bid/ask on greeks
 - [x] IV rank / realized vol / GEX-DEX computed
 - [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
@@ -356,7 +356,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
 - [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
 - [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler (22 workflows; decommissioned Polygon JSONs removed in this branch)
+- [x] n8n scheduler — **22 active workflows** (ingestion, compute, signal detection, alert dispatch, execution, reconciliation, exit monitoring); decommissioned Polygon JSONs deleted
 - [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
@@ -388,14 +388,27 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
 
-### Phase 5B: Exit Monitors & Alert Delivery (upcoming)
-- [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
-- [ ] Alert formatting + Telegram delivery (Y/N approval flow)
-- [x] Pre-flight checks (`process_approved.py`) — Laws, PDT, drawdown, greeks ✅ (PDT counter + drawdown halts implemented)
-- [ ] Alpaca execution (`execute_trade.py`) — bracket orders, tiered exits
-- [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach
-- [ ] DB migrations: alert_history, positions, pdt_status
-- [ ] n8n workflows: alerts_daily, alerts_orb, monitor_exits, monitor_greeks, alerts_risk
+### Phase 5B: Exit Monitors & Alert Delivery ✅ (shipped)
+- [x] Pre-flight checks (`process_approved.py`) — Laws, PDT (projected, business-day-aware), drawdown halts (period-start denominator + unrealized via Alpaca equity)
+- [x] Telegram alert dispatch (`alert_telegram.py` + `alert_dispatch` n8n cron) — 4-button approval keyboard (Approve / Conservative / Aggressive / Deny)
+- [x] Telegram callback listener (`telegram_callback_listener.py`) — long-poll daemon, writes `risk_mode`
+- [x] Alpaca paper execution (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing
+- [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, partial UNIQUE indexes on `alpaca_order_id` / `position_id`
+- [x] Exit monitor (`exit_monitor.py`) — stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry
+- [x] TP1 50% partial close — submit, reconcile, reduce position quantity
+- [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`
+- [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator
+- [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique
+- [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
+
+### Phase 5C: Backlog (deferred)
+- [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume + VWAP
+- [ ] Buy the 5% Dip detector (`detect_dip.py`) — pullback + thesis check + 3-tranche scale-in
+- [ ] Per-risk-mode option selection — currently the scanner binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)
+- [ ] Bracket orders for stock entries on Alpaca — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
+- [ ] Trailing stop after TP2 for swing mode — currently TP2 full-closes
+- [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
+- [ ] Aggressive button UX — currently silently promotes a swing setup to day-mode for PDT purposes; surface this in the Telegram preview before approval
 
 ### Remaining Items (non-Phase 5)
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

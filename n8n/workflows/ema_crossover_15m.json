@@ -16,27 +16,36 @@
       "name": "Every 15 min (market hours PDT)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
-        "command": "python /app/scripts/detect_ema_crossover_15m.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/detect_ema_crossover_15m.py"
       },
       "id": "detect-15m",
       "name": "Detect 15m Crossovers",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [450, 300]
+      "position": [
+        450,
+        300
+      ]
     },
     {
       "parameters": {
-        "command": "python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
+        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
       },
       "id": "alert-15m",
       "name": "Send 15m Alerts",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [700, 300]
+      "position": [
+        700,
+        300
+      ]
     }
   ],
   "connections": {
@@ -65,5 +74,6 @@
   },
   "settings": {
     "timezone": "America/Los_Angeles"
-  }
+  },
+  "active": true
 }

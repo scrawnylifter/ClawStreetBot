@@ -1,12 +1,20 @@
 {
   "name": "signals_daily",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800, "timezone": "America/Los_Angeles"},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/Los_Angeles"
+  },
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
-            {"field": "cronExpression", "expression": "30 16 * * 1-5"}
+            {
+              "field": "cronExpression",
+              "expression": "30 16 * * 1-5"
+            }
           ]
         }
       },
@@ -14,7 +22,10 @@
       "name": "Mon-Fri 16:30 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -24,38 +35,66 @@
       "name": "generate signals",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [
+        520,
+        300
+      ]
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/backtest.py --mode swing --start 2025-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_swing_365d"
+        "command": "docker exec clawstreet-worker python /app/scripts/backtest.py --mode swing --start 2025-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_swing_365d"
       },
       "id": "swing-backtest",
       "name": "Swing Backtest (365d)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [780, 200]
+      "position": [
+        780,
+        200
+      ]
     },
     {
       "parameters": {
-        "command": "cd /app && python scripts/backtest.py --mode long_term --start 2024-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_lt_730d"
+        "command": "docker exec clawstreet-worker python /app/scripts/backtest.py --mode long_term --start 2024-05-15 --end 2026-05-15 --capital 10000 --threshold 50 --name daily_lt_730d"
       },
       "id": "lt-backtest",
       "name": "LT Backtest (730d)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [780, 400]
+      "position": [
+        780,
+        400
+      ]
     }
   ],
   "connections": {
     "Mon-Fri 16:30 PDT": {
-      "main": [[{"node": "generate signals", "type": "main", "index": 0}]]
+      "main": [
+        [
+          {
+            "node": "generate signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "generate signals": {
-      "main": [[
-        {"node": "Swing Backtest (365d)", "type": "main", "index": 0},
-        {"node": "LT Backtest (730d)", "type": "main", "index": 0}
-      ]]
+      "main": [
+        [
+          {
+            "node": "Swing Backtest (365d)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LT Backtest (730d)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
-  }
+  },
+  "active": true
 }
