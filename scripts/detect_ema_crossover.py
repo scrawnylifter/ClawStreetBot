@@ -204,24 +204,27 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
         avg_volume = float(avg_vol_row[0]) if avg_vol_row and avg_vol_row[0] else 1
         volume_ratio = round(float(volume) / avg_volume, 2) if avg_volume > 0 else 0.0
 
-        # Trade plan — swing rules
+        # Trade plan — ATR-based stops and targets (your swing rules)
+        # Daily: Stop = ATR×2, TP1 = ATR×6 (3:1 R:R), TP2 = ATR×10 (5:1 R:R)
         atr_val = float(atr) if atr else 0.0
         close_f = float(close_price)
 
         if direction == "bullish":
             stop_price = round(close_f - atr_val * 2.0, 2)
             risk_per_share = close_f - stop_price
+            tp1_price = round(close_f + atr_val * 6.0, 2)
+            tp2_price = round(close_f + atr_val * 10.0, 2)
         else:
             stop_price = round(close_f + atr_val * 2.0, 2)
             risk_per_share = stop_price - close_f
+            tp1_price = round(close_f - atr_val * 6.0, 2)
+            tp2_price = round(close_f - atr_val * 10.0, 2)
 
         if risk_per_share <= 0:
             log.warning("Zero risk for %s, skipping", symbol)
             continue
 
-        tp1_price = round(close_f * 1.30, 2)
-        tp2_price = round(close_f * 1.50, 2)
-        risk_reward = round((tp1_price - close_f) / risk_per_share, 1)
+        risk_reward = round(abs(tp1_price - close_f) / risk_per_share, 1)
 
         # Invalidation conditions (store as JSON string for jsonb column)
         invalidation = json.dumps([

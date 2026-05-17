@@ -254,20 +254,25 @@ def detect_15m_crossovers(conn) -> list[dict]:
                 log.info("%s: 15m bearish cross in bull regime, skipping", symbol)
                 continue
 
-            # --- Trade plan (15m ATR × 1.5 for tighter stops) ---
+            # --- Trade plan: ATR-based stops and targets ---
+            # Stop: ATR × 1.5 (tighter for 15m entries)
+            # TP1: ATR × 4.5 (3:1 R:R on shares — your swing rule)
+            # TP2: ATR × 7.5 (5:1 R:R — trailing territory)
             if direction == "bullish":
                 stop_price = round(trigger_price - atr_val * 1.5, 2)
                 risk_per_share = trigger_price - stop_price
+                tp1_price = round(trigger_price + atr_val * 4.5, 2)
+                tp2_price = round(trigger_price + atr_val * 7.5, 2)
             else:
                 stop_price = round(trigger_price + atr_val * 1.5, 2)
                 risk_per_share = stop_price - trigger_price
+                tp1_price = round(trigger_price - atr_val * 4.5, 2)
+                tp2_price = round(trigger_price - atr_val * 7.5, 2)
 
             if risk_per_share <= 0:
                 log.warning("%s: zero risk, skipping", symbol)
                 continue
 
-            tp1_price = round(trigger_price * 1.30, 2)
-            tp2_price = round(trigger_price * 1.50, 2)
             risk_reward = round((tp1_price - trigger_price) / risk_per_share, 1)
 
             # Volume ratio vs 20-period average on 15m
