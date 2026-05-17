@@ -148,7 +148,7 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - No `feed=` param on Alpaca option requests (raises error)
 - Paper tier returns `open_interest=None` sometimes
 
-### PDT Rule (Account < $25K)
+### PDT Rule (Account < $25K) — ✅ ENFORCED IN `process_approved.py`
 - **3 day trades max in a rolling 5-business-day window**
 - 1st DT: normal, planned trade
 - 2nd DT: cautious, only strong setups
@@ -156,6 +156,11 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - **4th DT = PDT ban** — never trigger this
 - Swing positions (held overnight) and long-term holds do NOT count as day trades
 - PDT lock resets when oldest trade in window ages past 5 business days
+
+### Drawdown Halts — ✅ ENFORCED IN `process_approved.py`
+- **10% daily loss** → halt all new trades
+- **20% weekly loss** → halt all new trades
+- **30% monthly loss** → halt all new trades
 
 ### Greeks Strategy (see `02-Strategies/Greeks Strategy.md`)
 - **IV Rank < 25%** → option buying zone (cheap premium)
@@ -380,7 +385,7 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 ### Phase 5B: Exit Monitors & Alert Delivery (upcoming)
 - [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
 - [ ] Alert formatting + Telegram delivery (Y/N approval flow)
-- [ ] Pre-flight checks (`preflight_checks.py`) — Laws, PDT, drawdown, greeks
+- [x] Pre-flight checks (`process_approved.py`) — Laws, PDT, drawdown, greeks ✅ (PDT counter + drawdown halts implemented)
 - [ ] Alpaca execution (`execute_trade.py`) — bracket orders, tiered exits
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach
 - [ ] DB migrations: alert_history, positions, pdt_status

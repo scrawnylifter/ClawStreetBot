@@ -232,7 +232,7 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
             return f"#{sid} SKIP — no trigger_price/stop_price for stock fallback"
         sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"])
 
-    checks = pa.preflight(signal, sizing, mode)
+    checks = pa.preflight(signal, sizing, mode, conn=conn, equity=equity)
     blocker = hard_fail_reason(signal, sizing, checks)
     if blocker:
         log.warning("#%s SKIP — %s", sid, blocker)

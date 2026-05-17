@@ -63,6 +63,16 @@ DELTA_OK_RANGE_DAY   = (Decimal("0.50"), Decimal("0.80"))  # we keep one band fo
 
 MIN_RR = Decimal("3.0")
 
+# PDT rules: 3 DT max in rolling 5-business-day window, 4th = ban
+PDT_WINDOW_DAYS = 5
+PDT_MAX_NORMAL = 2   # normal allowance (3rd = emergency only)
+PDT_MAX_TOTAL = 3   # 4th = PDT violation
+
+# Drawdown halt thresholds (% of equity)
+DRAWDOWN_DAILY_PCT   = Decimal("0.10")   # 10% daily → halt
+DRAWDOWN_WEEKLY_PCT  = Decimal("0.20")   # 20% weekly → halt
+DRAWDOWN_MONTHLY_PCT = Decimal("0.30")   # 30% monthly → halt
+
 # Default paper-account equity if we can't (or are told not to) query Alpaca.
 DEFAULT_EQUITY = Decimal("100000")
 
@@ -256,7 +266,65 @@ def size_stock_position(
 
 
 # ---------------------------------------------------------------------------
-# Preflight checks (advisory only — they don't block in the dry-run)
+# PDT counter & drawdown halts
+# ---------------------------------------------------------------------------
+
+def count_day_trades(conn, window_days: int = PDT_WINDOW_DAYS) -> int:
+    """Count day trades (same-day open+close) in the last N business days.
+
+    A day trade is defined as: a position that opened AND closed on the same
+    calendar date (US market hours). Swing positions held overnight don't count.
+
+    This queries trading.positions for closed positions where the open and close
+    happened on the same trading day, within the rolling business-day window.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT COUNT(*) AS day_trade_count
+            FROM trading.positions
+            WHERE status IN ('closed', 'filled')
+              AND opened_at IS NOT NULL
+              AND closed_at IS NOT NULL
+              AND opened_at >= NOW() - interval '%s days'
+              AND DATE(opened_at AT TIME ZONE 'America/Los_Angeles')
+                  = DATE(closed_at AT TIME ZONE 'America/Los_Angeles')
+        """, (window_days + 4,))  # +4 to cover weekends in the window
+        row = cur.fetchone()
+        return row[0] if row else 0
+
+
+def calc_drawdown(conn, equity: Decimal) -> dict[str, Decimal]:
+    """Calculate realized P&L drawdown over 1 day, 1 week, 1 month.
+
+    Returns {daily_pnl, weekly_pnl, monthly_pnl} as fractions of equity.
+    Positive = profit, Negative = loss/drawdown.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '1 day'
+                              THEN realized_pnl ELSE 0 END), 0) AS daily_pnl,
+              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '7 days'
+                              THEN realized_pnl ELSE 0 END), 0) AS weekly_pnl,
+              COALESCE(SUM(CASE WHEN closed_at >= NOW() - INTERVAL '30 days'
+                              THEN realized_pnl ELSE 0 END), 0) AS monthly_pnl
+            FROM trading.positions
+            WHERE status IN ('closed', 'filled')
+              AND closed_at IS NOT NULL
+              AND realized_pnl IS NOT NULL
+        """)
+        row = cur.fetchone()
+        if not row or equity == 0:
+            return {"daily": Decimal("0"), "weekly": Decimal("0"), "monthly": Decimal("0")}
+        return {
+            "daily":   (Decimal(str(row[0])) / equity).quantize(Decimal("0.0001")),
+            "weekly":  (Decimal(str(row[1])) / equity).quantize(Decimal("0.0001")),
+            "monthly": (Decimal(str(row[2])) / equity).quantize(Decimal("0.0001")),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Preflight checks
 # ---------------------------------------------------------------------------
 
 CHECK_PASS = "PASS"
@@ -272,7 +340,7 @@ GLYPH = {
 }
 
 
-def preflight(signal: dict, sizing: dict, mode: str) -> list[tuple[str, str]]:
+def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal | None = None) -> list[tuple[str, str]]:
     """Return [(status, message)] entries describing each gate's verdict."""
     out: list[tuple[str, str]] = []
 
@@ -328,9 +396,52 @@ def preflight(signal: dict, sizing: dict, mode: str) -> list[tuple[str, str]]:
     else:
         out.append((CHECK_WARN, "no option_symbol on signal — falling back to stock trade"))
 
-    # 5) Things not yet built — flagged so we don't forget them.
-    out.append((CHECK_TODO, "PDT 5-business-day counter not yet implemented"))
-    out.append((CHECK_TODO, "drawdown halts (10% daily / 20% weekly / 30% monthly) not yet implemented"))
+    # 5) PDT counter — count same-day trades in the last 5 business days
+    if conn is not None and mode == "day":
+        dt_count = count_day_trades(conn)
+        if dt_count >= PDT_MAX_TOTAL:
+            out.append((CHECK_FAIL,
+                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
+                        f"4th would trigger PDT ban (Law 5)"))
+        elif dt_count >= PDT_MAX_NORMAL:
+            out.append((CHECK_WARN,
+                        f"PDT: {dt_count} day trades in last {PDT_WINDOW_DAYS} business days — "
+                        f"3rd = emergency only (exit or hedge), no new speculative entries"))
+        else:
+            out.append((CHECK_PASS,
+                        f"PDT: {dt_count}/{PDT_MAX_TOTAL} day trades in last {PDT_WINDOW_DAYS} business days"))
+    elif mode == "day":
+        out.append((CHECK_WARN, "PDT: no DB connection — cannot count day trades"))
+    else:
+        out.append((CHECK_PASS, f"PDT: N/A (mode={mode}, only counts for day trades)"))
+
+    # 6) Drawdown halts — 10% daily, 20% weekly, 30% monthly
+    if conn is not None and equity is not None and equity > 0:
+        dd = calc_drawdown(conn, equity)
+        halted = False
+        for label, key, threshold in [
+            ("daily",   "daily",   DRAWDOWN_DAILY_PCT),
+            ("weekly",  "weekly",  DRAWDOWN_WEEKLY_PCT),
+            ("monthly", "monthly", DRAWDOWN_MONTHLY_PCT),
+        ]:
+            pct = dd[key]
+            if pct < -threshold:
+                out.append((CHECK_FAIL,
+                            f"Drawdown halt: {label} P&L {pct*100:+.1f}% exceeds "
+                            f"-{threshold*100:.0f}% threshold — no new trades"))
+                halted = True
+            else:
+                out.append((CHECK_PASS,
+                            f"Drawdown {label}: {pct*100:+.1f}% within "
+                            f"-{threshold*100:.0f}% threshold"))
+        if halted:
+            out.append((CHECK_FAIL,
+                        "⛔ DRAWDOWN HALT ACTIVE — at least one threshold breached. "
+                        "No new positions until thresholds clear."))
+    elif equity is None or equity <= 0:
+        out.append((CHECK_WARN, "Drawdown: no equity — cannot check drawdown thresholds"))
+    else:
+        out.append((CHECK_WARN, "Drawdown: no DB connection — cannot check drawdown thresholds"))
 
     return out
 
@@ -479,7 +590,7 @@ def render_plan(
 # Main
 # ---------------------------------------------------------------------------
 
-def process_one(signal: dict, equity: Decimal, verbose: bool) -> str:
+def process_one(signal: dict, equity: Decimal, verbose: bool, conn=None) -> str:
     mode = infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
 
     opt_mid = _to_decimal(signal.get("option_mid"))
@@ -493,7 +604,7 @@ def process_one(signal: dict, equity: Decimal, verbose: bool) -> str:
                     f"no trigger_price/stop_price, can't size a stock fallback.")
         sizing = size_stock_position(equity, mode, entry, stop, signal["direction"])
 
-    checks = preflight(signal, sizing, mode)
+    checks = preflight(signal, sizing, mode, conn=conn, equity=equity)
     return render_plan(signal, mode, equity, sizing, checks, verbose)
 
 
@@ -526,7 +637,7 @@ def main() -> int:
 
     print(f"Found {len(rows)} signal(s) to plan.  Equity: ${equity:,.2f}\n")
     for r in rows:
-        print(process_one(r, equity, args.verbose))
+        print(process_one(r, equity, args.verbose, conn=conn))
         print()
 
     print(f"DONE — {len(rows)} dry-run plan(s) printed. No orders submitted, "
