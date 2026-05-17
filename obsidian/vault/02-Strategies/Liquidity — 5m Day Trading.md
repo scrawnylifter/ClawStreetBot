@@ -1,80 +1,159 @@
 ---
 created: 2025-04-28
 updated: 2026-05-17
-tags: [strategy, liquidity, day-trading, 5m-chart, stop-hunts, smart-money, reversal, scalp]
-source: YouTube — The Moving Average
-video: https://www.youtube.com/watch?v=LD1FEbwXU4o
+tags: [strategy, liquidity, day-trading, 5m-chart, stop-hunts, smart-money, reversal, scalp, fair-value-gap, consolidation, market-structure]
+sources:
+  - https://www.youtube.com/watch?v=LD1FEbwXU4o (The Moving Average, 2025-04-28)
+  - https://www.youtube.com/watch?v=sLoLznlatHA (Tom Crown, 2024-05-19)
+  - https://www.youtube.com/watch?v=9REzGB3R6HU (TradingLab, 2025-10-27)
 ---
 
-# Liquidity Trading on the 5-Minute Chart
+# Liquidity Trading Strategy
 
-> "Find where the obvious trades are sitting and do the opposite."
+> "Enter where others are putting their stop loss." — David Paul
 
-Market makers push price into **liquidity zones** (where retail stops sit) to fill large orders. This strategy identifies those zones on HTF, then exploits the traps on 5m/1m for surgical reversal entries.
-
----
-
-## Core Principle
-
-Liquidity on the 5m chart = areas where traders get **stopped out** or **trapped**: wicks, swing highs, equal highs, clean S/R levels. These are magnets for price. Your job: find where the obvious trades are sitting and **fade them**.
-
-"Clean price action that's just a little too clean — equal highs, trend lines, zones that look perfect — **that's the bait**."
+Three independent traders converge on the same core principle: **price is drawn to where stop losses accumulate, and you profit by entering where others exit.**
 
 ---
 
-## 4-Step Process: Spotting Lower Timeframe Liquidity
+## Core Principle (All 3 Sources Agree)
 
-### 1. Mark HTF Zones First
+Liquidity = areas with large open orders (stop losses + pending entries). Institutions need liquidity to fill large positions. They push price into these clusters to trigger stops, which become fuel for the real move.
 
-- Start on **daily or 4H chart**
-- Mark the most recent swing highs/lows and clean **untapped** levels
-- These untapped areas = where liquidity should be living
-- Use horizontal lines for S/R visual
+**The Moving Average:** "Find where the obvious trades are sitting and do the opposite."
+**Tom Crown:** "Price will seek out liquidity in the form of stop losses."
+**TradingLab:** "You need to be entering where most people are exiting."
 
-### 2. Drop to 5m/1m and Wait for the Tap
+---
 
-- Zoom in on lower timeframe
+## Types of Liquidity (Tom Crown)
+
+| Type | Where It Lives | What It Looks Like |
+|------|---------------|-------------------|
+| **External range** | Swing highs, swing lows, equal highs/lows | Obvious S/R levels everyone sees |
+| **Internal range** | Fair value gaps (FVGs), imbalances | Inefficiencies price left behind |
+| **Trendline** | Along drawn trend lines | Stops clustered above/below trendlines |
+
+**Draw sequence:** External liquidity taken → next draw = FVG (internal) → FVG fills → next draw = opposite external liquidity. This creates a **ping-pong pattern**.
+
+---
+
+## Step-by-Step Process (Synthesized)
+
+### 1. Mark HTF Zones (Daily / 4H)
+
+- Mark swing highs/lows and clean **untapped** levels
+- Mark trendlines (stops cluster near them)
+- Mark recent equal highs/lows (**engineered liquidity** — too clean to be real)
+- These become your **external range liquidity** targets
+
+### 2. Identify Consolidation = Obvious Liquidity (TradingLab)
+
+- Sideways/ranging price action makes liquidity points **very obvious**
+- Equal highs above → short stops sit there
+- Equal lows below → long stops sit there
+- Algorithm is drawn to these because that's where the orders are
+
+### 3. Drop to 5m/1m — Wait for the Sweep
+
 - Watch for price **rapidly approaching** a marked zone
-- Look for: **volume spike** → **quick tap** → **rejection wick**
-- Entry = after the rejection confirms (**not before the tap**)
-- Target: **1:2 risk-to-reward** minimum
-- Double rejection at same zone → potential **full reversal** (double bottom/top)
+- The **sweep** (poke above/below then reverse) = liquidity grab confirmation
+- Entry = **after the rejection confirms**, not before the tap
 
-### 3. Look for Traps
+### 4. The Draw-on-Liquidity Sequence (Tom Crown)
 
-| Pattern | Signal | Action |
-|---------|--------|--------|
-| Wick above resistance → pause → dump | Bearish trap | Short the rejection |
-| Wick below support → reverse | Bullish trap | Buy the bounce |
-| Double rejection at same zone | Full reversal | Wider target |
+1. Price takes external liquidity (sweeps a high/low)
+2. Next target = internal range liquidity (FVG)
+3. Enter at the FVG retrace, target the next external liquidity
+4. If the FVG creates a new inefficiency → continuation draw
 
-**Traps = confirmation.** Price faked out retail, now reverses.
+**Bullish:** External low taken → price reverses up → FVG forms → enter long at FVG retrace → target external high
+**Bearish:** External high taken → price reverses down → FVG forms → enter short at FVG retrace → target external low
 
-### 4. Enter on Volume/Candle Signals
+### 5. Confirm with Traps and Candle Signals
 
-- **Exhaustion candles** — long wicks = rejection at the zone
-- **Engulfing candles** — bearish or bullish engulfing at S/R = strong reversal signal
-- **Volume divergence** — price hits zone on declining volume = weak move, likely to reverse
+| Signal | Source | Meaning |
+|--------|--------|---------|
+| Wick above resistance → pause → dump | The Moving Average | Bearish trap |
+| Wick below support → reverse | The Moving Average | Bullish trap |
+| Double rejection at same zone | The Moving Average | Full reversal (double bottom/top) |
+| Market structure shift (HH/HL breaking) | Tom Crown | Trend change → trade new direction |
+| Exhaustion candles / engulfing / volume divergence | The Moving Average | Zone rejection confirmation |
+
+### 6. The Consolidation Sweep Pattern (TradingLab)
+
+- Mark the highs and lows of a consolidation range
+- Price breaks above → **enter short** → target opposite liquidity below
+- Price breaks below → **enter long** → target opposite liquidity above
+- Pattern repeats: each sweep of one side targets the opposite
 
 ---
 
-## Real Trade Example (AUD/USD)
+## Entry Checklist
 
+Before entering, confirm:
+- [ ] HTF zone marked (daily/4H swing level, trendline, or equal H/L)
+- [ ] Price has **swept** the zone (poked through and rejected — not just approached)
+- [ ] Confirmation signal present (engulfing, rejection wick, FVG, market structure shift)
+- [ ] Entering at the point where **others' stop losses** are — not where breakout traders enter
+- [ ] R:R targets the **next liquidity point** (not an arbitrary percentage)
+
+---
+
+## Trade Examples
+
+### The Moving Average — AUD/USD Scalp (5m)
 1. Marked HTF support on daily
 2. Weekend gap left price below support
-3. London session: price came down to the zone
-4. Saw **engulfing candle** with wicks at support + rejection up
-5. **Entry: 61,408** (AUD/USD)
-6. Stop: below current London low
-7. Target: **1:2 R:R** (anticipation of gap fill upward)
+3. London session: price swept down to the zone
+4. Engulfing candle + wicks at support = rejection entry
+5. Entry: 61,408 · Stop: below London low · Target: 1:2 R:R (gap fill)
+
+### Tom Crown — EUR/USD Bearish Setup
+1. Uptrend making higher highs → structure shifts
+2. Equal highs formed (engineered liquidity above)
+3. Price sweeps equal highs → breaks below swing low
+4. **Market structure shift confirmed** → short
+5. Two FVGs below → enter short on FVG retrace → target lower liquidity
+
+### Tom Crown — Bullish FVG Entry (HTF + LTF)
+1. Sideways range after uptrend (reaccumulation)
+2. Trendline liquidity above (stops above trendline)
+3. Price sweeps lows → closes above bearish candle
+4. LTF: bullish FVG forms during sweep
+5. Enter long on FVG retrace, stop below sweep low, target upper liquidity
+
+### TradingLab — Consolidation Sweep Series
+1. After a trend, price consolidates sideways = fair value
+2. Mark range highs and lows
+3. Price breaks upper range → short → target lower range
+4. Price breaks lower range → long → target upper range
+5. Pattern repeats: each sweep targets the opposite side
 
 ---
 
-## Bonus Rules
+## Where Sources Differ
 
-1. **Never enter before the price taps the zone** — wait for confirmation
-2. **Use session times** — London/NY open is when most stop hunts happen (9:30-10:30 ET, 15:00-16:00 ET)
-3. **Don't chase breakouts** — wait for price to trap traders, then fade the move
+| Topic | The Moving Average | Tom Crown | TradingLab |
+|-------|-------------------|------------|------------|
+| Primary timeframe | 5m/1m on daily zones | MTF: daily bias → LTF entry via FVG | Any range with clear H/L |
+| Entry trigger | Rejection wick + engulfing | FVG retrace after sweep | Range breakout → fade opposite |
+| R:R target | 1:2 minimum | Next liquidity point (variable) | Next opposite range level |
+| Consolidation view | Not addressed | Reaccumulation signal | **The** opportunity |
+
+**Key synthesis:** The Moving Average gives the **5m execution tactics** (rejection, trap, volume). Tom Crown adds the **internal/external liquidity framework** (FVGs as secondary targets). TradingLab provides the **consolidation read** (sideways = obvious stop clusters). Together = complete system.
+
+---
+
+## Bonus Rules (All 3 Sources Converge)
+
+1. **Never enter before the price sweeps the zone** — wait for the liquidity grab confirmation
+2. **Use session times** — London/NY open (9:30-10:30 ET) are when most stop hunts happen
+3. **Don't chase breakouts** — fade the move after the trap
+4. **Equal highs/lows are engineered** — they look "too clean" because they ARE bait
+5. **Consolidation makes liquidity obvious** — range H/L = stop clusters
+6. **External → Internal → External** — after an external sweep, target the FVG; after FVG fills, target next external level
+7. **Your strategy must profit from losers** — if your entry doesn't take advantage of someone else's stop, reconsider
 
 ---
 
@@ -83,20 +162,35 @@ Liquidity on the 5m chart = areas where traders get **stopped out** or **trapped
 | Strategy Element | Scanner Component | Data Source |
 |-----------------|-------------------|-------------|
 | HTF levels (daily swing H/L) | `market.technical_indicators` EMA/RSI | Alpaca daily bars |
-| 5m zone approach detection | `market.ohlcv` 5m timeframe | Alpaca intraday |
-| Rejection candles | Candle pattern scanner (future) | 5m OHLCV |
-| Volume spike | `trade_count` + `vwap` from 5m bars | Alpaca |
-| Session filtering | Time-of-day gates | Exchange calendar |
+| 5m zone approach/sweep detection | `market.ohlcv` 5m timeframe | Alpaca intraday |
+| Rejection candles (engulfing, wicks) | Candle pattern scanner (future) | 5m OHLCV |
+| Volume spike confirmation | `trade_count` + `vwap` from 5m bars | Alpaca |
+| Fair value gaps (internal liquidity) | FVG detector (future) | 5m/15m OHLCV |
+| Equal highs/lows detection | Swing point scanner (future) | Daily + 5m bars |
+| Session filtering (London/NY open) | Time-of-day gates | Exchange calendar |
+| Consolidation detection | Range/volatility scanner (future) | Daily OHLCV |
 
 ---
 
 ## Key Quotes
 
+**The Moving Average:**
 - "Find where the obvious trades are sitting and do the opposite"
 - "Clean price action that's just a little too clean — equal highs, trend lines, zones that look perfect — that's the bait"
 - "Market makers push price into liquidity to fill large orders, and they do it fast"
-- "If price rejects the same area twice, it could be a full reversal — double bottom with the bar not closing below the S/R area"
+- "If price rejects the same area twice, it could be a full reversal"
 - "Do not chase breakouts — wait for price to trap traders and fade the move"
+
+**Tom Crown:**
+- "When external range liquidity is taken, a fair value gap becomes the next draw"
+- "Long positions that get stopped out turn into market sell orders which can then fill positions of other buyers"
+- "When we know the overall market is bullish, we want to see a retracement down with liquidity resting higher"
+
+**TradingLab:**
+- "Enter where others are putting their stop loss" (David Paul)
+- "Stop losses make the market move"
+- "The algorithm is programmed to target liquidity and stop losses"
+- "Consolidating markets present the most opportunity"
 
 ---
 
