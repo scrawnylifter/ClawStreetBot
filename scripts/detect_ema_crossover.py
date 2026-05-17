@@ -309,7 +309,7 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
             signal.update({
                 "option_symbol": option_row[0],
                 "option_strike": float(option_row[1]),
-                "option_expiry": option_row[2].isoformat() if hasattr(option_row[2], 'isoformat') else str(option_row[2]),
+                "option_expiry": option_row[2].strftime("%Y-%m-%d") if hasattr(option_row[2], "strftime") else str(option_row[2])[:10],
                 "option_delta": float(option_row[3]) if option_row[3] else None,
                 "option_theta": float(option_row[4]) if option_row[4] else None,
             })
