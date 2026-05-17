@@ -1,6 +1,11 @@
 {
   "name": "regime_weekly",
-  "settings": {"executionOrder": "v1", "saveManualExecutions": true, "executionTimeout": 1800, "timezone": "America/Los_Angeles"},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/Los_Angeles"
+  },
   "nodes": [
     {
       "parameters": {
@@ -17,7 +22,10 @@
       "name": "Saturday 8:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
@@ -27,12 +35,24 @@
       "name": "Classify + Analyze + Optimize + Compare",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     }
   ],
   "connections": {
     "Saturday 8:00 PDT": {
-      "main": [[{"node": "Classify + Analyze + Optimize + Compare", "type": "main", "index": 0}]]
+      "main": [
+        [
+          {
+            "node": "Classify + Analyze + Optimize + Compare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
-  }
+  },
+  "active": true
 }

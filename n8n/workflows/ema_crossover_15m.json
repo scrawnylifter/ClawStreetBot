@@ -16,7 +16,10 @@
       "name": "Every 15 min (market hours PDT)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
@@ -26,7 +29,10 @@
       "name": "Detect 15m Crossovers",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [450, 300]
+      "position": [
+        450,
+        300
+      ]
     },
     {
       "parameters": {
@@ -36,7 +42,10 @@
       "name": "Send 15m Alerts",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [700, 300]
+      "position": [
+        700,
+        300
+      ]
     }
   ],
   "connections": {
@@ -65,5 +74,6 @@
   },
   "settings": {
     "timezone": "America/Los_Angeles"
-  }
+  },
+  "active": true
 }
