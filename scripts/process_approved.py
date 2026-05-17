@@ -299,6 +299,7 @@ def count_day_trades(
     conn,
     window_days: int = PDT_WINDOW_DAYS,
     projected_mode: str = "swing",
+    exclude_signal_id: int | None = None,
 ) -> int:
     """Count realized + projected day trades in the rolling N-business-day window.
 
@@ -314,6 +315,11 @@ def count_day_trades(
       3. Pending intraday approvals — signal_alerts with timeframe 5m/15m that
          are 'approved' or 'executing' and were created today.
       4. The pending trade itself — +1 if projected_mode == 'day'.
+
+    exclude_signal_id: when called from preflight() for a specific signal, that
+    same row is already in pending_intraday_today (status='approved', timeframe
+    5m/15m, created today). Excluding it prevents double-counting against the
+    +1 projection below.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -345,12 +351,13 @@ def count_day_trades(
                   AND timeframe IN ('5m', '15m')
                   AND DATE(created_at AT TIME ZONE 'America/Los_Angeles')
                       = DATE(NOW() AT TIME ZONE 'America/Los_Angeles')
+                  AND (%s::int IS NULL OR id <> %s::int)
             )
             SELECT (SELECT n FROM realized)
                  + (SELECT n FROM open_intraday_today)
                  + (SELECT n FROM pending_intraday_today)
             """,
-            (window_days + 4,),  # +4 to cover weekend gaps in the rolling window
+            (window_days + 4, exclude_signal_id, exclude_signal_id),
         )
         row = cur.fetchone()
         base = row[0] if row else 0
@@ -426,7 +433,8 @@ GLYPH = {
 }
 
 
-def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal | None = None) -> list[tuple[str, str]]:
+def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal | None = None) -> list[tuple[str, str]]:  # noqa: E501
+    sid = signal.get("id")
     """Return [(status, message)] entries describing each gate's verdict."""
     out: list[tuple[str, str]] = []
 
@@ -486,7 +494,7 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
     # window. Includes the pending trade (+1 if day mode), open intraday positions
     # opened today, and pending intraday approvals — see count_day_trades.
     if conn is not None and mode == "day":
-        dt_count = count_day_trades(conn, projected_mode=mode)
+        dt_count = count_day_trades(conn, projected_mode=mode, exclude_signal_id=sid)
         if dt_count >= PDT_MAX_TOTAL + 1:
             # Projected count already includes +1 for this trade. Crossing
             # PDT_MAX_TOTAL means submitting this would be the 4th DT.
@@ -509,7 +517,7 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
         # Swing/long_term don't trigger the PDT counter, but surface the projected
         # count so the user can see if a same-day flatten would push them over.
         if conn is not None:
-            dt_count = count_day_trades(conn, projected_mode=mode)
+            dt_count = count_day_trades(conn, projected_mode=mode, exclude_signal_id=sid)
             out.append((CHECK_PASS,
                         f"PDT: {dt_count}/{PDT_MAX_TOTAL} projected day trades "
                         f"(mode={mode}; this trade doesn't count unless flatted today)"))
@@ -740,24 +748,26 @@ def main() -> int:
     conn = get_connection()
     try:
         rows = fetch_approved(conn, args.id, args.limit)
+        if not rows:
+            if args.id is not None:
+                print(f"No signal_alerts row with id={args.id}.")
+            else:
+                print("No approved signals waiting for execution.")
+            return 0
+
+        print(f"Found {len(rows)} signal(s) to plan.  Equity: ${equity:,.2f}\n")
+        for r in rows:
+            # Pass signal_id so count_day_trades excludes this row from
+            # pending_intraday_today (otherwise the same row would be counted
+            # there AND projected with +1 — double-counting toward PDT).
+            print(process_one(r, equity, args.verbose, conn=conn))
+            print()
+
+        print(f"DONE — {len(rows)} dry-run plan(s) printed. No orders submitted, "
+              f"no DB rows modified.")
+        return 0
     finally:
         conn.close()
-
-    if not rows:
-        if args.id is not None:
-            print(f"No signal_alerts row with id={args.id}.")
-        else:
-            print("No approved signals waiting for execution.")
-        return 0
-
-    print(f"Found {len(rows)} signal(s) to plan.  Equity: ${equity:,.2f}\n")
-    for r in rows:
-        print(process_one(r, equity, args.verbose, conn=conn))
-        print()
-
-    print(f"DONE — {len(rows)} dry-run plan(s) printed. No orders submitted, "
-          f"no DB rows modified.")
-    return 0
 
 
 if __name__ == "__main__":
