@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""BUY Setup Scanner — Phase 5
+"""Setup Scanner — Phase 5
 
-Scans the watchlist on a 15-minute cadence and emits a Telegram BUY alert
+Scans the watchlist on a 15-minute cadence and emits a Telegram alert
 only when a symbol passes ALL of the following gates:
 
+BULLISH (calls):
   1. Trend            EMA9 > EMA21 (daily, bullish)
   2. Trend strength   ADX > 20
   3. Not overbought   RSI_14 < 70
+  4. Cheap premium    IV percentile < 40
+  5. Fair pricing     IV - RV_20d <= 0.05
+  6. Affordable       option mid <= --risk-budget (default 2000)
+  7. Time decay       DTE >= 30
+  8. Risk/Reward      >= 3:1 using daily ATR (stop = ATRx2, TP1 = ATRx6)
+
+BEARISH (puts):
+  1. Trend            EMA9 < EMA21 (daily, bearish)
+  2. Trend strength   ADX > 20
+  3. Not oversold     RSI_14 > 30 (not bouncing)
   4. Cheap premium    IV percentile < 40
   5. Fair pricing     IV - RV_20d <= 0.05
   6. Affordable       option mid <= --risk-budget (default 2000)
@@ -178,6 +189,11 @@ def evaluate_symbol(
 ) -> dict | None:
     """Run gates 1-8 for one candidate. Returns a signal dict or None.
 
+    Determines direction automatically:
+    - EMA9 > EMA21 → bullish (calls)
+    - EMA9 < EMA21 → bearish (puts)
+    - EMA9 ≈ EMA21 → no trade (flat trend)
+
     Args:
         conn: live psycopg2 connection (for ADX lookup).
         cand: raw row from `fetch_candidates`.
@@ -203,10 +219,30 @@ def evaluate_symbol(
         log.info("%s: missing daily indicators, skip", sym)
         return None
 
-    # Gate 1: trend bullish
-    if not (ema9 > ema21):
-        log.info("%s: gate1 trend fail (EMA9=%.2f <= EMA21=%.2f)", sym, ema9, ema21)
+    # Determine direction from EMA crossover.
+    ema_gap = ema9 - ema21        # positive = bullish, negative = bearish
+    ema_range = ema21 or 1.0      # avoid div-by-zero
+    ema_pct = abs(ema_gap) / ema_range * 100  # % separation
+
+    if ema_pct < 0.5:
+        # EMAs too close — flat / indecisive trend.
+        log.info("%s: gate1 trend fail (EMA9/EMA21 within 0.5%%, flat)", sym)
         return None
+
+    if ema_gap > 0:
+        direction = "bullish"
+        opt_type = "C"
+    else:
+        direction = "bearish"
+        opt_type = "P"
+
+    # Gate 1: trend direction (already decided above, log it).
+    if direction == "bullish":
+        log.info("%s: trend BULLISH (EMA9=%.2f > EMA21=%.2f, gap %.1f%%)",
+                 sym, ema9, ema21, ema_pct)
+    else:
+        log.info("%s: trend BEARISH (EMA9=%.2f < EMA21=%.2f, gap %.1f%%)",
+                 sym, ema9, ema21, ema_pct)
 
     # Gate 2: ADX > 20
     adx = fetch_daily_adx(conn, sym)
@@ -214,10 +250,15 @@ def evaluate_symbol(
         log.info("%s: gate2 ADX fail (%s)", sym, adx)
         return None
 
-    # Gate 3: RSI < 70
-    if rsi >= RSI_MAX:
-        log.info("%s: gate3 RSI fail (%.1f)", sym, rsi)
-        return None
+    # Gate 3: RSI check — direction-dependent.
+    if direction == "bullish":
+        if rsi >= RSI_MAX:                    # not overbought
+            log.info("%s: gate3 RSI fail (%.1f >= %.0f)", sym, rsi, RSI_MAX)
+            return None
+    else:
+        if rsi <= 30.0:                       # not oversold (could bounce)
+            log.info("%s: gate3 RSI fail (%.1f <= 30, may bounce)", sym, rsi)
+            return None
 
     # Gate 4: IV percentile < 40
     if iv_pct is None or iv_pct >= IV_PCTILE_MAX:
@@ -255,9 +296,9 @@ def evaluate_symbol(
         log.info("%s: no price available, skip", sym)
         return None
 
-    # Gates 6 + 7 require the live option chain.
+    # Gates 6 + 7 require the live option chain (direction-aware).
     try:
-        opt = select_best_option(sym, want_type="C",
+        opt = select_best_option(sym, want_type=opt_type,
                                  min_dte=MIN_DTE, max_dte=MAX_DTE)
     except Exception as e:
         log.warning("%s: option snapshot error (%s)", sym, e)
@@ -282,12 +323,23 @@ def evaluate_symbol(
         log.info("%s: gate7 DTE fail (%d)", sym, opt["dte"])
         return None
 
-    # Gate 8: ATR-based R:R on the underlying.
-    stop = round(price - atr * ATR_STOP_MULT, 2)
-    tp1 = round(price + atr * ATR_TP1_MULT, 2)
-    tp2 = round(price + atr * ATR_TP2_MULT, 2)
-    risk_per_share = price - stop
-    reward_per_share = tp1 - price
+    # Gate 8: ATR-based R:R on the underlying (direction-aware).
+    if direction == "bullish":
+        stop = round(price - atr * ATR_STOP_MULT, 2)
+        tp1 = round(price + atr * ATR_TP1_MULT, 2)
+        tp2 = round(price + atr * ATR_TP2_MULT, 2)
+    else:
+        # Bearish: stop above, targets below.
+        stop = round(price + atr * ATR_STOP_MULT, 2)
+        tp1 = round(price - atr * ATR_TP1_MULT, 2)
+        tp2 = round(price - atr * ATR_TP2_MULT, 2)
+
+    if direction == "bullish":
+        risk_per_share = price - stop
+        reward_per_share = tp1 - price
+    else:
+        risk_per_share = stop - price
+        reward_per_share = price - tp1
     if risk_per_share <= 0:
         log.info("%s: gate8 zero risk", sym)
         return None
@@ -300,17 +352,25 @@ def evaluate_symbol(
     risk_dollars = round(mid, 2)
     reward_dollars = round(mid * stock_rr, 2)
 
-    invalidation = json.dumps([
-        "EMA9 crosses back below EMA21 → EXIT",
-        "Daily ADX drops below 20 → EXIT",
-        "RSI prints > 75 with no follow-through → trim/exit",
-        "Stock breaks below ATR stop → EXIT immediately",
-    ])
+    if direction == "bullish":
+        invalidation = json.dumps([
+            "EMA9 crosses back below EMA21 → EXIT",
+            "Daily ADX drops below 20 → EXIT",
+            "RSI prints > 75 with no follow-through → trim/exit",
+            "Stock breaks below ATR stop → EXIT immediately",
+        ])
+    else:
+        invalidation = json.dumps([
+            "EMA9 crosses back above EMA21 → EXIT",
+            "Daily ADX drops below 20 → EXIT",
+            "RSI prints < 25 with no follow-through → trim/exit",
+            "Stock breaks above ATR stop → EXIT immediately",
+        ])
 
     return {
         "symbol": sym,
         "strategy": "setup_scanner",
-        "direction": "bullish",
+        "direction": direction,
         "status": "new",
         "timeframe": "1d",
         "regime": regime,
@@ -401,7 +461,7 @@ def save_signal(conn, sig: dict) -> int | None:
 
 
 def format_buy_alert(sig: dict) -> str:
-    """Render the BUY alert exactly to the Phase-5 scanner template."""
+    """Render the alert exactly to the Phase-5 scanner template (bullish + bearish)."""
     s = sig
     iv_pct = s["iv_percentile"] or 0
     iv_label = "cheap" if iv_pct < 25 else ("slightly rich" if iv_pct > 50 else "moderate")
@@ -412,13 +472,16 @@ def format_buy_alert(sig: dict) -> str:
         "fair pricing"
     )
     contract_letter = "C" if s["direction"] == "bullish" else "P"
+    direction_emoji = "🟢" if s["direction"] == "bullish" else "🔴"
+    direction_word = "BUY" if s["direction"] == "bullish" else "SHORT"
+    trend_label = "Bullish (EMA9 > EMA21)" if s["direction"] == "bullish" else "Bearish (EMA9 < EMA21)"
     iv_pct_disp = round((s["iv_current"] or 0) * 100)
     rv_pct_disp = round((s["rv_20d"] or 0) * 100)
 
     lines = [
-        f"🟢 <b>BUY Signal: {s['symbol']}</b>",
+        f"{direction_emoji} <b>{direction_word} Signal: {s['symbol']}</b>",
         f"{'─' * 30}",
-        f"Stock: ${s['trigger_price']:.2f} | Trend: Bullish (EMA9 &gt; EMA21) | RSI: {s['rsi']:.0f}",
+        f"Stock: ${s['trigger_price']:.2f} | Trend: {trend_label} | RSI: {s['rsi']:.0f}",
         f"IV: {iv_pct_disp}% (rank {iv_pct:.0f}th pctl) — {iv_label}",
         f"RV: {rv_pct_disp}% | IV-RV spread: {spread:+.2f} — {spread_label}",
         "",
@@ -454,8 +517,9 @@ def main() -> int:
         sig = evaluate_symbol(conn, cand, args.risk_budget, regime)
         if sig:
             passed.append(sig)
-            log.info("%s: ALL gates PASS (R:R %.1f, premium $%.2f)",
-                     sig["symbol"], sig["stock_risk_reward"], sig["option_mid"])
+            log.info("%s: ALL gates PASS (%s, R:R %.1f, premium $%.2f)",
+                     sig["symbol"], sig["direction"], sig["stock_risk_reward"],
+                     sig["option_mid"])
 
     if not passed:
         log.info("No setups qualified — staying silent.")
@@ -499,7 +563,8 @@ def main() -> int:
                 (msg_id, sig_id),
             )
             conn.commit()
-            log.info("Sent BUY alert for %s (msg_id=%s)", sig["symbol"], msg_id)
+            log.info("Sent %s alert for %s (msg_id=%s)",
+                     sig["direction"], sig["symbol"], msg_id)
         else:
             log.error("Telegram send failed for %s", sig["symbol"])
     cur.close()
