@@ -22,6 +22,8 @@ Hold periods: minutes to hours. In-and-out same day. 30 DTE on contracts is insu
 |----------|--------|-------------|
 | [[ORB — Opening Range Breakout]] | Draft | 15/30-min opening range breakout on watchlist stocks |
 
+| [[Liquidity — 5m Day Trading]] | Source | 5m liquidity zone taps + HTF level rejection entries |
+
 See [[Day Trading]] for category overview.
 
 ## Swing Trading

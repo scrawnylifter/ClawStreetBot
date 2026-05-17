@@ -278,7 +278,7 @@ ClawStreetBot/
     ├── Home.md
     ├── Project Roadmap.md
     ├── 01-Fundamentals/     ← Laws of Trading, Trade Entry Criteria
-    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy
+    ├── 02-Strategies/       ← Day Trading, Swing, Long-Term, EMA Crossover, ORB, Buy the Dip, Greeks Strategy, Liquidity 5m
     ├── 03-Market-Research/  ← Watchlist, Backtesting Architecture
     ├── 04-API-References/   ← Alpaca API, Polygon.io API
     ├── 05-Risk-Management/  ← Position Sizing, Loss Limits, Correlation Risk
