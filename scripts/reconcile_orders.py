@@ -344,6 +344,11 @@ def main() -> int:
         for r in rows:
             try:
                 results.append(reconcile_one(conn, client, r, args.dry_run, args.verbose))
+                # Release the FOR UPDATE lock acquired by fetch_executing even
+                # on PENDING / WARN paths that don't write. Without this, the
+                # row stays locked until the loop's final commit/rollback, so
+                # an overlapping cron run sees an artificially empty set.
+                conn.commit()
             except Exception:
                 log.exception("Unhandled error reconciling signal #%s", r["id"])
                 results.append(f"#{r['id']} {r['symbol']} ERROR — internal")

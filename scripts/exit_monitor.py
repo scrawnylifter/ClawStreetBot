@@ -219,8 +219,14 @@ def decide_exit(
     if crossed_for(tp1) and position.get("tp1_hit_at") is None:
         return ACTION_TP1_PARTIAL, f"tp1: underlying {underlying_price} reached {tp1}"
 
-    # 5. Day-trade time stop.
-    mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"))
+    # 5. Day-trade time stop. risk_mode='aggressive' promotes a swing setup
+    # to day-mode (and 'conservative' demotes a day setup to swing) — matches
+    # the inference process_approved.preflight uses for the PDT counter.
+    mode = pa.infer_trade_mode(
+        signal.get("strategy"),
+        signal.get("timeframe"),
+        risk_mode=signal.get("risk_mode"),
+    )
     if mode == "day":
         stop_utc = _today_time_stop_utc(now)
         if now >= stop_utc:
@@ -250,9 +256,9 @@ _POSITION_SELECT = """
            p.sell_order_id, p.exit_submitted_at, p.exit_reason,
            p.tp1_sell_order_id, p.tp1_filled_at,
            s.id AS signal_id, s.symbol, s.strategy, s.direction,
-           s.timeframe, s.trigger_price, s.stop_price, s.tp1_price,
-           s.tp2_price, s.option_symbol, s.option_strike, s.option_expiry,
-           s.option_delta, s.option_mid
+           s.timeframe, s.risk_mode, s.trigger_price, s.stop_price,
+           s.tp1_price, s.tp2_price, s.option_symbol, s.option_strike,
+           s.option_expiry, s.option_delta, s.option_mid
       FROM trading.positions p
       LEFT JOIN market.signal_alerts s ON s.position_id = p.id
      WHERE p.status = 'open'
@@ -261,13 +267,20 @@ _POSITION_SELECT = """
 """
 
 
-def fetch_open_position_locked(conn, position_id: int | None) -> dict | None:
+def fetch_open_position_locked(
+    conn, position_id: int | None, exclude_ids: list[int] | None = None,
+) -> dict | None:
     """Acquire the next unprocessed open position with a row-level lock.
 
     Uses SELECT FOR UPDATE OF p SKIP LOCKED so two concurrent monitor runs
     each see different rows — eliminating the window where both could submit
     a closing SELL for the same position. The lock is held by the caller's
     transaction and released by the next commit/rollback.
+
+    exclude_ids: positions already visited by THIS run. A HOLD outcome leaves
+    the row matching the WHERE predicates, so the next iteration would
+    re-select the same row in an unbounded loop. The caller passes the
+    accumulated seen-set so we always advance.
 
     The caller must commit (or rollback) before requesting the next row,
     otherwise the lock is held longer than needed.
@@ -277,6 +290,9 @@ def fetch_open_position_locked(conn, position_id: int | None) -> dict | None:
     if position_id is not None:
         sql += " AND p.id = %s"
         params.append(position_id)
+    if exclude_ids:
+        sql += " AND p.id <> ALL(%s)"
+        params.append(list(exclude_ids))
     sql += " ORDER BY p.opened_at ASC LIMIT 1 FOR UPDATE OF p SKIP LOCKED"
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, params)
@@ -546,6 +562,10 @@ def main() -> int:
     now = datetime.now(timezone.utc)
     results: list[str] = []
     started_logged = False
+    # Positions already visited in THIS run. A HOLD outcome doesn't mutate
+    # the row, so without this set the same row would be re-fetched on the
+    # next iteration in an unbounded loop (capped only by --limit).
+    seen_ids: list[int] = []
 
     # Pull rows one at a time with SELECT FOR UPDATE SKIP LOCKED so two
     # concurrent monitor runs each see different rows. The lock is held by
@@ -555,7 +575,7 @@ def main() -> int:
     try:
         while len(results) < args.limit:
             try:
-                row = fetch_open_position_locked(conn, args.id)
+                row = fetch_open_position_locked(conn, args.id, seen_ids)
             except Exception:
                 log.exception("Lock fetch failed; aborting run")
                 conn.rollback()
@@ -572,6 +592,7 @@ def main() -> int:
                          " (DRY RUN)" if not args.confirm else "")
                 started_logged = True
 
+            seen_ids.append(row["position_id"])
             try:
                 result = process_one(
                     conn, trading_client, stock_client, opt_client,

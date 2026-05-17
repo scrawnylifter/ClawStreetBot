@@ -66,5 +66,4 @@ logs/
 *.sqlite3
 
 # OS
-Thumbs.db.venv/
-.env.polygon
+Thumbs.db
