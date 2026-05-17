@@ -454,9 +454,26 @@ def evaluate_symbol(
 # ---------------------------------------------------------------------------
 
 def save_signal(conn, sig: dict) -> int | None:
-    """Insert into market.signal_alerts; returns row id, or None on duplicate."""
+    """Insert into market.signal_alerts; returns row id, or None on duplicate.
+
+    Skips insert if an alert for the same (symbol, strategy, direction, timeframe)
+    fired within the last 4 hours — the table's UNIQUE constraint on
+    created_at never collides because the column defaults to NOW().
+    """
     cur = conn.cursor()
     try:
+        cur.execute("""
+            SELECT 1 FROM market.signal_alerts
+            WHERE symbol = %s AND strategy = %s
+              AND direction = %s AND timeframe = %s
+              AND created_at > NOW() - INTERVAL '4 hours'
+            LIMIT 1
+        """, (sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"]))
+        if cur.fetchone():
+            log.info("%s: cooldown active (%s %s %s alerted within 4h), skipping",
+                     sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"])
+            return None
+
         cur.execute("""
             INSERT INTO market.signal_alerts (
                 symbol, strategy, direction, status, regime, timeframe,

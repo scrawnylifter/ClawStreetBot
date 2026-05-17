@@ -505,6 +505,24 @@ def write_signal_alert(
 
     cur = conn.cursor()
     try:
+        # 4-hour cooldown: skip if a same-direction alert for this symbol/strategy
+        # already fired within 4h. The table UNIQUE on created_at never collides
+        # in practice because created_at defaults to NOW().
+        cur.execute(
+            """
+            SELECT 1 FROM market.signal_alerts
+            WHERE symbol = %s AND strategy = %s
+              AND direction = %s AND timeframe = %s
+              AND created_at > NOW() - INTERVAL '4 hours'
+            LIMIT 1
+            """,
+            (symbol, strategy_tag, direction, "5m"),
+        )
+        if cur.fetchone():
+            log.info("%s: cooldown active (%s %s 5m alerted within 4h), skipping",
+                     symbol, strategy_tag, direction)
+            return None
+
         cur.execute(
             """
             INSERT INTO market.signal_alerts (
