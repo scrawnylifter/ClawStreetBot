@@ -34,6 +34,9 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - `python scripts/scan_setups.py --dry-run` — dry-run: stdout only, no Telegram alert
 - `python scripts/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
 - `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
+- `python scripts/detect_liquidity_sweep.py` — ★ liquidity sweep scanner (5m + daily, close-beyond, Telegram)
+- `python scripts/detect_liquidity_sweep.py --dry-run` — dry-run: stdout only, no DB/Telegram
+- `python scripts/backtest_liquidity_v3.py` — run liquidity sweep refinement backtest (A/B/C/D)
 
 ## Credentials (gitignored)
 
@@ -87,7 +90,7 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans (EMA crossover, ORB, Dip, setup_scanner, liquidity_sweep)
 
 ## Watchlist (16 symbols)
 
@@ -273,7 +276,12 @@ ClawStreetBot/
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
 │   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
 │   ├── backtest.py                    ← Phase 3: Backtesting engine
-│   └── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
+│   ├── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
+│   ├── backtest_liquidity.py         ← Phase 5B: Liquidity sweep v1 backtest (FVG + external, superseded by v3)
+│   ├── backtest_liquidity_v2.py      ← Phase 5B: Liquidity sweep v2 backtest (external only, superseded by v3)
+│   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
+│   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
+│   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
 └── obsidian/vault/         ← knowledge base (27 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
@@ -341,6 +349,8 @@ All phases 1-4 complete. Phase 5A (signal detection) in progress. **Phase 5 Alpa
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
 - [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner; PRIMARY alert mechanism (EMA detectors are now supplementary)
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT); silence = no signal
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
+- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = THE key filter
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget

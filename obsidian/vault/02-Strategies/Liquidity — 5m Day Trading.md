@@ -159,16 +159,39 @@ Before entering, confirm:
 
 ## Integration with ClawStreetBot Scanner
 
-| Strategy Element | Scanner Component | Data Source |
-|-----------------|-------------------|-------------|
-| HTF levels (daily swing H/L) | `market.technical_indicators` EMA/RSI | Alpaca daily bars |
-| 5m zone approach/sweep detection | `market.ohlcv` 5m timeframe | Alpaca intraday |
-| Rejection candles (engulfing, wicks) | Candle pattern scanner (future) | 5m OHLCV |
-| Volume spike confirmation | `trade_count` + `vwap` from 5m bars | Alpaca |
-| Fair value gaps (internal liquidity) | FVG detector (future) | 5m/15m OHLCV |
-| Equal highs/lows detection | Swing point scanner (future) | Daily + 5m bars |
-| Session filtering (London/NY open) | Time-of-day gates | Exchange calendar |
-| Consolidation detection | Range/volatility scanner (future) | Daily OHLCV |
+- **Live scanner:** `scripts/detect_liquidity_sweep.py`
+- **DB:** `market.signal_alerts` (strategy='liquidity_sweep', timeframe='5m')
+- **Signal:** Telegram alert when close-beyond confirmation passes
+
+| Strategy Element | Component | Status |
+|-----------------|-----------|--------|
+| HTF levels (daily swing H/L) | `find_swing_levels()` | ✅ Live |
+| 5m sweep detection | `detect_sweep_signals()` | ✅ Live |
+| Rejection candles (engulfing, wicks) | Confirmation check | ✅ Live |
+| **Close-beyond confirmation** | `close_beyond` gate | ✅ Live (PF 1.56) |
+| Equal highs/lows detection | `find_equal_levels()` | ✅ Live |
+| Session filtering (NY hours only) | Time gates | ✅ Live |
+| Option contract lookup | Alpaca `select_best_option()` | ✅ Live |
+| Per-symbol skip list | RKLB/RDDT/OKLO excluded | ✅ Live |
+| Volume spike confirmation | Tested v3 — hurt PF | ❌ Discarded |
+| Fair value gaps | Tested v1 — pure noise | ❌ Discarded |
+| Consolidation detection | TradingLab framework | 🔲 Future |
+
+---
+
+## Backtest Results (6-month, 16 symbols)
+
+**Close-beyond confirmation (refinement D) — THE key filter:**
+
+| Metric | Baseline | D: Close-Beyond |
+|---|---|---|
+| Trades | 327 | 259 |
+| Win rate | 27.5% | **32.4%** |
+| Profit factor | 1.24 | **1.56** |
+| Avg R-multiple | -0.04R | **+0.16R** |
+
+**Best performers:** IREN (+0.85R), ASTS (+0.54R), MU (+0.55R), STX (+1.16R)
+**Failures (excluded):** RKLB (-0.61R), RDDT (-0.86R), OKLO (-0.39R)
 
 ---
 

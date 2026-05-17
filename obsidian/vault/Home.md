@@ -102,6 +102,8 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. Strategies
 - [x] **n8n workflow migration** — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon workflows deactivated
 - [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY alert mechanism** — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
+- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = key filter
 - [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume+VWAP
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] **Options chain filter** (`filter_options.py`) — DTE≥30, delta range, theta budget

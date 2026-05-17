@@ -138,7 +138,12 @@ ClawStreetBot/
 │   ├── alert_telegram.py          # Telegram alert sender (shows bid/ask/mid) ★
 │   ├── backfill_historical_iv.py  # Historical IV backfill
 │   ├── backtest.py                 # Backtesting engine
-│   └── regime_backtest.py          # Regime classification + dynamic weights
+│   ├── regime_backtest.py          # Regime classification + dynamic weights
+│   ├── backtest_liquidity.py       # Liquidity sweep v1 backtest (superseded by v3)
+│   ├── backtest_liquidity_v2.py    # Liquidity sweep v2 backtest (superseded by v3)
+│   ├── backtest_liquidity_v3.py    # Liquidity sweep v3 — refinement tests (close-beyond = PF 1.56)
+│   ├── diagnose_liquidity_backtest.py  # v1 diagnostics
+│   └── detect_liquidity_sweep.py   # ★ LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram)
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
@@ -316,6 +321,8 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 - [x] **n8n workflows** — `alpaca_ohlcv_daily`, `alpaca_ohlcv_intraday`, `alpaca_options_daily` (active); old Polygon workflows deactivated
 - [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R); silence = no signal; PRIMARY alert mechanism
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
+- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation, Telegram alerts (PF 1.56)
+- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = key filter
 - [ ] ORB breakout detector (`detect_orb.py`)
 - [ ] Buy the 5% Dip detector (`detect_dip.py`)
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
