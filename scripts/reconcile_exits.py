@@ -95,6 +95,10 @@ def fetch_pending_exits(conn, position_id: int | None, limit: int) -> list[dict]
 def mark_closed(
     conn, position_id: int, closed_at: datetime, realized_pnl: Decimal,
 ) -> None:
+    """Close the position and flip the originating signal_alerts row to
+    status='exited' (the documented terminal lifecycle state from migration
+    020_alert_lifecycle). Both updates run in the caller's transaction —
+    the caller commits."""
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE trading.positions
@@ -103,6 +107,13 @@ def mark_closed(
                       realized_pnl = %s
                 WHERE id = %s""",
             (closed_at, realized_pnl, position_id),
+        )
+        cur.execute(
+            """UPDATE market.signal_alerts
+                  SET status = 'exited'
+                WHERE position_id = %s
+                  AND status = 'filled'""",
+            (position_id,),
         )
 
 
