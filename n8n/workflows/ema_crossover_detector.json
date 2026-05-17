@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 7 * * 1-5"
+              "expression": "0 6 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 7:00 PDT",
+      "name": "Weekdays 6:00 PDT (pre-market)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [240, 300]
@@ -40,7 +40,7 @@
     }
   ],
   "connections": {
-    "Weekdays 7:00 PDT": {
+    "Weekdays 6:00 PDT (pre-market)": {
       "main": [
         [
           {
@@ -64,7 +64,6 @@
     }
   },
   "settings": {
-    "executionOrder": "v1",
-    "timezone": "America/Los_Angeles"
+    "executionOrder": "v1"
   }
 }
