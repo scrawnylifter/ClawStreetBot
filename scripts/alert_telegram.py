@@ -122,6 +122,99 @@ def _trend_english(val):
         return "down"
     return "flat"
 
+def format_15m_crossover_alert(signal: dict) -> str:
+    """Format a 15m EMA crossover signal — intraday entry with daily trend filter."""
+    symbol = signal["symbol"]
+    direction = signal["direction"]
+    price = signal["trigger_price"]
+    stop = signal["stop_price"]
+    tp1 = signal["tp1_price"]
+    tp2 = signal["tp2_price"]
+    rr = signal["risk_reward"]
+    adx = signal["adx"]
+    regime = signal["regime"]
+
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    action = "BUY" if direction == "bullish" else "SELL/PUT"
+
+    # --- Header ---
+    lines = [
+        f"{emoji} <b>{symbol} — {action} Signal (15m)</b>",
+        f"{'─' * 30}",
+    ]
+
+    # --- Trade Plan ---
+    lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
+    rr_check = "✅" if rr >= 3 else "⚠️"
+    lines.append(f"Risk/Reward: {rr:.1f}:1 {rr_check}")
+
+    # --- Why this signal fired ---
+    cross_dir = "above" if direction == "bullish" else "below"
+    daily_pos = signal.get("daily_ema_position", "?")
+    daily_label = "up" if daily_pos == "above" else "down"
+    lines.append(f"\n15-min EMA crossed {cross_dir} 21-period — trend forming (ADX {adx:.0f}).")
+    lines.append(f"Daily trend: EMA9 {'above' if daily_pos == 'above' else 'below'} EMA21 → daily {daily_label} ✅")
+
+    # Trend alignment in plain English
+    micro = _trend_english(signal.get("micro_trend", "?"))
+    inter = _trend_english(signal.get("intermediate_trend", "?"))
+    prim = _trend_english(signal.get("primary_trend", "?"))
+    regime_emoji = "🟢" if regime == "bull" else ("🔴" if regime == "bear" else "⚪")
+    lines.append(f"Short-term {micro}, mid-term {inter}, long-term {prim}. Market regime: {regime_emoji} {regime}")
+
+    # --- How to play it ---
+    opt_sym = signal.get("option_symbol")
+    if opt_sym:
+        opt_strike = signal.get("option_strike", 0)
+        opt_expiry = signal.get("option_expiry", "?")
+        opt_delta = signal.get("option_delta", 0)
+        contract_type = "C" if direction == "bullish" else "P"
+        lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
+    lines.append(f"Or buy {'100 shares' if direction == 'bullish' else 'puts on 100 shares'} @ ${price:.2f}")
+
+    # --- Vol & Gamma context ---
+    context_bits = []
+    iv_rank = signal.get("iv_rank")
+    if iv_rank is not None:
+        if iv_rank < 30:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → cheap premium, good time to buy options")
+        elif iv_rank < 50:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → moderate premium")
+        else:
+            context_bits.append(f"IV rank {iv_rank:.0f}% → expensive premium (consider selling)")
+    iv_rv = signal.get("iv_rv_spread")
+    if iv_rv is not None:
+        if iv_rv < -0.15:
+            context_bits.append(f"Options cheap vs actual vol ({iv_rv:+.2f}) — good time to buy")
+        elif iv_rv > 0.15:
+            context_bits.append(f"Options pricey vs actual vol ({iv_rv:+.2f}) — consider credit spreads")
+        else:
+            context_bits.append(f"IV vs RV fairly priced ({iv_rv:+.2f})")
+    net_gex = signal.get("net_gex")
+    if net_gex is not None:
+        if net_gex > 0:
+            context_bits.append(f"Dealers long gamma (${net_gex:,.0f}) → price likely sticks near strikes")
+        else:
+            context_bits.append(f"Dealers short gamma (${net_gex:,.0f}) → expect wider moves")
+    if context_bits:
+        lines.append("")
+        lines.append("<b>Vol & Gamma:</b>")
+        for bit in context_bits:
+            lines.append(f"  • {bit}")
+
+    # --- When to bail ---
+    invalidation = signal.get("invalidation")
+    if invalidation:
+        if isinstance(invalidation, str):
+            invalidation = json.loads(invalidation)
+        lines.append("")
+        lines.append("<b>Bail if:</b>")
+        for cond in invalidation:
+            lines.append(f"  ⛔ {cond}")
+
+    return "\n".join(lines)
+
+
 def format_ema_crossover_alert(signal: dict) -> str:
     """Format an EMA crossover signal as a clean, readable trade alert."""
     symbol = signal["symbol"]
@@ -244,6 +337,8 @@ def main():
                option_symbol, option_strike, option_expiry,
                option_delta, option_theta,
                iv_rank, iv_rv_spread, net_gex,
+               timeframe, daily_trend, daily_ema_position,
+               intraday_ema_9, intraday_ema_21,
                created_at
         FROM market.signal_alerts
         WHERE telegram_sent = FALSE AND status = 'new'
@@ -285,6 +380,8 @@ def main():
         "option_symbol", "option_strike", "option_expiry",
         "option_delta", "option_theta",
         "iv_rank", "iv_rv_spread", "net_gex",
+        "timeframe", "daily_trend", "daily_ema_position",
+        "intraday_ema_9", "intraday_ema_21",
         "created_at",
     ]
 
@@ -293,7 +390,9 @@ def main():
         signal = dict(zip(columns, row))
 
         # Format alert based on strategy
-        if signal["strategy"] == "ema_crossover":
+        if signal["strategy"] == "ema_crossover_15m":
+            alert_text = format_15m_crossover_alert(signal)
+        elif signal["strategy"] == "ema_crossover":
             alert_text = format_ema_crossover_alert(signal)
         else:
             # Generic fallback

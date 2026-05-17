@@ -1,0 +1,69 @@
+{
+  "name": "ema_crossover_15m",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 6-12 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-15m",
+      "name": "Every 15 min (market hours PDT)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "command": "python /app/scripts/detect_ema_crossover_15m.py"
+      },
+      "id": "detect-15m",
+      "name": "Detect 15m Crossovers",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "command": "python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
+      },
+      "id": "alert-15m",
+      "name": "Send 15m Alerts",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Every 15 min (market hours PDT)": {
+      "main": [
+        [
+          {
+            "node": "Detect 15m Crossovers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect 15m Crossovers": {
+      "main": [
+        [
+          {
+            "node": "Send 15m Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Los_Angeles"
+  }
+}
