@@ -99,8 +99,9 @@ Key tables (see `db/init/` for full DDL):
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
 - `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired/error, approval/chat columns, executed_at, composite_score, error_notified_at)
-  - Alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`
-  - ⚠️ `scan_setups.py`, `detect_liquidity_sweep.py`, and `intraday_signal.py` send Telegram directly (bypass `alert_telegram.py` — no approval keyboard)
+  - Entry alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`, `intraday_signal` → `format_intraday_signal_alert()`. Every header now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which mechanism fired the alert (PR #18).
+  - Exit-fill notifications: `format_exit_notification()` + `send_exit_notification()` are fire-and-forget helpers wired into `reconcile_exits` at every close-commit site (full close, TP1 partial, partial-before-cancel, defensive partial). Posts to Telegram after each `conn.commit()`: 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry). Telegram failure is logged but never rolls back the DB close (PR #18).
+  - All scanners write to `signal_alerts` only; `alert_telegram.py` (alert_dispatch cron) is the SOLE dispatcher with the 4-button approval keyboard.
   - See [[Telegram Alert System]] in Obsidian for full pipeline diagram
 - `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
 - `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
@@ -305,7 +306,7 @@ ClawStreetBot/
 │   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
 │   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R + volume_ratio, trend context, GEX)
-│   ├── alert_telegram.py              ← Phase 5A+5C+5D: Telegram alert sender (inline keyboard for approval/deny); expire_stale_new() + notify_errors() on every cron tick; per-row commit in notify_errors prevents rollback on Telegram outage
+│   ├── alert_telegram.py              ← Phase 5A+5C+5D+5E: Telegram dispatcher (entry alerts with 4-button approval keyboard + 'Strategy:' header line); expire_stale_new() + notify_errors() on every cron tick; per-row commit in notify_errors prevents rollback on Telegram outage; format_exit_notification() + send_exit_notification() helpers for exit-fill push messages
 │   ├── telegram_callback_listener.py  ← Phase 5B: Long-poll listener for Telegram callback queries (approve/deny)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
@@ -319,7 +320,7 @@ ClawStreetBot/
 │   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
 │   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (sets executed_at=NOW() BEFORE Alpaca submit to prevent orphan rows; dry-run by default, --confirm to submit)
 │   ├── reconcile_orders.py           ← Phase 5B+5C+5D: Polls Alpaca for BUY fill state → trading.positions; CANCEL branch writes position with status='cancelled' + partial-fill qty; recover_orphan_executing() catches NULL alpaca_order_id AND NULL executed_at
-│   ├── reconcile_exits.py            ← Phase 5B+5D: Polls Alpaca for SELL fill state → closed + realized_pnl; FOR UPDATE OF p SKIP LOCKED + one-row-at-a-time fetch (concurrency safe); recover_orphan_sells() scans Alpaca for orphan SELL orders; partial_close_sell() for partial fills
+│   ├── reconcile_exits.py            ← Phase 5B+5D+5E: Polls Alpaca for SELL fill state → closed + realized_pnl; FOR UPDATE OF p SKIP LOCKED + one-row-at-a-time fetch (concurrency safe); recover_orphan_exit_sells() scans Alpaca for orphan SELL orders; partial_close_sell() for partial fills; fires Telegram exit notification after every close commit
 │   ├── exit_monitor.py              ← Phase 5B+5C+5D: TP/SL/trailing-stop/time-stop monitor; fails position with status='error' on missing signal row (no silent default-to-bullish); TRAIL_ACTIVATE + TRAIL_UPDATE for swing after TP2, SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard
 │   ├── process_approved.py          ← Phase 5B+5D: Pre-flight checks — PDT counter, drawdown halts (missing equity snapshot = FAIL, not WARN), risk_mode → position sizing
 │   ├── snapshot_equity.py           ← Phase 5B: Alpaca equity snapshot for drawdown denominator
@@ -448,6 +449,10 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [ ] Aggressive button UX — currently silently promotes a swing setup to day-mode for PDT purposes; surface this in the Telegram preview before approval
 - [ ] Idempotency keys for Telegram API — `alert_telegram` has no message-id dedup at the API level; relies on DB locking only (audit M5 residual)
 - [ ] Exit-monitor graceful degradation — if Alpaca API is down, HOLD rows accumulate; consider exponential backoff + max-hold timer (audit C1 residual)
+
+### Phase 5E: Notification UX ✅ (shipped — PR #18)
+- [x] Strategy name in entry-alert headers — every formatter now shows `Strategy: <name> | Timeframe: <tf>` (was missing on setup_scanner, ema_crossover, ema_crossover_15m)
+- [x] Exit-fill Telegram notifications — `reconcile_exits` fires a push after every close commit (full close, TP1 partial, partial-before-cancel, defensive partial). 💰 wins / ⛔ losses / 📤 mechanics. Fire-and-forget — Telegram failure logged but never rolls back DB. Includes symbol, strategy, direction, reason, entry/exit, qty, realized P&L, residual qty for partials.
 
 ### Remaining Items (non-Phase 5)
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

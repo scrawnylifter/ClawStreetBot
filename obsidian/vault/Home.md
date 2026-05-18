@@ -110,9 +110,13 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [x] **BUY reconciliation** (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED` + UNIQUE on `alpaca_order_id` / `position_id` (no phantom positions)
 - [x] **Exit monitor** (`exit_monitor.py`) — stop / premium / TP2 / TP1-partial / time-stop (12:45 PDT) / DTE expiry
 - [x] **TP1 50% partial close** — submit, reconcile, reduce position quantity, separate `tp1_realized_pnl`
-- [x] **SELL reconciliation** (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`
+- [x] **SELL reconciliation** (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`, fires Telegram exit-fill notification
 - [x] **Daily equity snapshots** (`snapshot_equity.py` + `equity_snapshot_daily` cron) — drawdown halt denominator
 - [x] DB migrations 020–026 + n8n workflows `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
+
+**Phase 5E — Notification UX ✅ (PR #18)**
+- [x] **Strategy name in entry-alert headers** — every formatter (`setup_scanner`, `ema_crossover`, `ema_crossover_15m`, `liquidity_sweep`, `intraday_signal`) shows `Strategy: <name> | Timeframe: <tf>` so the user knows which scanner fired
+- [x] **Exit-fill Telegram push** — `reconcile_exits` posts after every close commit. 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry, partial-before-cancel). Includes symbol, strategy, direction, reason, entry/exit, qty, realized P&L, residual qty. Fire-and-forget — Telegram failure logged but never rolls back the DB close
 
 **Phase 5C — Backlog (deferred)** 🔧
 - [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume + VWAP
