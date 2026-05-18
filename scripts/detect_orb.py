@@ -104,22 +104,37 @@ class Bar5m:
 # ── DB ──
 
 def get_connection():
+    """Connect to Postgres.
+
+    Resolution order for each setting: .env.db file (if present) → process
+    env (docker-compose populates POSTGRES_HOST=postgres etc. via env_file)
+    → safe default. The file-first order matters because the worker
+    container inherits POSTGRES_HOST=postgres from compose but the .env.db
+    file inside the repo doesn't carry POSTGRES_HOST — so a file-only
+    lookup with localhost-default fails to reach the postgres service
+    container.
+    """
     env_path = Path("/app/.env.db")
     if not env_path.exists():
         env_path = PROJECT_ROOT / ".env.db"
     cfg: dict[str, str] = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                cfg[k.strip()] = v.strip()
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    cfg[k.strip()] = v.strip()
+
+    def _get(key: str, default: str | None = None) -> str | None:
+        return cfg.get(key) or os.environ.get(key) or default
+
     return psycopg2.connect(
-        host=cfg.get("POSTGRES_HOST", "localhost"),
-        port=int(cfg.get("POSTGRES_PORT", 5432)),
-        user=cfg.get("POSTGRES_USER", "clawstreet"),
-        password=cfg.get("POSTGRES_PASSWORD", ""),
-        dbname=cfg.get("POSTGRES_DB", "clawstreet"),
+        host=_get("POSTGRES_HOST", "postgres"),
+        port=int(_get("POSTGRES_PORT", "5432")),
+        user=_get("POSTGRES_USER", "clawstreet"),
+        password=_get("POSTGRES_PASSWORD", ""),
+        dbname=_get("POSTGRES_DB", "clawstreet"),
     )
 
 
