@@ -98,7 +98,7 @@ Key tables (see `db/init/` for full DDL):
 - `trading.backtest_metrics` — aggregate performance per run (win rate, Sharpe, CAGR, max DD, profit factor)
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
-- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired/error, approval/chat columns, executed_at, composite_score, error_notified_at)
+- `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired/error, CHECK constraint via migration 030, approval/chat columns, executed_at, composite_score, error_notified_at)
   - Entry alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`, `intraday_signal` → `format_intraday_signal_alert()`. Every header now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which mechanism fired the alert (PR #18).
   - Exit-fill notifications: `format_exit_notification()` + `send_exit_notification()` are fire-and-forget helpers wired into `reconcile_exits` at every close-commit site (full close, TP1 partial, partial-before-cancel, defensive partial). Posts to Telegram after each `conn.commit()`: 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry). Telegram failure is logged but never rolls back the DB close (PR #18).
   - All scanners write to `signal_alerts` only; `alert_telegram.py` (alert_dispatch cron) is the SOLE dispatcher with the 4-button approval keyboard.
@@ -252,7 +252,8 @@ ClawStreetBot/
 │   └── 026_signal_alerts_unique.sql ← unique constraint on signal_alerts (dedup)
 │   ├── 027_positions_alpaca_order_id.sql ← alpaca_order_id on trading.positions + partial UNIQUE index
 │   ├── 028_error_notified.sql            ← error_notified_at on signal_alerts (error surfacing tracker)
-│   └── 029_position_trail_stop.sql        ← trail_stop_price on trading.positions (trailing stop after TP2)
+│   ├── 029_position_trail_stop.sql        ← trail_stop_price on trading.positions (trailing stop after TP2)
+│   └── 030_status_check_constraints.sql  ← CHECK constraints on signal_alerts.status and trading.positions.status (enum hardening)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
@@ -289,7 +290,7 @@ ClawStreetBot/
 │   ├── options_analysis.py
 │   ├── ingest_alpaca_ohlcv.py        ← ★ Alpaca OHLCV ingestion (1d/15m/5m) with trade_count + VWAP
 │   ├── ingest_alpaca_options.py       ← ★ Alpaca options chains + greeks + bid/ask
-│   ├── fetch_alpaca_snapshot.py        ← ★ Real-time stock + best option snapshot at signal time
+│   ├── fetch_alpaca_snapshot.py        ← ★ Real-time stock + best option snapshot at signal time; DELTA_BANDS dict (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80); reselect_option_for_risk_mode() re-queries Alpaca and persists new contract
 │   ├── ingest_polygon_ohlcv.py        ← DECOMMISSIONED (replaced by ingest_alpaca_ohlcv.py)
 │   ├── ingest_polygon_options.py      ← DECOMMISSIONED (replaced by ingest_alpaca_options.py)
 │   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion (still active)
@@ -318,7 +319,7 @@ ClawStreetBot/
 │   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
 │   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
 │   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
-│   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (sets executed_at=NOW() BEFORE Alpaca submit to prevent orphan rows; dry-run by default, --confirm to submit)
+│   ├── execute_trade.py              ← Phase 5B+5C: Alpaca paper order submission; bracket orders (order_class=BRACKET) for non-option stock entries with stop/tp2; reselect_option_for_risk_mode() for conservative/aggressive; cancel_open_orders_for_symbol before exit_monitor closes; sets executed_at=NOW() BEFORE Alpaca submit to prevent orphan rows; dry-run by default, --confirm to submit
 │   ├── reconcile_orders.py           ← Phase 5B+5C+5D: Polls Alpaca for BUY fill state → trading.positions; CANCEL branch writes position with status='cancelled' + partial-fill qty; recover_orphan_executing() catches NULL alpaca_order_id AND NULL executed_at
 │   ├── reconcile_exits.py            ← Phase 5B+5D+5E: Polls Alpaca for SELL fill state → closed + realized_pnl; FOR UPDATE OF p SKIP LOCKED + one-row-at-a-time fetch (concurrency safe); recover_orphan_exit_sells() scans Alpaca for orphan SELL orders; partial_close_sell() for partial fills; fires Telegram exit notification after every close commit
 │   ├── exit_monitor.py              ← Phase 5B+5C+5D: TP/SL/trailing-stop/time-stop monitor; fails position with status='error' on missing signal row (no silent default-to-bullish); TRAIL_ACTIVATE + TRAIL_UPDATE for swing after TP2, SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard
@@ -407,7 +408,7 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [x] TP1 50% partial close — submit, reconcile, reduce position quantity
 - [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`; `FOR UPDATE OF p SKIP LOCKED` + one-row-at-a-time fetch (concurrency safe); `recover_orphan_sells()` scans Alpaca for orphan SELLs; `partial_close_sell()` for partial fills
 - [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator; missing snapshot = FAIL in `process_approved.py` (not WARN)
-- [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique, 027 positions alpaca_order_id, 028 error_notified, 029 position trail_stop_price
+- [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique, 027 positions alpaca_order_id, 028 error_notified, 029 position trail_stop_price, 030 status check constraints
 - [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
 
 #### PR #14 — Third-Pass Audit Fixes
@@ -442,8 +443,8 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 ### Phase 5C: Backlog (deferred)
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume + VWAP
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — pullback + thesis check + 3-tranche scale-in
-- [ ] Per-risk-mode option selection — currently the scanner binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)
-- [ ] Bracket orders for stock entries on Alpaca — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
+- [x] ~~Per-risk-mode option selection — currently the scanner binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)~~ → **Done in PR #19** (DELTA_BANDS in fetch_alpaca_snapshot.py + reselect_option_for_risk_mode() in execute_trade.py)
+- [x] ~~Bracket orders for stock entries on Alpaca — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)~~ → **Done in PR #19** (order_class=BRACKET for non-option stock entries with stop_loss + take_profit; cancel_open_orders_for_symbol before exit_monitor closes)
 - [x] ~~Trailing stop after TP2 for swing mode — currently TP2 full-closes~~ → **Done in PR #16** (TRAIL_ACTIVATE + TRAIL_UPDATE + migration 029)
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
 - [ ] Aggressive button UX — currently silently promotes a swing setup to day-mode for PDT purposes; surface this in the Telegram preview before approval
@@ -452,7 +453,13 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 
 ### Phase 5E: Notification UX ✅ (shipped — PR #18)
 - [x] Strategy name in entry-alert headers — every formatter now shows `Strategy: <name> | Timeframe: <tf>` (was missing on setup_scanner, ema_crossover, ema_crossover_15m)
-- [x] Exit-fill Telegram notifications — `reconcile_exits` fires a push after every close commit (full close, TP1 partial, partial-before-cancel, defensive partial). 💰 wins / ⛔ losses / 📤 mechanics. Fire-and-forget — Telegram failure logged but never rolls back DB. Includes symbol, strategy, direction, reason, entry/exit, qty, realized P&L, residual qty for partials.
+- [x] Exit-fill Telegram notifications — `reconcile_exits` fires a push after every close commit (full close, TP1 partial, partial-before-cancel, defensive partial). 💰 wins / ⛔ losses / 📤 mechanics. Fire-and-forget — Telegram failure logged but never rolls back DB.
+
+#### PR #19 — Status-Check Constraints, Risk-Mode Delta Bands, Bracket Orders (M1 + H7)
+- **CHECK constraints on status enums** — migration `030_status_check_constraints.sql` adds `signal_alerts_status_check` (9 valid values) and re-states `positions_status_check` (open/closed/cancelled). Typos like `'exeucting'` or `'fllied'` now fail at INSERT/UPDATE instead of silently corrupting the lifecycle state machine. Pre-flight repair included (rejected→denied, closed→exited).
+- **Per-risk-mode delta bands (M1)** — `DELTA_BANDS` dict in `fetch_alpaca_snapshot.py` maps conservative (0.55–0.65, aim 0.60), standard (0.50–0.70, aim 0.60), aggressive (0.40–0.80, aim 0.50). `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca for the best contract in the user-chosen band and overwrites the signal's option fields on `market.signal_alerts`. Standard is no-op (scanner already picked in that band).
+- **Bracket orders for stock entries (H7)** — `execute_trade.py` now submits `order_class=BRACKET` (market BUY + stop-loss leg at stop_price + take-profit leg at tp2_price) for non-option bullish entries. `exit_monitor.cancel_open_orders_for_symbol()` cancels bracket legs before exit_monitor issues its own close. Options and bearish stock entries still use plain market orders.
+- **Cron drift fix** — `reconcile_orders` and `reconcile_exits` run 6–14 PDT (not 6–13), giving an extra hour past close for late fills.
 
 ### Remaining Items (non-Phase 5)
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

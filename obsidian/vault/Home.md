@@ -42,7 +42,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 29 migrations; Docker socket isolation
+- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 30 migrations; Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -121,10 +121,11 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 **Phase 5C — Backlog (deferred)** 🔧
 - [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume + VWAP
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche scale-in
-- [ ] **Per-risk-mode option selection** — scanner currently binds 0.50-0.70 delta at scan time, before the user picks Conservative/Aggressive (audit M1)
-- [ ] **Bracket orders for stock entries** — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
+- [x] ~~**Per-risk-mode option selection**~~ → **Done in PR #19** — `DELTA_BANDS` dict in `fetch_alpaca_snapshot.py` (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80); `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca and persists the new contract
+- [x] ~~**Bracket orders for stock entries**~~ → **Done in PR #19** — `order_class=BRACKET` for non-option stock entries with stop_loss + take_profit legs; `cancel_open_orders_for_symbol` before exit_monitor closes
 - [x] **Trailing stop after TP2** for swing mode — `029_position_trail_stop.sql` adds `trail_stop_price` column; exit_monitor raises monotonically after TP2 fires (`exit_reason=trail_stop`)
 - [ ] **Risk alerts** (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
 - [ ] **Aggressive button UX** — silently promotes a swing setup to day-mode for PDT purposes; surface in Telegram preview before approval
 - [ ] **status=expired cron** — schedule a periodic job to flip `signal_alerts` rows stuck in `pending`/`approved` past EOD to `status='expired'` (prevents stale execution)
 - [x] **Orphan executing rows** — `028_error_notified.sql` adds `error_notified_at` column for error notification tracking; reconciler in `execute_trade.py` / `reconcile_orders.py` detects `executing` rows with no matching order and recovers them
+- [x] **Status enum CHECK constraints** — `030_status_check_constraints.sql` adds `signal_alerts_status_check` (9 valid values) and re-states `positions_status_check`; typos like `'exeucting'` now fail at INSERT/UPDATE instead of silently corrupting the lifecycle

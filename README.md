@@ -98,7 +98,8 @@ ClawStreetBot/
 │   ├── 026_signal_alerts_unique.sql  # UNIQUE on alpaca_order_id, position_id (prevent double-fill)
 │   ├── 027_positions_alpaca_order_id.sql # alpaca_order_id on positions + UNIQUE partial index
 │   ├── 028_error_notified.sql         # error_notified_at on signal_alerts (Telegram edit tracking)
-│   └── 029_position_trail_stop.sql    # trail_stop_price on positions (swing trailing stop after TP2)
+│   ├── 029_position_trail_stop.sql    # trail_stop_price on positions (swing trailing stop after TP2)
+│   └── 030_status_check_constraints.sql  # CHECK constraints on signal_alerts.status and trading.positions.status
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
@@ -151,7 +152,7 @@ ClawStreetBot/
 │   ├── diagnose_liquidity_backtest.py  # v1 diagnostics
 │   ├── explore_data.py             # Alpaca data explorer
 │   ├── explore_options.py          # Options chain explorer
-│   ├── fetch_alpaca_snapshot.py     # Real-time stock price + best option at signal time ★
+│   ├── fetch_alpaca_snapshot.py     # Real-time stock price + best option at signal time; DELTA_BANDS dict (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80) ★
 │   ├── generate_signals.py         # Composite signal scoring (6-factor, 0-100)
 │   ├── ingest_alpaca_ohlcv.py      # Alpaca OHLCV bars → market.ohlcv (1d/15m/5m) ★
 │   ├── ingest_alpaca_options.py    # Alpaca options chains + greeks + bid/ask ★
@@ -165,7 +166,7 @@ ClawStreetBot/
 │   ├── regime_backtest.py            # Regime classification + dynamic weights
 │   ├── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
 │   ├── snapshot_equity.py            # Daily Alpaca equity snapshot (drawdown denominator)
-│   ├── execute_trade.py              # Alpaca paper order submission (approved → executing)
+│   ├── execute_trade.py              # Alpaca paper order submission; bracket orders (BRACKET) for non-option stock entries; reselect_option_for_risk_mode() for conservative/aggressive
 │   ├── exit_monitor.py              # TP/SL/trail-stop/time-stop decision tree (swing trails after TP2)
 │   ├── reconcile_orders.py          # BUY fill → trading.positions; orphan executing recovery
 │   ├── reconcile_exits.py          # SELL/TP1 partial fills → close position + cumulative P&L + status='exited' + Telegram exit-fill push notification
@@ -387,6 +388,9 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 - [x] Trailing stop after TP2 — swing-mode positions trail instead of full-close on TP2 hit (migration 029, `exit_monitor.py`)
 - [x] Partial fill handling — `reconcile_exits` accumulates P&L across partial SELL fills (#15)
 - [x] Alert keyboard expiry — `clear_message_keyboard` on stale alert rows; `editMessageText` for error surfacing (#15)
+- [x] **Per-risk-mode delta bands (M1)** — `DELTA_BANDS` dict in `fetch_alpaca_snapshot.py` (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80); `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca and persists new contract (#19)
+- [x] **Bracket orders for stock entries (H7)** — `order_class=BRACKET` for non-option bullish entries with stop_loss + take_profit legs; `cancel_open_orders_for_symbol` before exit_monitor closes (#19)
+- [x] **Status enum CHECK constraints** — migration 030 adds `signal_alerts_status_check` (9 values) and re-states `positions_status_check`; typos now fail at INSERT/UPDATE (#19)
 
 ### Phase 5E — Notification UX (#18)
 - [x] **Strategy name in entry-alert headers** — every formatter (`setup_scanner`, `ema_crossover`, `ema_crossover_15m`, `liquidity_sweep`, `intraday_signal`) now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which scanner fired the alert
