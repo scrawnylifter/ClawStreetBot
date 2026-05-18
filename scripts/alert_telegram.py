@@ -144,6 +144,171 @@ def send_telegram_message(
 
 
 # ---------------------------------------------------------------------------
+# Telegram message edits (keyboard removal + error surfacing)
+# ---------------------------------------------------------------------------
+
+def _telegram_edit(
+    token: str, method: str, payload: dict, allowed_chat_id: str = "",
+) -> dict | None:
+    """Generic editMessage* helper. Honors the same chat allowlist as
+    send_telegram_message."""
+    chat_id = payload.get("chat_id")
+    if allowed_chat_id and str(chat_id) != str(allowed_chat_id):
+        log.warning("BLOCKED: edit attempt to unauthorized chat_id=%s", chat_id)
+        return None
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        # 'message is not modified' is harmless — Telegram returns 400 if the
+        # edit doesn't change anything (e.g. keyboard already cleared).
+        if e.code == 400 and "not modified" in body:
+            return {"ok": True, "no_change": True}
+        log.error("Telegram %s error %d: %s", method, e.code, body[:200])
+        return None
+    except Exception as e:
+        log.error("Telegram %s failed: %s", method, e)
+        return None
+
+
+def clear_message_keyboard(
+    token: str, chat_id: str, message_id: int, allowed_chat_id: str = "",
+) -> dict | None:
+    """Remove the inline keyboard from a previously-sent alert. Used when
+    expiring stale 'new' rows so the user can't tap a dead button."""
+    return _telegram_edit(
+        token, "editMessageReplyMarkup",
+        {"chat_id": chat_id, "message_id": int(message_id), "reply_markup": {}},
+        allowed_chat_id=allowed_chat_id,
+    )
+
+
+def edit_message_text(
+    token: str, chat_id: str, message_id: int, text: str,
+    allowed_chat_id: str = "",
+) -> dict | None:
+    """Replace the text of a previously-sent alert message (drops keyboard).
+    Used to surface a status='error' failure in-place on the original
+    alert."""
+    return _telegram_edit(
+        token, "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": int(message_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        },
+        allowed_chat_id=allowed_chat_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: expirer + error surfacer
+# ---------------------------------------------------------------------------
+
+EXPIRY_HOURS = 24
+
+def expire_stale_new(conn, token: str | None, chat_id: str | None) -> int:
+    """Flip status='new' rows older than EXPIRY_HOURS to 'expired'.
+
+    Without this, alerts the user never acted on accumulate forever — the
+    Telegram keyboard stays live and a stale tap days later runs through
+    telegram_callback_listener's idempotency branch (correctly rejected, but
+    cluttering chat) and the rows show up in PDT / drawdown projections
+    that shouldn't include them.
+
+    Also strips the inline keyboard from each expiring row's original
+    message so the user can't tap a dead button. Keyboard removal failure
+    does not block the DB flip — Telegram message_id may be missing or the
+    message itself deleted; the state machine still needs to advance.
+
+    Returns the number of rows expired (for logging)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE market.signal_alerts
+                  SET status = 'expired'
+                WHERE status = 'new'
+                  AND created_at < NOW() - make_interval(hours => %s)
+                RETURNING id, telegram_msg_id""",
+            (EXPIRY_HOURS,),
+        )
+        expired = cur.fetchall()
+    conn.commit()
+
+    if not expired:
+        return 0
+
+    if token and chat_id:
+        for sid, msg_id in expired:
+            if msg_id:
+                clear_message_keyboard(token, chat_id, msg_id, allowed_chat_id=chat_id)
+    log.info("Expired %d stale 'new' signal_alerts row(s) (> %sh old)",
+             len(expired), EXPIRY_HOURS)
+    return len(expired)
+
+
+def notify_errors(conn, token: str | None, chat_id: str | None, limit: int = 20) -> int:
+    """Surface status='error' rows to Telegram by editing the original
+    alert message in-place.
+
+    Selects rows with error_notified_at IS NULL (migration 028) so each
+    error is surfaced exactly once. The edit replaces the trade plan with
+    an error notice and drops the keyboard. Rows without a telegram_msg_id
+    (errors raised before the alert ever sent) are marked notified
+    immediately to keep the queue from filling — the operator can grep
+    logs by signal id.
+
+    Returns the count of rows processed."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, symbol, strategy, direction, error_message,
+                      telegram_msg_id
+                 FROM market.signal_alerts
+                WHERE status = 'error'
+                  AND error_notified_at IS NULL
+                ORDER BY id ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED""",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            conn.commit()
+            return 0
+
+        notified = 0
+        for sid, sym, strat, direction, err_msg, msg_id in rows:
+            err_text = (err_msg or "(no message)")[:500]
+            text = (
+                f"❌ <b>ERROR — {sym} {strat} {direction}</b>\n"
+                f"<i>signal #{sid}</i>\n\n"
+                f"<code>{err_text}</code>"
+            )
+            if token and chat_id and msg_id:
+                edit_message_text(token, chat_id, msg_id, text,
+                                  allowed_chat_id=chat_id)
+            cur.execute(
+                """UPDATE market.signal_alerts
+                      SET error_notified_at = NOW()
+                    WHERE id = %s""",
+                (sid,),
+            )
+            notified += 1
+
+    conn.commit()
+    if notified:
+        log.info("Surfaced %d error row(s) to Telegram", notified)
+    return notified
+
+
+# ---------------------------------------------------------------------------
 # Alert formatters (per strategy)
 # ---------------------------------------------------------------------------
 
@@ -607,6 +772,9 @@ def main():
                         help="Print alerts without sending")
     parser.add_argument("--limit", type=int, default=10,
                         help="Max alerts to send (default: 10)")
+    parser.add_argument("--skip-lifecycle", action="store_true",
+                        help="Skip the expire-stale + surface-errors prelude. "
+                             "Used in tests; the cron always runs both.")
     args = parser.parse_args()
 
     conn = get_connection()
@@ -656,6 +824,22 @@ def main():
         print("Can't send: missing Telegram config. Use --dry-run to preview.")
         conn.close()
         return
+
+    # Lifecycle prelude: walk through age and failure terminals before the
+    # main dispatch so the 1-min cron handles them on every tick. Both
+    # helpers commit themselves; both are safe to call against an empty
+    # backlog.
+    if not args.skip_lifecycle and not args.dry_run:
+        try:
+            expire_stale_new(conn, tg_token, tg_chat_id)
+        except Exception:
+            log.exception("expire_stale_new failed — continuing")
+            conn.rollback()
+        try:
+            notify_errors(conn, tg_token, tg_chat_id, limit=args.limit)
+        except Exception:
+            log.exception("notify_errors failed — continuing")
+            conn.rollback()
 
     sent_count = 0
     processed = 0
