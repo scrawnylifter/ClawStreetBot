@@ -9,14 +9,18 @@ Decision tree (first match wins; full close unless noted):
 
     1. underlying breached stop   → full close
     2. option premium ≤ 50% entry → full close (option positions only)
-    3. underlying reached tp2     → full close
-    4. underlying reached tp1     → partial close (50%)
+    3. trail stop (if active)     → close on breach, else raise/lower trail
+                                     monotonically. Trail-active rows
+                                     bypass TP1/TP2 (already past those).
+    4. underlying reached tp2     → full close (day / long_term modes)
+                                     OR trail-activate (swing mode)
+    5. underlying reached tp1     → partial close (50%)
                                       submit a SELL for qty//2 and stamp
                                       tp1_sell_order_id + tp1_hit_at;
                                       reconcile_exits reduces positions.quantity
                                       when the partial fills.
-    5. day-trade time stop        → full close (mode=day, ≥ 12:55 PDT)
-    6. option DTE ≤ 1             → full close (Law 5)
+    6. day-trade time stop        → full close (mode=day, ≥ 12:45 PDT)
+    7. option DTE ≤ 1             → full close (Law 5)
 
 Default is dry-run; --confirm submits real SELL orders on Alpaca paper.
 paper=True is hard-coded.
@@ -158,9 +162,33 @@ def fetch_option_mid_and_bid(opt_client, occ_symbol: str) -> tuple[Decimal | Non
 # ---------------------------------------------------------------------------
 
 # Action codes
-ACTION_FULL_CLOSE   = "full_close"
-ACTION_TP1_PARTIAL  = "tp1_partial"
-ACTION_NO_OP        = "no_op"
+ACTION_FULL_CLOSE     = "full_close"
+ACTION_TP1_PARTIAL    = "tp1_partial"
+ACTION_TRAIL_ACTIVATE = "trail_activate"  # TP2 hit in swing — start trailing
+ACTION_TRAIL_UPDATE   = "trail_update"    # trail moved forward, no close
+ACTION_NO_OP          = "no_op"
+
+
+def _trail_distance(
+    atr_14: Decimal | None,
+    entry_price: Decimal | None,
+    stop_loss: Decimal | None,
+) -> Decimal | None:
+    """Distance from underlying to trail stop.
+
+    Primary: 2 × ATR(14) — matches the original swing SL distance prescribed
+    in the trading rules.
+    Fallback: |entry_price - stop_loss| from the original setup, so a
+    signal that didn't store ATR still trails on something sane.
+    Returns None if neither is computable; caller should then fall back to
+    a regular full close on TP2 rather than trail.
+    """
+    if atr_14 is not None and atr_14 > 0:
+        return atr_14 * Decimal("2")
+    if entry_price is not None and stop_loss is not None:
+        d = entry_price - stop_loss
+        return d if d > 0 else -d
+    return None
 
 
 def _today_time_stop_utc(now_utc: datetime) -> datetime:
@@ -175,11 +203,23 @@ def decide_exit(
     position: dict, signal: dict, now: datetime,
     underlying_price: Decimal | None,
     option_mid: Decimal | None,
-) -> tuple[str, str]:
-    """Returns (action_code, reason_string).
+) -> tuple[str, str, Decimal | None]:
+    """Returns (action_code, reason_string, extras).
 
-    The reason string is short — it goes into positions.exit_reason and
-    is also surfaced in logs / Telegram (future)."""
+    extras is the new trail_stop_price for ACTION_TRAIL_ACTIVATE /
+    ACTION_TRAIL_UPDATE; None for every other action.
+
+    Order of checks:
+      1. underlying stop          → full close
+      2. option premium stop      → full close (option positions only)
+      3. trail stop active        → close on breach; else update if moved.
+                                     Skips TP1/TP2 — we're past those.
+      4. TP2 reached              → full close (day/long_term) or
+                                     trail-activate (swing)
+      5. TP1 reached (one-shot)   → partial close
+      6. day-trade time stop      → full close
+      7. option DTE ≤ 1           → full close (Law 5)
+    """
     direction = signal.get("direction") or "bullish"
     is_option = bool(signal.get("option_symbol"))
     entry_price = _to_decimal(position["entry_price"])
@@ -187,6 +227,8 @@ def decide_exit(
     stop = _to_decimal(signal.get("stop_price"))
     tp1  = _to_decimal(signal.get("tp1_price"))
     tp2  = _to_decimal(signal.get("tp2_price"))
+    atr_14 = _to_decimal(signal.get("atr_14"))
+    trail_stop = _to_decimal(position.get("trail_stop_price"))
 
     def crossed_against(level: Decimal | None) -> bool:
         """Did the underlying breach `level` in the position's losing direction?"""
@@ -202,24 +244,68 @@ def decide_exit(
 
     # 1. Invalidation: underlying breached the stop.
     if crossed_against(stop):
-        return ACTION_FULL_CLOSE, f"stop: underlying {underlying_price} breached {stop}"
+        return ACTION_FULL_CLOSE, f"stop: underlying {underlying_price} breached {stop}", None
 
     # 2. Option premium stop (only when we have an option position + live mid).
     if is_option and option_mid is not None and entry_price is not None:
         prem_floor = (entry_price * OPTION_PREMIUM_STOP_FRACTION).quantize(Decimal("0.01"))
         if option_mid <= prem_floor:
             return (ACTION_FULL_CLOSE,
-                    f"premium_stop: option mid {option_mid} ≤ 50% of entry {entry_price}")
+                    f"premium_stop: option mid {option_mid} ≤ 50% of entry {entry_price}",
+                    None)
 
-    # 3. TP2 — take full profit.
-    if crossed_for(tp2):
-        return ACTION_FULL_CLOSE, f"tp2: underlying {underlying_price} reached {tp2}"
+    # 3. Trail stop (only when activated). Trail-active rows have already
+    # passed TP2, so TP1/TP2 branches are bypassed below.
+    if trail_stop is not None and underlying_price is not None:
+        if crossed_against(trail_stop):
+            return (ACTION_FULL_CLOSE,
+                    f"trail_stop: underlying {underlying_price} breached {trail_stop}",
+                    None)
+        trail_dist = _trail_distance(atr_14, entry_price, stop)
+        if trail_dist is not None and trail_dist > 0:
+            if direction == "bullish":
+                candidate = underlying_price - trail_dist
+                if candidate > trail_stop:
+                    return (ACTION_TRAIL_UPDATE,
+                            f"trail_raise: {trail_stop} → {candidate}", candidate)
+            else:
+                candidate = underlying_price + trail_dist
+                if candidate < trail_stop:
+                    return (ACTION_TRAIL_UPDATE,
+                            f"trail_lower: {trail_stop} → {candidate}", candidate)
+        # Trail active but no breach / no update — fall through ONLY to
+        # time stop + expiry, never to TP1/TP2 (we're past those).
+        skip_tp = True
+    else:
+        skip_tp = False
 
-    # 4. TP1 — partial. Only fire once; sticky flag protects against re-entry.
-    if crossed_for(tp1) and position.get("tp1_hit_at") is None:
-        return ACTION_TP1_PARTIAL, f"tp1: underlying {underlying_price} reached {tp1}"
+    # 4. TP2 — take full profit, or activate trail in swing mode.
+    if not skip_tp and crossed_for(tp2):
+        mode_for_tp2 = pa.infer_trade_mode(
+            signal.get("strategy"),
+            signal.get("timeframe"),
+            risk_mode=signal.get("risk_mode"),
+        )
+        if mode_for_tp2 == "swing":
+            trail_dist = _trail_distance(atr_14, entry_price, stop)
+            if trail_dist is not None and trail_dist > 0 and underlying_price is not None:
+                initial_trail = (underlying_price - trail_dist
+                                 if direction == "bullish"
+                                 else underlying_price + trail_dist)
+                return (ACTION_TRAIL_ACTIVATE,
+                        f"tp2_trail_activate: underlying {underlying_price} "
+                        f"reached {tp2}, trail @ {initial_trail}",
+                        initial_trail)
+            # No ATR / SL → can't trail. Fall through to full close.
+        return (ACTION_FULL_CLOSE,
+                f"tp2: underlying {underlying_price} reached {tp2}", None)
 
-    # 5. Day-trade time stop. risk_mode='aggressive' promotes a swing setup
+    # 5. TP1 — partial. Only fire once; sticky flag protects against re-entry.
+    if not skip_tp and crossed_for(tp1) and position.get("tp1_hit_at") is None:
+        return (ACTION_TP1_PARTIAL,
+                f"tp1: underlying {underlying_price} reached {tp1}", None)
+
+    # 6. Day-trade time stop. risk_mode='aggressive' promotes a swing setup
     # to day-mode (and 'conservative' demotes a day setup to swing) — matches
     # the inference process_approved.preflight uses for the PDT counter.
     mode = pa.infer_trade_mode(
@@ -230,17 +316,18 @@ def decide_exit(
     if mode == "day":
         stop_utc = _today_time_stop_utc(now)
         if now >= stop_utc:
-            return ACTION_FULL_CLOSE, f"time_stop: {now.isoformat()} ≥ 12:45 PDT"
+            return (ACTION_FULL_CLOSE,
+                    f"time_stop: {now.isoformat()} ≥ 12:45 PDT", None)
 
-    # 6. Option expiry imminent.
+    # 7. Option expiry imminent.
     if is_option:
         expiry = signal.get("option_expiry")
         if isinstance(expiry, date):
             dte = (expiry - now.astimezone(EQUITIES_TZ).date()).days
             if dte <= MIN_DTE_HOLDABLE:
-                return ACTION_FULL_CLOSE, f"expiry: DTE {dte} (Law 5)"
+                return ACTION_FULL_CLOSE, f"expiry: DTE {dte} (Law 5)", None
 
-    return ACTION_NO_OP, "no exit condition met"
+    return ACTION_NO_OP, "no exit condition met", None
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +342,11 @@ _POSITION_SELECT = """
            p.status AS pos_status, p.opened_at, p.tp1_hit_at,
            p.sell_order_id, p.exit_submitted_at, p.exit_reason,
            p.tp1_sell_order_id, p.tp1_filled_at,
+           p.trail_stop_price,
            s.id AS signal_id, s.symbol, s.strategy, s.direction,
            s.timeframe, s.risk_mode, s.trigger_price, s.stop_price,
-           s.tp1_price, s.tp2_price, s.option_symbol, s.option_strike,
+           s.tp1_price, s.tp2_price, s.atr_14,
+           s.option_symbol, s.option_strike,
            s.option_expiry, s.option_delta, s.option_mid
       FROM trading.positions p
       LEFT JOIN market.signal_alerts s ON s.position_id = p.id
@@ -331,6 +420,27 @@ def stamp_full_close(
                       exit_reason       = %s
                 WHERE id = %s""",
             (sell_order_id, now, reason, position_id),
+        )
+
+
+def stamp_trail_stop(
+    conn, position_id: int, new_trail: Decimal,
+) -> None:
+    """Update trail_stop_price (activation or monotonic move). Caller owns
+    the transaction.
+
+    Activation and update use the same UPDATE — the only state that matters
+    on the row is the trail price itself. decide_exit guarantees the new
+    value is strictly better than the old (raise for bullish, lower for
+    bearish), so this is safe to call on every tick that returns a trail
+    action.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE trading.positions
+                  SET trail_stop_price = %s
+                WHERE id = %s""",
+            (new_trail, position_id),
         )
 
 
@@ -455,7 +565,7 @@ def process_one(
     if row.get("option_symbol"):
         option_mid, _ = fetch_option_mid_and_bid(opt_client, row["option_symbol"])
 
-    action, reason = decide_exit(
+    action, reason, extras = decide_exit(
         position=row, signal=row, now=now,
         underlying_price=underlying, option_mid=option_mid,
     )
@@ -465,6 +575,24 @@ def process_one(
         if verbose:
             log.info("#%s %s HOLD — %s (%s)", pid, sym, reason, quote_str)
         return f"position #{pid} {sym} HOLD — {reason} [{quote_str}]"
+
+    if action in (ACTION_TRAIL_ACTIVATE, ACTION_TRAIL_UPDATE):
+        # Trail moves are DB-only — no Alpaca submission until the trail is
+        # finally breached (which fires ACTION_FULL_CLOSE with reason=trail_stop).
+        new_trail = extras  # decide_exit guarantees non-null for trail actions
+        if new_trail is None:
+            # Defensive: shouldn't happen, but don't double-fault.
+            return (f"position #{pid} {sym} HOLD — trail action with no value "
+                    f"({reason}) [{quote_str}]")
+        if dry_run:
+            return (f"position #{pid} {sym} DRY-RUN would {action} → "
+                    f"trail={new_trail} [{quote_str}]")
+        stamp_trail_stop(conn, pid, new_trail)
+        verb = "TRAIL ACTIVATE" if action == ACTION_TRAIL_ACTIVATE else "TRAIL UPDATE"
+        log.info("#%s %s %s — trail_stop=%s reason=%s",
+                 pid, sym, verb, new_trail, reason)
+        return (f"position #{pid} {sym} {verb} — trail_stop={new_trail} "
+                f"reason={reason} [{quote_str}]")
 
     if action == ACTION_TP1_PARTIAL:
         # Close 50% of the remaining quantity. Integer floor — if there's only

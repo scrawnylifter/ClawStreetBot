@@ -181,6 +181,49 @@ def mark_error(conn, signal_id: int, message: str) -> None:
         )
 
 
+ORPHAN_EXECUTING_GRACE_MIN = 5
+
+def recover_orphan_executing(conn) -> int:
+    """Reap rows stuck in status='executing' with no alpaca_order_id.
+
+    The submit-to-Alpaca → DB-stamp path in execute_trade.submit_to_alpaca +
+    record_execution is not atomic. If the worker is SIGKILLed (OOM, deploy
+    restart) after Alpaca acknowledged the BUY but before the alpaca_order_id
+    column was written, the row sits at status='executing' with
+    alpaca_order_id IS NULL forever. fetch_executing() filters those out
+    (it requires the id to look the order up), so they never reach
+    reconcile_one — they just rot.
+
+    Five minutes is the grace window: any healthy submit writes the id well
+    within that. Anything older is genuinely lost. The deterministic
+    client_order_id (csb-entry-<signal_id>) means Alpaca already deduped
+    a retry within the grace window, so there's no risk of a duplicate
+    submission post-recovery — the operator just needs to know the trade
+    didn't fill cleanly (alert surfacing happens via alert_telegram's
+    notify_errors helper).
+
+    Returns the count of rows recovered (for logging)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE market.signal_alerts
+                  SET status        = 'error',
+                      error_message = 'orphan executing: no alpaca_order_id '
+                                      || %s::text || ' min after executed_at'
+                WHERE status = 'executing'
+                  AND alpaca_order_id IS NULL
+                  AND executed_at IS NOT NULL
+                  AND executed_at < NOW() - make_interval(mins => %s)
+                RETURNING id""",
+            (ORPHAN_EXECUTING_GRACE_MIN, ORPHAN_EXECUTING_GRACE_MIN),
+        )
+        ids = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    if ids:
+        log.warning("Recovered %d orphan executing row(s) → status=error: %s",
+                    len(ids), ids)
+    return len(ids)
+
+
 # ---------------------------------------------------------------------------
 # Per-row reconciliation
 # ---------------------------------------------------------------------------
@@ -325,6 +368,20 @@ def main() -> int:
 
     conn = pa.get_connection()
     try:
+        # Reap orphan executing rows BEFORE the normal fetch — any row stuck
+        # at status='executing' AND alpaca_order_id IS NULL for >5 min is
+        # unrecoverable through the normal path (fetch_executing filters
+        # them out by requiring an order id).
+        if args.id is None and not args.dry_run:
+            try:
+                recover_orphan_executing(conn)
+            except Exception:
+                log.exception("recover_orphan_executing failed — continuing")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+
         rows = fetch_executing(conn, args.id, args.limit)
     except Exception:
         conn.close()
