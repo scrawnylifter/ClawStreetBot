@@ -70,6 +70,12 @@ DELTA_OK_RANGE_DAY   = (Decimal("0.50"), Decimal("0.80"))  # we keep one band fo
 
 MIN_RR = Decimal("3.0")
 
+# Maximum acceptable option bid-ask spread as a fraction of mid price.
+# Mirrors fetch_alpaca_snapshot.MAX_SPREAD_PCT — kept in sync as the
+# preflight gate of last resort in case a stale signal sneaks past the
+# scanner-time filter (or the option moved after enrichment).
+MAX_SPREAD_PCT = Decimal("0.15")
+
 # PDT rules: 3 DT max in rolling 5-business-day window, 4th = ban
 PDT_WINDOW_DAYS = 5
 PDT_MAX_NORMAL = 2   # normal allowance (3rd = emergency only)
@@ -487,6 +493,23 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
                 out.append((CHECK_WARN, f"|Δ| {d} > {hi} — consider shares instead"))
             else:
                 out.append((CHECK_PASS, f"|Δ| {d} in [{lo}, {hi}]"))
+
+        # bid-ask spread
+        opt_bid = _to_decimal(signal.get("option_bid"))
+        opt_ask = _to_decimal(signal.get("option_ask"))
+        if opt_bid is None or opt_ask is None or opt_bid <= 0 or opt_ask <= 0:
+            out.append((CHECK_WARN, "option_bid/option_ask NULL or non-positive — can't verify spread"))
+        else:
+            mid = (opt_bid + opt_ask) / Decimal("2")
+            spread_pct = (opt_ask - opt_bid) / mid
+            pct_str = f"{spread_pct*100:.1f}%"
+            cap_str = f"{MAX_SPREAD_PCT*100:.0f}%"
+            if spread_pct > MAX_SPREAD_PCT:
+                out.append((CHECK_FAIL,
+                            f"bid-ask spread {pct_str} > {cap_str} cap "
+                            f"(bid={opt_bid}, ask={opt_ask}) — illiquid, refusing to cross"))
+            else:
+                out.append((CHECK_PASS, f"bid-ask spread {pct_str} ≤ {cap_str}"))
     else:
         out.append((CHECK_WARN, "no option_symbol on signal — falling back to stock trade"))
 
