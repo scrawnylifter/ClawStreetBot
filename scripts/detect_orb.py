@@ -79,10 +79,17 @@ RULES = {
     "tp1_mult":   4.5,
     "tp2_mult":   7.5,
     "ext_level_pct":     0.005,  # skip if within 0.5% of prev day H/L
-    # Window in which we'll look for a fresh breakout. Each cron tick scans
-    # the most-recent N 5m bars so a breakout that happened just before
-    # ingestion latency still gets picked up.
-    "scan_last_bars":    3,
+    # Scan ALL of today's post-9:45 ET 5m bars (not just the last N).
+    # alpaca_ohlcv_intraday ingests bars HOURLY at :05 PDT; the ORB scanner
+    # cron runs every 5min. With a small scan window (N=3), a breakout
+    # that landed in the middle of an ingestion window (say 10:30 ET)
+    # would be missed: by the time the next ingestion adds it to the DB
+    # (11:05 PDT), the next scanner tick (11:10 PDT) only looks at the
+    # 3 most recent bars (10:55-11:05 PDT = 10:55-11:05 ET) and skips
+    # right past it. Iterating the full post-9:45 ET window keeps every
+    # breakout in scope; the 4-hour cooldown SELECT in save_signal
+    # blocks duplicate alerts so we don't re-fire on every cron tick.
+    "scan_full_session": True,
     # Strategy needs liquidity. Same skips that hurt liquidity_sweep are
     # likely to hurt ORB; we keep this conservative and adjust after live
     # data.
@@ -291,16 +298,19 @@ def detect_orb_signals(
         )
         return signals
 
-    # Only consider bars AFTER the ORB closes (i.e. 9:45 ET on).
+    # Only consider bars AFTER the ORB closes (i.e. 9:45 ET on). Iterate
+    # forward through the FULL session — the first close-beyond candle is
+    # the breakout signal; once detected, we break. 4-hour cooldown in
+    # save_signal handles dedup across cron ticks.
     orb_end_et = time(9, 45)
+    today_et = datetime.now(ET).date()
 
-    scan_start = max(0, len(bars_5m) - RULES["scan_last_bars"])
-    for i in range(scan_start, len(bars_5m)):
+    for i in range(len(bars_5m)):
         bar = bars_5m[i]
         # Bar timestamp is UTC; convert to ET for the session-time check.
         bar_et = bar.ts.astimezone(ET)
-        if bar_et.date() != datetime.now(ET).date():
-            # Skip historical-tail bars (we pulled 3 days for ATR warmup).
+        if bar_et.date() != today_et:
+            # Skip the 3-day history tail we fetched for ATR warmup.
             continue
         if bar_et.time() < orb_end_et:
             continue
