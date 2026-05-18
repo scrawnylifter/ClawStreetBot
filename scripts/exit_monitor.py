@@ -349,7 +349,16 @@ _POSITION_SELECT = """
            s.option_symbol, s.option_strike,
            s.option_expiry, s.option_delta, s.option_mid
       FROM trading.positions p
-      LEFT JOIN market.signal_alerts s ON s.position_id = p.id
+      -- INNER JOIN: a position without an originating signal_alerts row
+      -- can't be safely monitored (we'd default direction to 'bullish' and
+      -- invert every stop/TP check on a bearish setup). Migration 026's
+      -- UNIQUE on signal_alerts.position_id guarantees 1:1, so INNER is
+      -- safe — any row that would have been selected by LEFT JOIN with a
+      -- NULL signal side is unreachable in the live pipeline. If an
+      -- operator ever opens a position by hand without wiring up
+      -- signal_alerts, INNER JOIN will skip it (correct fail-safe — they
+      -- can monitor it manually).
+      INNER JOIN market.signal_alerts s ON s.position_id = p.id
      WHERE p.status = 'open'
        AND p.sell_order_id IS NULL
        AND p.tp1_sell_order_id IS NULL
