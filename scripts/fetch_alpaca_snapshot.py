@@ -28,6 +28,7 @@ Output:
         "bid": 4.10,
         "ask": 4.25,
         "mid": 4.175,
+        "spread_pct": 0.0359,
         "iv": 0.4912
       }
     }
@@ -69,6 +70,11 @@ ALPACA_SECRET_KEY = os.environ["ALPACA_PAPER_SECRET_KEY"]
 MIN_DTE = 30
 DELTA_MIN = 0.50
 DELTA_MAX = 0.70
+
+# Maximum acceptable bid-ask spread as a fraction of mid price. Contracts
+# with wider spreads are illiquid — the round-trip cost alone can wipe a
+# 3:1 R:R setup. Mirrored in process_approved.py for the preflight gate.
+MAX_SPREAD_PCT = 0.15
 
 # Risk-mode-aware delta bands. Standard matches the historical scanner band.
 # Conservative tightens around the high-probability core (0.55–0.65, aim 0.60)
@@ -215,6 +221,12 @@ def select_best_option(symbol: str, want_type: str | None,
         if bid is None or ask is None or bid <= 0 or ask <= 0:
             continue
         mid = (bid + ask) / 2.0
+        # Reject wide spreads. Computed as (ask - bid) / mid so it's symmetric
+        # around the midpoint. Anything > MAX_SPREAD_PCT is treated as too
+        # illiquid to trade regardless of how attractive the greeks look.
+        spread_pct = (ask - bid) / mid if mid > 0 else float("inf")
+        if spread_pct > MAX_SPREAD_PCT:
+            continue
         iv = fnum(getattr(snap, "implied_volatility", None))
 
         # Score: prefer delta closest to the risk-mode-specific target.
@@ -232,6 +244,7 @@ def select_best_option(symbol: str, want_type: str | None,
                 "bid": round(bid, 4),
                 "ask": round(ask, 4),
                 "mid": round(mid, 4),
+                "spread_pct": round(spread_pct, 4),
                 "iv": round(iv, 4) if iv is not None else None,
             }
 
