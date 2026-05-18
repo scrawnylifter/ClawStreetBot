@@ -24,7 +24,10 @@ import sys
 import logging
 from pathlib import Path
 import json
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 import psycopg2
 import numpy as np
@@ -467,6 +470,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detect 15m EMA crossovers")
     parser.add_argument("--dry-run", action="store_true", help="Detect but don't save")
     args = parser.parse_args()
+
+    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    now_et = datetime.now(ET)
+    if now_et.weekday() >= 5:
+        log.info("Weekend (%s ET) — market closed, exiting silent.",
+                 now_et.strftime("%a %H:%M"))
+        sys.exit(0)
+    if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+        log.info("Outside market hours (%s ET) — exiting silent.",
+                 now_et.strftime("%H:%M"))
+        sys.exit(0)
 
     conn = get_connection()
     signals = detect_15m_crossovers(conn)

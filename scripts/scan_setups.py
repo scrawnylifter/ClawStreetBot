@@ -41,8 +41,11 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 import psycopg2
 
@@ -587,6 +590,17 @@ def main() -> int:
     parser.add_argument("--risk-budget", type=float, default=2000.0,
                         help="Max per-contract premium in dollars (default 2000)")
     args = parser.parse_args()
+
+    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    now_et = datetime.now(ET)
+    if now_et.weekday() >= 5:
+        log.info("Weekend (%s ET) — market closed, exiting silent.",
+                 now_et.strftime("%a %H:%M"))
+        return 0
+    if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+        log.info("Outside market hours (%s ET) — exiting silent.",
+                 now_et.strftime("%H:%M"))
+        return 0
 
     conn = get_connection()
     regime = fetch_current_regime(conn)

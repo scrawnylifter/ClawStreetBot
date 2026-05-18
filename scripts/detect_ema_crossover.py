@@ -30,7 +30,10 @@ import sys
 import logging
 from pathlib import Path
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 import psycopg2
 
@@ -520,6 +523,19 @@ def main():
     parser.add_argument("--since-hours", type=int, default=24,
                         help="Hours to look back for report (default: 24)")
     args = parser.parse_args()
+
+    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    # --report-only is exempt (read-only diagnostic).
+    if not args.report_only:
+        now_et = datetime.now(ET)
+        if now_et.weekday() >= 5:
+            log.info("Weekend (%s ET) — market closed, exiting silent.",
+                     now_et.strftime("%a %H:%M"))
+            return
+        if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+            log.info("Outside market hours (%s ET) — exiting silent.",
+                     now_et.strftime("%H:%M"))
+            return
 
     conn = get_connection()
 
