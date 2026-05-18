@@ -37,6 +37,9 @@ logging.basicConfig(
 log = logging.getLogger("process_approved")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from constants import MAX_SPREAD_PCT_DECIMAL as MAX_SPREAD_PCT  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Trading rules (mirrored from CLAUDE.md — single source of truth lives there)
@@ -70,11 +73,9 @@ DELTA_OK_RANGE_DAY   = (Decimal("0.50"), Decimal("0.80"))  # we keep one band fo
 
 MIN_RR = Decimal("3.0")
 
-# Maximum acceptable option bid-ask spread as a fraction of mid price.
-# Mirrors fetch_alpaca_snapshot.MAX_SPREAD_PCT — kept in sync as the
-# preflight gate of last resort in case a stale signal sneaks past the
-# scanner-time filter (or the option moved after enrichment).
-MAX_SPREAD_PCT = Decimal("0.15")
+# MAX_SPREAD_PCT is imported from scripts.constants (Decimal variant) above.
+# It's the preflight gate of last resort in case a stale signal sneaks past
+# the scanner-time filter or the option moved after enrichment.
 
 # PDT rules: 3 DT max in rolling 5-business-day window, 4th = ban
 PDT_WINDOW_DAYS = 5
