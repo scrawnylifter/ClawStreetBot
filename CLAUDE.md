@@ -268,14 +268,14 @@ ClawStreetBot/
 │       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
 │       ├── signals_daily.json          ← Mon-Fri 16:30 PDT (includes daily backtest)
 │       ├── intraday_signal_5m.json     ← Mon-Fri every 5 min 6-12 PDT
-│       ├── ema_crossover_detector.json ← Mon-Fri 7:00 PDT (daily EMA 9/21 detect + alert, supplementary)
-│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6:30-13 PDT (15m cross + snapshot, supplementary)
+│       ├── ema_crossover_detector.json ← Mon-Fri 6:00 PDT pre-market (daily EMA 9/21 detect + alert, supplementary)
+│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6-12 PDT (15m cross + snapshot, supplementary)
 │       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
 │       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
 │       ├── alert_dispatch.json          ← ★ Mon-Fri every 1min 6-13 PDT (alert_telegram.py — dispatches unsent rows)
 │       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
-│       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-13 PDT (Alpaca fill state → trading.positions)
-│       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-13 PDT (SELL fill → closed + realized_pnl)
+│       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-14 PDT (extra hour past close to catch late fills) (Alpaca fill state → trading.positions)
+│       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-14 PDT (extra hour past close) (SELL fill → closed + realized_pnl)
 │       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
 │       ├── equity_snapshot_daily.json    ← Mon-Fri 14:30 PDT (snapshot equity for drawdown denominator)
 │       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)

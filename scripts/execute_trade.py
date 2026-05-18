@@ -76,8 +76,11 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
     to a duplicate BUY on the next reconcile pass — Alpaca rejects the
     second submission with a duplicate-client-order-id error.
     """
-    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import (
+        LimitOrderRequest, MarketOrderRequest,
+        TakeProfitRequest, StopLossRequest,
+    )
+    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
     qty = sizing["qty"]
     direction = signal["direction"]
@@ -113,22 +116,167 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
             "symbol": sym,
         }
     else:
+        # Stock entry — submit as BRACKET so the stop_loss + take_profit legs
+        # live at Alpaca even if exit_monitor goes down. The parent is a
+        # market BUY (bullish only here; hard_fail blocks stock-short).
+        # Children:
+        #   - SELL stop  @ signal.stop_price  (loss cap; matches exit_monitor 'stop')
+        #   - SELL limit @ signal.tp2_price   (profit cap; matches exit_monitor 'tp2')
+        # exit_monitor still owns TP1 partials and trail logic (Alpaca brackets
+        # only have ONE take-profit leg, so the partial-then-trail-then-final
+        # ladder can't be encoded in the bracket alone). When exit_monitor
+        # decides to exit early it MUST cancel the bracket legs first
+        # (see exit_monitor.cancel_open_orders_for_symbol).
+        # Bracket is bullish-only on Alpaca for short equities; bearish stock
+        # entries are already blocked upstream by hard_fail_reason.
         sym = signal["symbol"]
-        req = MarketOrderRequest(
-            symbol=sym,
-            qty=qty,
-            side=side,
-            time_in_force=TimeInForce.DAY,
-            client_order_id=client_order_id,
-        )
+        stop_price = pa._to_decimal(signal.get("stop_price"))
+        tp2_price  = pa._to_decimal(signal.get("tp2_price"))
+
+        if (stop_price is not None and stop_price > 0
+                and tp2_price is not None and tp2_price > 0
+                and direction == "bullish"
+                and tp2_price > stop_price):
+            req = MarketOrderRequest(
+                symbol=sym,
+                qty=qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+                order_class=OrderClass.BRACKET,
+                stop_loss=StopLossRequest(stop_price=float(stop_price)),
+                take_profit=TakeProfitRequest(limit_price=float(tp2_price)),
+            )
+            order_type_label = "market_bracket"
+        else:
+            # Missing stop/tp or non-standard direction — fall back to plain
+            # market. exit_monitor remains the only line of defense; no
+            # broker-side stop is in place. Log loudly so the operator notices.
+            log.warning(
+                "Stock entry for #%s %s missing stop/tp or bearish — "
+                "submitting plain market (no bracket safety net): "
+                "stop=%s tp2=%s dir=%s",
+                signal["id"], sym, stop_price, tp2_price, direction,
+            )
+            req = MarketOrderRequest(
+                symbol=sym,
+                qty=qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+            )
+            order_type_label = "market"
+
         order = client.submit_order(req)
         return {
             "order_id": str(order.id),
             "submitted_price": None,  # market order — fill price comes via reconcile
-            "order_type": "market",
+            "order_type": order_type_label,
             "tif": "day",
             "symbol": sym,
         }
+
+
+# ---------------------------------------------------------------------------
+# Risk-mode-aware option re-selection (M1)
+# ---------------------------------------------------------------------------
+
+def reselect_option_for_risk_mode(
+    conn, signal: dict, risk_mode: str,
+) -> dict:
+    """If risk_mode requires a different delta band than 'standard' and the
+    signal carries an option contract, re-query Alpaca for the best matching
+    option in that band and overwrite the option_* fields on signal_alerts.
+
+    Returns the (possibly-updated) signal dict.
+
+    Why this exists: the scanner binds a 0.50–0.70 delta contract at scan
+    time. The user picks risk mode AFTER (Approve / Conservative / Aggressive
+    in Telegram). Conservative wants a tighter delta (0.55–0.65, higher
+    probability) and aggressive wants a wider band (0.40–0.80, more
+    leverage). Without this re-selection every approval submits the same
+    scanner-chosen contract regardless of risk mode — audit M1.
+
+    Standard is the no-op case: the scanner's delta band already matches
+    standard's 0.50–0.70, so we keep the row's existing option_* fields and
+    save the Alpaca round-trip.
+
+    If the re-selection fails (no contract in the new band, Alpaca down,
+    etc.) we LOG and fall back to the scanner's original contract — better
+    to execute the standard-band trade than refuse to trade at all.
+    """
+    if risk_mode == "standard" or not signal.get("option_symbol"):
+        return signal
+
+    try:
+        import fetch_alpaca_snapshot as fas
+    except Exception:
+        log.exception("reselect_option_for_risk_mode: import fas failed; "
+                      "falling back to scanner-chosen option")
+        return signal
+
+    want_type = "C" if signal.get("direction") == "bullish" else "P"
+    sym = signal["symbol"]
+    try:
+        best = fas.select_best_option(
+            sym, want_type=want_type, min_dte=fas.MIN_DTE,
+            max_dte=120, risk_mode=risk_mode,
+        )
+    except Exception:
+        log.exception("reselect_option_for_risk_mode: Alpaca query failed for %s; "
+                      "falling back to scanner-chosen option", sym)
+        return signal
+
+    if not best:
+        log.warning("reselect_option_for_risk_mode: no %s contract in %s band "
+                    "for %s; keeping scanner option %s",
+                    want_type, risk_mode, sym, signal.get("option_symbol"))
+        return signal
+
+    if best["occ_symbol"] == signal.get("option_symbol"):
+        # Same contract — scanner already picked the right one.
+        return signal
+
+    # Different contract — persist the swap. The scanner's stored
+    # option_strike/option_expiry/option_delta/option_theta/option_bid/
+    # option_ask/option_mid all get overwritten so reconcile_exits and
+    # exit_monitor see the contract actually traded.
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE market.signal_alerts
+                  SET option_symbol = %s,
+                      option_strike = %s,
+                      option_expiry = %s,
+                      option_delta  = %s,
+                      option_theta  = %s,
+                      option_bid    = %s,
+                      option_ask    = %s,
+                      option_mid    = %s
+                WHERE id = %s""",
+            (best["occ_symbol"], best["strike"], best["expiry"],
+             best["delta"], best["theta"], best["bid"], best["ask"],
+             best["mid"], signal["id"]),
+        )
+    conn.commit()
+
+    log.info(
+        "Re-selected option for #%s (%s): %s (Δ%.2f) → %s (Δ%.2f) [risk_mode=%s]",
+        signal["id"], sym,
+        signal.get("option_symbol"), float(signal.get("option_delta") or 0),
+        best["occ_symbol"], best["delta"], risk_mode,
+    )
+
+    # Reflect the swap on the in-memory dict so the caller's sizing /
+    # preflight / submit_to_alpaca see the new contract.
+    signal["option_symbol"] = best["occ_symbol"]
+    signal["option_strike"] = best["strike"]
+    signal["option_expiry"] = best["expiry"]
+    signal["option_delta"]  = best["delta"]
+    signal["option_theta"]  = best["theta"]
+    signal["option_bid"]    = best["bid"]
+    signal["option_ask"]    = best["ask"]
+    signal["option_mid"]    = best["mid"]
+    return signal
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +393,11 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
     risk_mode = signal.get("risk_mode") or "standard"
     mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
                                 risk_mode=risk_mode)
+
+    # M1: re-select the option contract for non-standard risk modes BEFORE
+    # sizing, so the qty / preflight / submit all reflect the contract we
+    # actually trade. No-op for standard mode and for stock-only signals.
+    signal = reselect_option_for_risk_mode(conn, signal, risk_mode)
 
     opt_mid = pa._to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
