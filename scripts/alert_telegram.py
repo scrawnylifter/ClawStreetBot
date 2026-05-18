@@ -13,6 +13,7 @@ Usage:
 import os
 import sys
 import json
+import html as html_mod
 import logging
 from decimal import Decimal
 from pathlib import Path
@@ -544,7 +545,7 @@ def format_15m_crossover_alert(signal: dict) -> str:
         lines.append("")
         lines.append("<b>Bail if:</b>")
         for cond in invalidation:
-            lines.append(f"  ⛔ {cond}")
+            lines.append(f"  ⛔ {html_mod.escape(str(cond))}")
 
     return "\n".join(lines)
 
@@ -646,7 +647,7 @@ def format_ema_crossover_alert(signal: dict) -> str:
         lines.append("")
         lines.append("<b>Bail if:</b>")
         for cond in invalidation:
-            lines.append(f"  ⛔ {cond}")
+            lines.append(f"  ⛔ {html_mod.escape(str(cond))}")
 
     return "\n".join(lines)
 
@@ -767,7 +768,7 @@ def format_setup_scanner_alert(signal: dict) -> str:
                 lines.append("")
                 lines.append("<b>Bail if:</b>")
                 for rule in rules:
-                    lines.append(f"  ⛔ {rule}")
+                    lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
     return "\n".join(lines)
 
@@ -832,7 +833,7 @@ def format_intraday_signal_alert(signal: dict) -> str:
                 lines.append("")
                 lines.append("<b>Bail if:</b>")
                 for rule in rules:
-                    lines.append(f"  ⛔ {rule}")
+                    lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
     return "\n".join(lines)
 
@@ -995,7 +996,7 @@ def format_orb_alert(signal: dict) -> str:
         lines.append("")
         lines.append("<b>Bail if:</b>")
         for rule in reasons:
-            lines.append(f"  ⛔ {rule}")
+            lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
     return "\n".join(lines)
 
