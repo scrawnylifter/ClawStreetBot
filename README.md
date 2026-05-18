@@ -106,7 +106,7 @@ ClawStreetBot/
 │   # docker-socket-proxy (wollomatic/socket-proxy) is pulled directly,
 │   # configured inline in docker-compose.yml — no Dockerfile needed.
 ├── n8n/
-│   └── workflows/              # Source-of-truth JSON — 22 active workflows
+│   └── workflows/              # Source-of-truth JSON — 23 active workflows
 │       ├── watchlist_sync.json
 │       ├── backfill_pending.json
 │       ├── alpaca_ohlcv_daily.json       # 1d Alpaca bars
@@ -121,6 +121,7 @@ ClawStreetBot/
 │       ├── ema_crossover_15m.json        # EMA crossover on 15m + realtime snapshot
 │       ├── setup_scanner.json            # PRIMARY — 8-gate BUY signal scanner (every 15min market hours)
 │       ├── liquidity_sweep.json          # 5m + daily liquidity sweep scanner
+│       ├── orb_detector.json             # ★ ORB scanner (every 5min 6-13 PDT, opening range breakout on 5m bars)
 │       ├── alert_dispatch.json           # alert_telegram.py every 1min market hours
 │       ├── execute_trade.json            # Alpaca paper submit (approved → executing)
 │       ├── reconcile_orders.json         # BUY fill → trading.positions
@@ -149,6 +150,7 @@ ClawStreetBot/
 │   ├── detect_ema_crossover.py    # Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py # 15m EMA crossover + real-time snapshot enrichment (supplementary)
 │   ├── detect_liquidity_sweep.py   # ★ LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram)
+│   ├── detect_orb.py               # ★ ORB scanner (opening range breakout on 5m bars, strategy='orb')
 │   ├── diagnose_liquidity_backtest.py  # v1 diagnostics
 │   ├── explore_data.py             # Alpaca data explorer
 │   ├── explore_options.py          # Options chain explorer
@@ -262,10 +264,10 @@ docker exec -it clawstreet-redis redis-cli -a <password>
 
 The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`. All cron schedules use **America/Los_Angeles (PDT)** timezone.
 
-22 active workflows; the old Polygon ingestion JSONs (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been deleted from the repo — replaced by their Alpaca equivalents.
+23 active workflows; the old Polygon ingestion JSONs (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been deleted from the repo — replaced by their Alpaca equivalents.
 
 | Workflow | Schedule (PDT) | Action |
-|---------------------|-----------------------------|--------------------------------------------------------------|
+|---|---|---|
 | `watchlist_sync` | every 5 min | `setup_watchlist.py` (no-op when YAML unchanged) |
 | `backfill_pending` | every 5 min | `backfill_runner.py` (queries pending symbols, runs backfill) |
 | `alpaca_ohlcv_daily` | Mon–Fri 15:00 | 1d OHLCV bars (trade_count, VWAP) |
@@ -280,6 +282,7 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `ema_crossover_15m` | Mon–Fri every 15min 6:30–13 | 15m EMA crossover + real-time Alpaca snapshot (supplementary) |
 | **`setup_scanner`** | **Mon–Fri every 15min 6–12** | **★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV spread, premium, DTE, R:R)** |
 | `liquidity_sweep` | Mon–Fri every 5min 6–12 | 5m + daily liquidity sweep scanner (close-beyond confirmation) |
+| **`orb_detector`** | **Mon–Fri every 5min 6–13** | **★ ORB scanner — Opening Range Breakout on 5m bars, strategy='orb'** |
 | **`alert_dispatch`** | **Mon–Fri every 1min 6–13** | **`alert_telegram.py` — dispatches unsent `signal_alerts` rows with the 4-button approval keyboard** |
 | `execute_trade` | Mon–Fri every 1min 6–13 | Approved → Alpaca paper submit (`status='executing'`) |
 | `reconcile_orders` | Mon–Fri every 1min 6–14 | BUY fill state → `trading.positions`, `status='filled'` |
@@ -368,7 +371,7 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT)
 - [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation, Telegram alerts (PF 1.56)
 - [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = key filter
-- [ ] ORB breakout detector (`detect_orb.py`)
+- [x] **ORB breakout detector** (`detect_orb.py`) — Opening Range on first 15m bar, 5m close-beyond breakout, external-level filter, ATR-based intraday stops
 - [ ] Buy the 5% Dip detector (`detect_dip.py`)
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
 
@@ -395,6 +398,15 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 ### Phase 5E — Notification UX (#18)
 - [x] **Strategy name in entry-alert headers** — every formatter (`setup_scanner`, `ema_crossover`, `ema_crossover_15m`, `liquidity_sweep`, `intraday_signal`) now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which scanner fired the alert
 - [x] **Exit-fill Telegram push notifications** — `reconcile_exits` posts to Telegram after every close commit. 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry, partial-before-cancel). Includes symbol, strategy, direction, reason, entry/exit, qty, realized P&L, residual qty for partials. Fire-and-forget — Telegram failure is logged but never rolls back the DB close
+
+### Phase 5F — ORB Scanner (#20-22)
+- [x] **ORB breakout detector** (`detect_orb.py`) — Opening Range on first 15m bar after 9:30 ET, 5m close-beyond breakout after 9:45 ET, external-level filter (skip within 0.5% of prior day's high/low), ATR-based intraday stops (1.5× ATR stop, 4.5× ATR TP1, 7.5× ATR TP2)
+- [x] **`orb_detector.json` n8n workflow** — every 5min, 6–13 PDT, Mon–Fri
+- [x] **`format_orb_alert()`** in `alert_telegram.py` — dispatches ORB alerts with 4-button approval keyboard
+- [x] **`execute_trade.py` handles `strategy='orb'`** — ATR-based intraday stops, day-trade mode (flatten before close)
+- [x] **DB env-var fallback** (PR #21) — `POSTGRES_DB` sources `.env.db` with fallback to `"clawstreet"`
+- [x] **Full-session scan window** (PR #22) — scans all 5m bars after 9:45 ET, not just last 3 bars
+- [x] **SPY 15m bars backfilled** — 2,667 bars (~120 trading days)
 
 ### Remaining Items
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

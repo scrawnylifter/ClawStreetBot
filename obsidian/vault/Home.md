@@ -42,7 +42,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 30 migrations; Docker socket isolation
+- [[n8n Scheduler]] — 23 active workflows, 42 scripts, 30 migrations; Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -102,6 +102,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [x] **★ Setup scanner** (`scan_setups.py`) — **PRIMARY** 8-gate BUY signal scanner; silence = no signal
 - [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56)
 - [x] **4-hour de-dup cooldown** in every scanner — prevents per-cron-tick alert spam
+- [x] **ORB breakout detector** (`detect_orb.py`) — Opening Range on first 15m bar, 5m close-beyond breakout, external-level filter, ATR-based intraday stops (strategy='orb')
 
 **Phase 5B — Execution & Exits ✅**
 - [x] **Telegram approval flow** — 4-button keyboard via `alert_dispatch` cron; `telegram_callback_listener.py` flips `status` and persists `risk_mode`
@@ -115,11 +116,11 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [x] DB migrations 020–026 + n8n workflows `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
 
 **Phase 5E — Notification UX ✅ (PR #18)**
-- [x] **Strategy name in entry-alert headers** — every formatter (`setup_scanner`, `ema_crossover`, `ema_crossover_15m`, `liquidity_sweep`, `intraday_signal`) shows `Strategy: <name> | Timeframe: <tf>` so the user knows which scanner fired
+- [x] **Strategy name in entry-alert headers** — every formatter (`setup_scanner`, `ema_crossover`, `ema_crossover_15m`, `liquidity_sweep`, `intraday_signal`, `orb`) shows `Strategy: <name> | Timeframe: <tf>` so the user knows which scanner fired
 - [x] **Exit-fill Telegram push** — `reconcile_exits` posts after every close commit. 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry, partial-before-cancel). Includes symbol, strategy, direction, reason, entry/exit, qty, realized P&L, residual qty. Fire-and-forget — Telegram failure logged but never rolls back the DB close
 
 **Phase 5C — Backlog (deferred)** 🔧
-- [ ] **ORB breakout detector** (`detect_orb.py`) — opening range + volume + VWAP
+- [x] ~~**ORB breakout detector** (`detect_orb.py`)~~ → **Done in PRs #20-22** — Opening Range on first 15m bar, 5m close-beyond breakout, external-level filter, ATR-based intraday stops; `orb_detector.json` n8n workflow every 5min 6-13 PDT; `format_orb_alert()` in alert_telegram.py; DB env-var fallback; full-session scan window
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche scale-in
 - [x] ~~**Per-risk-mode option selection**~~ → **Done in PR #19** — `DELTA_BANDS` dict in `fetch_alpaca_snapshot.py` (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80); `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca and persists the new contract
 - [x] ~~**Bracket orders for stock entries**~~ → **Done in PR #19** — `order_class=BRACKET` for non-option stock entries with stop_loss + take_profit legs; `cancel_open_orders_for_symbol` before exit_monitor closes
@@ -129,3 +130,13 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [ ] **status=expired cron** — schedule a periodic job to flip `signal_alerts` rows stuck in `pending`/`approved` past EOD to `status='expired'` (prevents stale execution)
 - [x] **Orphan executing rows** — `028_error_notified.sql` adds `error_notified_at` column for error notification tracking; reconciler in `execute_trade.py` / `reconcile_orders.py` detects `executing` rows with no matching order and recovers them
 - [x] **Status enum CHECK constraints** — `030_status_check_constraints.sql` adds `signal_alerts_status_check` (9 valid values) and re-states `positions_status_check`; typos like `'exeucting'` now fail at INSERT/UPDATE instead of silently corrupting the lifecycle
+
+**Phase 5F — ORB Scanner ✅ (PRs #20-22)**
+- [x] **ORB breakout detector** (`detect_orb.py`) — Opening Range on first 15m bar after 9:30 ET, 5m close-beyond breakout after 9:45 ET, external-level filter (skip within 0.5% of prior day's high/low), ATR-based intraday stops (1.5× ATR stop, 4.5× ATR TP1, 7.5× ATR TP2)
+- [x] **`orb_detector.json` n8n workflow** — every 5min, 6–13 PDT, Mon–Fri; triggers `detect_orb.py` → `market.signal_alerts` with `strategy='orb'`
+- [x] **`format_orb_alert()`** in `alert_telegram.py` — `alert_dispatch.json` picks up `strategy='orb'` rows via SQL, dispatches Telegram alerts with 4-button approval keyboard
+- [x] **`execute_trade.py` handles `strategy='orb'`** — ATR-based intraday stops, day-trade mode (flatten before close)
+- [x] **`exit_monitor.py` manages ORB exits** — same as other intraday strategies (stop, TP1 partial, TP2/trail, time-stop)
+- [x] **DB env-var fallback** (PR #21) — `detect_orb.py` sources `.env.db` for `POSTGRES_DB` with fallback to `"clawstreet"` (matching all other scripts)
+- [x] **Full-session scan window** (PR #22) — scans all 5m bars after 9:45 ET in the session, not just the last 3 bars; ensures ORB breakout isn't missed on wider moves
+- [x] **SPY 15m bars backfilled** — 2,667 bars (~120 trading days) for Opening Range calculation
