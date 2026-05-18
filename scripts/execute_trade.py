@@ -264,11 +264,12 @@ def reselect_option_for_risk_mode(
                       option_theta  = %s,
                       option_bid    = %s,
                       option_ask    = %s,
-                      option_mid    = %s
+                      option_mid    = %s,
+                      spread_pct    = %s
                 WHERE id = %s""",
             (best["occ_symbol"], best["strike"], best["expiry"],
              best["delta"], best["theta"], best["bid"], best["ask"],
-             best["mid"], signal["id"]),
+             best["mid"], best.get("spread_pct"), signal["id"]),
         )
     conn.commit()
 
@@ -289,6 +290,7 @@ def reselect_option_for_risk_mode(
     signal["option_bid"]    = best["bid"]
     signal["option_ask"]    = best["ask"]
     signal["option_mid"]    = best["mid"]
+    signal["spread_pct"]    = best.get("spread_pct")
     return signal
 
 
