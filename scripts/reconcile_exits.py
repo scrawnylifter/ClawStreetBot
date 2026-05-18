@@ -143,17 +143,31 @@ def recover_orphan_exit_sells(conn, client) -> int:
     ERROR and the position is stuck open while the original SELL runs to
     completion at Alpaca. Money parks at the broker.
 
-    This helper queries Alpaca for OPEN orders with our csb-exit-* prefix,
-    parses position_id and reason from each client_order_id, and stamps
-    the corresponding DB column if it's still NULL. Idempotent: an
-    already-stamped row is left alone.
+    This helper queries Alpaca for OPEN and FILLED orders with our csb-exit-*
+    prefix, parses position_id and reason from each client_order_id, and stamps
+    the corresponding DB column if it's still NULL. Idempotent: an already-stamped
+    row is left alone.
+
+    Scanning both OPEN and FILLED is critical: if the SELL filled during a
+    crash window but the DB never got stamped, the row sits with
+    sell_order_id IS NULL. The next exit_monitor tick would re-detect the
+    exit condition and re-submit → Alpaca rejects duplicate client_order_id
+    → position stuck open while the original SELL has already filled.
 
     Returns the number of rows backfilled (for logging)."""
     try:
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
-        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
-        orders = client.get_orders(filter=req)
+        # Query both OPEN (in-flight) and FILLED (completed but DB missed
+        # the stamp due to crash/restart). CLOSED/CANCELED are harmless —
+        # they never ran, nothing to recover.
+        orders = []
+        for status in (QueryOrderStatus.OPEN, QueryOrderStatus.FILLED):
+            try:
+                req = GetOrdersRequest(status=status, limit=500)
+                orders.extend(client.get_orders(filter=req))
+            except Exception:
+                log.exception("recover_orphan_exit_sells: Alpaca order list failed for %s", status.value)
     except Exception:
         log.exception("recover_orphan_exit_sells: Alpaca order list failed")
         return 0

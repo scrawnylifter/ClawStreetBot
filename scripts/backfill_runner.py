@@ -43,7 +43,7 @@ def main() -> None:
     db_host = os.environ.get("POSTGRES_HOST", "postgres")
     db_user = os.environ.get("POSTGRES_USER", "clawstreet")
     db_pass = os.environ.get("POSTGRES_PASSWORD", "")
-    db_name = os.environ.get("POSTGRES_DB", "clawstreetbot")
+    db_name = os.environ.get("POSTGRES_DB", "clawstreet")
 
     dsn = f"host={db_host} user={db_user} password={db_pass} dbname={db_name}"
 

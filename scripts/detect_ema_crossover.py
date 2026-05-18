@@ -63,7 +63,7 @@ def get_connection():
         host=conn_params.get("POSTGRES_HOST", "postgres"),
         user=conn_params.get("POSTGRES_USER", "clawstreet"),
         password=conn_params.get("POSTGRES_PASSWORD", ""),
-        dbname=conn_params.get("POSTGRES_DB", "clawstreetbot"),
+        dbname=conn_params.get("POSTGRES_DB", "clawstreet"),
     )
 
 

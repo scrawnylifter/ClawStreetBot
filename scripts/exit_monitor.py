@@ -546,10 +546,11 @@ def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
     # so Alpaca is holding two child OCO legs (stop_loss + take_profit).
     # If we submit our own SELL while those legs are open, the parent
     # position would be over-sold (or, more likely, Alpaca rejects with
-    # 'cannot exceed position qty'). Cancel any open orders for this
-    # symbol first so our exit_monitor SELL is the only thing going through.
-    # Idempotent — if no bracket is live, cancel_orders is a no-op.
-    _cancel_open_orders_for_symbol(client, sym)
+    # 'cannot exceed position qty'). Cancel open orders for this position
+    # first so our exit_monitor SELL is the only thing going through.
+    # Pass position_id to only cancel orders belonging to THIS position —
+    # not an unrelated bracket on the same symbol.
+    _cancel_open_orders_for_symbol(client, sym, position_id=row.get("position_id"))
 
     req = MarketOrderRequest(
         symbol=sym, qty=int(qty), side=side, time_in_force=TimeInForce.DAY,
@@ -564,12 +565,16 @@ def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
     }
 
 
-def _cancel_open_orders_for_symbol(client, symbol: str) -> int:
-    """Cancel every open order at Alpaca for `symbol`. Used before submitting
-    an exit_monitor close so we don't fight the bracket legs we attached at
-    entry (H7). Best-effort — any individual cancel failure is logged but
-    not raised; the subsequent close submit will surface a real problem if
-    the bracket can't be displaced.
+def _cancel_open_orders_for_symbol(client, symbol: str, position_id: int | None = None) -> int:
+    """Cancel open orders for `symbol` that belong to a specific position.
+
+    If position_id is provided, only cancels orders whose client_order_id
+    matches that position (csb-entry-{id} or csb-exit-{id}-*). This prevents
+    cancelling an unrelated bracket order for a different position on the same
+    symbol (e.g., day-trade NVDA exit cancelling swing NVDA's stop).
+
+    If position_id is None, falls back to cancelling ALL open orders for the
+    symbol (legacy behavior for stock bracket legs that don't carry position_id).
 
     Returns the count of orders that were cancelled."""
     try:
@@ -587,6 +592,15 @@ def _cancel_open_orders_for_symbol(client, symbol: str) -> int:
         oid = getattr(o, "id", None)
         if oid is None:
             continue
+        cid = getattr(o, "client_order_id", "") or ""
+        # If position_id provided, only cancel orders that belong to this position
+        if position_id is not None:
+            pid_str = str(position_id)
+            if not (cid.startswith(f"csb-entry-{pid_str}") or
+                    cid.startswith(f"csb-exit-{pid_str}")):
+                log.info("_cancel_open_orders_for_symbol: skipping %s (cid=%s) — "
+                          "belongs to different position", oid, cid)
+                continue
         try:
             client.cancel_order_by_id(oid)
             cancelled += 1
