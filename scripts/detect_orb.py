@@ -84,6 +84,12 @@ RULES = {
     # once is noise that drowns out the best setups. Rank by R:R and keep
     # only the top N.
     "max_signals": 3,
+    # ORB is an opening-range strategy. The range forms at 9:45 ET and
+    # breakouts that happen in the first 30-60 minutes are the ones worth
+    # trading — they have momentum and volume. A "breakout" at 11 AM or
+    # 2 PM is just price drifting below the morning low — not the same
+    # pattern at all. Hard-stop scanning after this time.
+    "cutoff_time_et": "10:30",
     # Scan ALL of today's post-9:45 ET 5m bars (not just the last N).
     # alpaca_ohlcv_intraday ingests bars HOURLY at :05 PDT; the ORB scanner
     # cron runs every 5min. With a small scan window (N=3), a breakout
@@ -494,12 +500,18 @@ def main() -> int:
     args = parser.parse_args()
 
     # Hard-fail-early when we're outside the session window: the ORB range
-    # doesn't exist until 9:45 ET, and there's no point scanning before then.
+    # doesn't exist until 9:45 ET, and breakouts after the cutoff are stale.
     # The cron may fire at 6:00 PDT (= 9:00 ET) before any ORB candle exists.
     now_et = datetime.now(ET)
     if now_et.time() < time(9, 45):
         log.info("Pre-ORB-close (%s ET) — ORB range not yet formed, exiting silent.",
                  now_et.strftime("%H:%M"))
+        return 0
+    cutoff = RULES["cutoff_time_et"]
+    cutoff_h, cutoff_m = int(cutoff.split(":")[0]), int(cutoff.split(":")[1])
+    if now_et.time() > time(cutoff_h, cutoff_m):
+        log.info("Post-ORB-cutoff (%s ET, cutoff %s) — midday breakouts are noise, exiting silent.",
+                 now_et.strftime("%H:%M"), cutoff)
         return 0
     if now_et.weekday() >= 5:
         log.info("Weekend (%s) — market closed, exiting silent.",
