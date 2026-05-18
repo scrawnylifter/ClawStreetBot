@@ -96,21 +96,34 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
 
     if sizing["instrument"] == "option":
         sym = signal["option_symbol"]
-        ask = pa._to_decimal(signal.get("option_ask")) or pa._to_decimal(signal.get("option_mid"))
-        if ask is None or ask <= 0:
-            raise ValueError("option has no ask/mid price to cross")
+        # Submit at mid (or option_mid fallback) instead of ask. Crossing the
+        # full ask guarantees the worst fill; mid gives room for negotiation
+        # and a non-fill on a wide spread is information — the trade isn't
+        # economic at those prices and we shouldn't be in it. The
+        # MAX_SPREAD_PCT preflight in process_approved.py prevents stupid-wide
+        # spreads from reaching here in the first place.
+        bid = pa._to_decimal(signal.get("option_bid"))
+        ask = pa._to_decimal(signal.get("option_ask"))
+        if bid is not None and ask is not None and bid > 0 and ask > 0:
+            limit = (bid + ask) / Decimal("2")
+        else:
+            limit = pa._to_decimal(signal.get("option_mid"))
+        if limit is None or limit <= 0:
+            raise ValueError("option has no bid/ask/mid price to compute limit")
+        # Round to a penny — Alpaca rejects sub-penny limit prices on options.
+        limit = limit.quantize(Decimal("0.01"))
         req = LimitOrderRequest(
             symbol=sym,
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,
-            limit_price=float(ask),
+            limit_price=float(limit),
             client_order_id=client_order_id,
         )
         order = client.submit_order(req)
         return {
             "order_id": str(order.id),
-            "submitted_price": Decimal(str(ask)),
+            "submitted_price": Decimal(str(limit)),
             "order_type": "limit",
             "tif": "day",
             "symbol": sym,
