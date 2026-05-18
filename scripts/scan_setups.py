@@ -610,6 +610,19 @@ def main() -> int:
 
     log.info("%d setup(s) qualified", len(passed))
 
+    # Cap signals per run to avoid alert fatigue. Setup scanner qualifies
+    # multiple symbols; sending 9 at once drowns out the best ones.
+    MAX_SETUPS_PER_RUN = 3
+    if len(passed) > MAX_SETUPS_PER_RUN:
+        passed.sort(key=lambda s: s.get("composite_score", 0), reverse=True)
+        dropped = [f"{s['symbol']} (score {s.get('composite_score', '?')})" 
+                   for s in passed[MAX_SETUPS_PER_RUN:]]
+        log.info(
+            "Capping setup_scanner signals: %d qualified, keeping top %d by composite score. Dropped: %s",
+            len(passed), MAX_SETUPS_PER_RUN, ", ".join(dropped),
+        )
+        passed = passed[:MAX_SETUPS_PER_RUN]
+
     # Dry-run: print alerts and exit.
     if args.dry_run:
         for sig in passed:

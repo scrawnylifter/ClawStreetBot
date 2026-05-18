@@ -403,13 +403,22 @@ def hard_fail_reason(signal: dict, sizing: dict, checks: list[tuple[str, str]]) 
 # Telegram confirmation notifications
 # ---------------------------------------------------------------------------
 
-def notify_execution(result: dict, signal: dict) -> None:
+def notify_execution(result: dict, signal: dict, *, suppress: bool = False) -> None:
     """Send a Telegram confirmation after order submission/error/skip.
 
     Fires for every execution attempt so the user sees what happened
     without checking Alpaca or the DB. Best-effort: failures to send
     are logged but never block the execution loop.
+
+    If suppress=True, the per-signal notification is skipped — used for
+    drawdown halts where the main loop sends one consolidated message
+    instead of N duplicates.
     """
+    if suppress:
+        log.info("notify_execution: suppressed per-signal notification for %s (consolidated message sent by caller)",
+                 signal.get("symbol", "?"))
+        return
+
     try:
         cfg = pa.load_env("telegram")
         token = cfg.get("TELEGRAM_BOT_TOKEN", "")
@@ -530,8 +539,13 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
         log.warning("#%s SKIP — %s", sid, blocker)
         if verbose:
             print(pa.render_plan(signal, mode, equity, sizing, checks, verbose=True))
-        notify_execution({"status": "skipped", "reason": blocker}, signal)
-        return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {blocker}", "reason": blocker}
+        # Drawdown halts get a consolidated notification from the main loop,
+        # not per-signal duplicates.  Check the reason string so we can
+        # flag it without sending a duplicate Telegram message here.
+        reason = blocker
+        is_drawdown = "Drawdown halt" in reason
+        notify_execution({"status": "skipped", "reason": reason}, signal, suppress=is_drawdown)
+        return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {reason}", "reason": reason, "is_drawdown": is_drawdown}
 
     # Race-safe transition to 'executing'.
     locked = lock_and_mark_executing(conn, sid)
@@ -633,10 +647,11 @@ def main() -> int:
     log.info("LIVE PAPER EXECUTION — %d row(s).  Equity: $%s", len(rows), f"{equity:,.2f}")
     client = _alpaca_client()
     results: list[dict] = []
+    drawdown_halt_notified = False
     try:
         for r in rows:
             try:
-                results.append(execute_one(conn, client, r, equity, args.verbose))
+                result = execute_one(conn, client, r, equity, args.verbose)
             except Exception:
                 # Defensive: a bug in execute_one shouldn't take down the whole loop.
                 log.exception("Unhandled error processing signal #%s", r["id"])
@@ -644,9 +659,22 @@ def main() -> int:
                     record_error(conn, r["id"], "internal error — see logs")
                 except Exception:
                     log.exception("Could not even record_error for #%s", r["id"])
-                err_dict = {"status": "error", "message": f"#{r['id']} {r['symbol']} ERROR — internal"}
-                notify_execution(err_dict, r)
-                results.append(err_dict)
+                result = {"status": "error", "message": f"#{r['id']} {r['symbol']} ERROR — internal"}
+
+            # Suppress per-signal duplicate "drawdown halt" notifications.
+            # If multiple signals are all blocked by drawdown, send ONE
+            # consolidated message instead of N individual "SKIPPED" alerts.
+            if result.get("status") == "skipped" and result.get("is_drawdown"):
+                if not drawdown_halt_notified:
+                    notify_execution(
+                        {"status": "skipped",
+                         "reason": f"Drawdown halt — all {len(rows)} order(s) blocked. "
+                                   f"Account equity ${equity:,.2f}"},
+                        r,
+                    )
+                    drawdown_halt_notified = True
+
+            results.append(result)
     finally:
         conn.close()
 

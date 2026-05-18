@@ -79,6 +79,11 @@ RULES = {
     "tp1_mult":   4.5,
     "tp2_mult":   7.5,
     "ext_level_pct":     0.005,  # skip if within 0.5% of prev day H/L
+    # Maximum ORB signals to alert on per run. The watchlist can be large
+    # and opening-range breakouts tend to cluster — sending 7+ alerts at
+    # once is noise that drowns out the best setups. Rank by R:R and keep
+    # only the top N.
+    "max_signals": 3,
     # Scan ALL of today's post-9:45 ET 5m bars (not just the last N).
     # alpaca_ohlcv_intraday ingests bars HOURLY at :05 PDT; the ORB scanner
     # cron runs every 5min. With a small scan window (N=3), a breakout
@@ -540,6 +545,20 @@ def main() -> int:
         if not all_signals:
             log.info("No ORB signals detected — staying silent.")
             return 0
+
+        # Rank by R:R and cap at max_signals. Opening-range breakouts cluster
+        # heavily — 7+ alerts at once is noise. Keep only the best setups.
+        max_signals = RULES["max_signals"]
+        all_signals.sort(key=lambda s: s.get("risk_reward", 0), reverse=True)
+        if len(all_signals) > max_signals:
+            log.info(
+                "Capping ORB signals: %d detected, keeping top %d by R:R",
+                len(all_signals), max_signals,
+            )
+            dropped = [f"{s['symbol']} ({s['direction']}, R:R {s.get('risk_reward', '?')}:1)"
+                       for s in all_signals[max_signals:]]
+            log.info("Dropped: %s", ", ".join(dropped))
+            all_signals = all_signals[:max_signals]
 
         # Option enrichment.
         if not args.no_option:
