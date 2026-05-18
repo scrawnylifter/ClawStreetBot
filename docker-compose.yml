@@ -166,6 +166,15 @@ services:
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
       - N8N_SECURE_COOKIE=false
+      # Disable insights module — its compaction service contends with cron for the SQLite
+      # write lock, causing "Missed execution deadline" skips on minute-level crons.
+      - N8N_DISABLED_MODULES=insights
+      # Cap execution history pruning load (default keeps everything → unbounded WAL growth).
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
+      # Raise SQLite connection pool so cron/triggers don't starve behind background jobs.
+      - DB_SQLITE_POOL_SIZE=10
       # Re-enable Execute Command and Local File Trigger nodes (disabled by default in n8n v2.x).
       # Setting NODES_EXCLUDE to an empty array overrides the breaking-change rule.
       - NODES_EXCLUDE=[]
