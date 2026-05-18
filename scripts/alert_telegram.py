@@ -28,6 +28,30 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from constants import MAX_SPREAD_PCT  # noqa: E402
+
+
+def _format_quote_line(opt_bid, opt_ask, opt_mid, spread_pct) -> str:
+    """Build the 'Quote: bid X / ask Y | mid Z | spread W%' line.
+
+    spread_pct is the (ask - bid) / mid fraction at signal time. We red-flag
+    anything above MAX_SPREAD_PCT (0.15 today) so the user immediately sees
+    when a stale or thin contract slipped past — preflight will block it,
+    but seeing it in the alert avoids approval whiplash.
+    """
+    mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
+    if spread_pct is not None:
+        pct = float(spread_pct) * 100
+        if float(spread_pct) > MAX_SPREAD_PCT:
+            spread_str = f" | spread {pct:.1f}% 🚩"
+        else:
+            spread_str = f" | spread {pct:.1f}%"
+    else:
+        spread_str = ""
+    return (f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}"
+            f"{mid_str}{spread_str}")
+
 # ---------------------------------------------------------------------------
 # DB connection
 # ---------------------------------------------------------------------------
@@ -479,8 +503,8 @@ def format_15m_crossover_alert(signal: dict) -> str:
         opt_ask = signal.get("option_ask")
         opt_mid = signal.get("option_mid")
         if opt_bid is not None and opt_ask is not None:
-            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
-            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
+            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid,
+                                            signal.get("spread_pct")))
 
     # --- Vol & Gamma context ---
     context_bits = []
@@ -577,8 +601,8 @@ def format_ema_crossover_alert(signal: dict) -> str:
         opt_ask = signal.get("option_ask")
         opt_mid = signal.get("option_mid")
         if opt_bid is not None and opt_ask is not None:
-            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
-            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
+            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid,
+                                            signal.get("spread_pct")))
 
     # --- Vol & Gamma context ---
     context_bits = []
@@ -685,8 +709,8 @@ def format_setup_scanner_alert(signal: dict) -> str:
         opt_bid = signal.get("option_bid")
         opt_ask = signal.get("option_ask")
         if opt_bid is not None and opt_ask is not None:
-            mid_str = f" | mid ${float(opt_mid):.2f}" if opt_mid is not None else ""
-            lines.append(f"Quote: bid ${float(opt_bid):.2f} / ask ${float(opt_ask):.2f}{mid_str}")
+            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid,
+                                            signal.get("spread_pct")))
 
     # --- Vol & Gamma context ---
     context_bits = []
