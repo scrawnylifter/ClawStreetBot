@@ -1011,6 +1011,7 @@ def main():
         "option_symbol", "option_strike", "option_expiry",
         "option_delta", "option_theta",
         "option_bid", "option_ask", "option_mid",
+        "spread_pct",
         "iv_rank", "iv_rv_spread", "net_gex",
         "timeframe", "daily_trend", "daily_ema_position",
         "intraday_ema_9", "intraday_ema_21",

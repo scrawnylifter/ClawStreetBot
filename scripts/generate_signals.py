@@ -550,6 +550,7 @@ def evaluate_symbol(
     option_bid = opt["bid"] if opt else None
     option_ask = opt["ask"] if opt else None
     option_mid = opt["mid"] if opt else None
+    spread_pct = opt.get("spread_pct") if opt else None
 
     # Affordability gate (only if we have an option)
     if opt:
@@ -561,6 +562,7 @@ def evaluate_symbol(
             option_symbol = option_strike = option_expiry = None
             option_delta = option_theta = None
             option_bid = option_ask = option_mid = None
+            spread_pct = None
 
     # --- Invalidation rules ---
     if direction == "bullish":
@@ -646,6 +648,7 @@ def evaluate_symbol(
         "option_bid": option_bid,
         "option_ask": option_ask,
         "option_mid": option_mid,
+        "spread_pct": spread_pct,
         "iv_rank": inputs.get("iv_rank"),
         "iv_rv_spread": inputs.get("iv_rv_spread"),
         "net_gex": inputs.get("net_gex"),
@@ -681,6 +684,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 option_symbol, option_strike, option_expiry,
                 option_delta, option_theta,
                 option_bid, option_ask, option_mid,
+                spread_pct,
                 iv_rank, iv_rv_spread, net_gex,
                 daily_trend, daily_ema_position
             ) VALUES (
@@ -695,6 +699,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 %s, %s, %s,
                 %s, %s,
                 %s, %s, %s,
+                %s,
                 %s, %s, %s,
                 %s, %s
             )
@@ -717,6 +722,7 @@ def save_signal(conn, sig: dict) -> int | None:
             sig["option_symbol"], sig["option_strike"], sig["option_expiry"],
             sig["option_delta"], sig["option_theta"],
             sig["option_bid"], sig["option_ask"], sig["option_mid"],
+            sig.get("spread_pct"),
             sig.get("iv_rank"), sig.get("iv_rv_spread"),
             sig.get("net_gex"),
             sig.get("daily_trend"), sig.get("daily_ema_position"),

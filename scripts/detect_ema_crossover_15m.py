@@ -347,6 +347,7 @@ def detect_15m_crossovers(conn) -> list[dict]:
                     "option_bid": live_opt["bid"],
                     "option_ask": live_opt["ask"],
                     "option_mid": live_opt["mid"],
+                    "spread_pct": live_opt.get("spread_pct"),
                 })
             else:
                 signal.update({
@@ -358,6 +359,7 @@ def detect_15m_crossovers(conn) -> list[dict]:
                     "option_bid": None,
                     "option_ask": None,
                     "option_mid": None,
+                    "spread_pct": None,
                 })
 
             signals.append(signal)
@@ -408,6 +410,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                     option_symbol, option_strike, option_expiry,
                     option_delta, option_theta,
                     option_bid, option_ask, option_mid,
+                    spread_pct,
                     iv_rank, iv_rv_spread, net_gex,
                     timeframe, daily_trend, daily_ema_position,
                     intraday_ema_9, intraday_ema_21
@@ -420,6 +423,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                     %s, %s, %s,
                     %s, %s,
                     %s, %s, %s,
+                    %s,
                     %s, %s, %s,
                     %s, %s, %s,
                     %s, %s
@@ -433,6 +437,7 @@ def save_signals(conn, signals: list[dict]) -> int:
                 s["option_symbol"], s["option_strike"], s["option_expiry"],
                 s["option_delta"], s["option_theta"],
                 s["option_bid"], s["option_ask"], s["option_mid"],
+                s.get("spread_pct"),
                 s["iv_rank"], s["iv_rv_spread"], s["net_gex"],
                 s["timeframe"], s["daily_trend"], s["daily_ema_position"],
                 s["intraday_ema_9"], s["intraday_ema_21"],
