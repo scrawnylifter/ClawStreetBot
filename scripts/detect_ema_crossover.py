@@ -34,6 +34,11 @@ from datetime import date, datetime, timezone
 
 import psycopg2
 
+# Allow `import fetch_alpaca_snapshot` regardless of CWD (n8n runs from /).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fetch_alpaca_snapshot import select_best_option  # noqa: E402
+from constants import MAX_SPREAD_PCT  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -333,6 +338,55 @@ def detect_crossovers(conn, lookback_days: int = 5) -> list[dict]:
                 "option_theta": None,
             })
 
+        # Live bid/ask enrichment: the DB pick is built from daily greeks
+        # which can be a full session stale, so we re-query Alpaca for the
+        # current quote. select_best_option re-applies the MAX_SPREAD_PCT
+        # filter at the snapshot layer, so its returned contract is
+        # guaranteed to be inside the cap. If nothing comes back (no
+        # contract clears the spread or DTE/delta gates right now) we keep
+        # the trade plan but null out the option fields — the signal still
+        # fires, the user just gets stock-only context until the chain
+        # tightens up.
+        live_opt = None
+        try:
+            live_opt = select_best_option(
+                symbol,
+                want_type=contract_type,
+                min_dte=30,
+                max_dte=120,
+            )
+        except Exception as e:
+            log.warning("%s: live option snapshot failed (%s)", symbol, e)
+
+        if live_opt:
+            signal.update({
+                "option_symbol": live_opt["occ_symbol"],
+                "option_strike": float(live_opt["strike"]),
+                "option_expiry": live_opt["expiry"],
+                "option_delta": live_opt.get("delta"),
+                "option_theta": live_opt.get("theta"),
+                "option_bid": live_opt["bid"],
+                "option_ask": live_opt["ask"],
+                "option_mid": live_opt["mid"],
+                "spread_pct": live_opt.get("spread_pct"),
+            })
+        else:
+            # Either no contract cleared the live filter, or Alpaca is
+            # unreachable. Drop the contract — the spread might be wider
+            # than the cap and we'd rather emit a contract-less signal than
+            # one that quietly carries stale quotes.
+            log.info("%s: no live option passed spread filter (≤%.0f%%) — dropping contract",
+                     symbol, float(MAX_SPREAD_PCT) * 100)
+            signal["option_symbol"] = None
+            signal["option_strike"] = None
+            signal["option_expiry"] = None
+            signal["option_delta"] = None
+            signal["option_theta"] = None
+            signal["option_bid"] = None
+            signal["option_ask"] = None
+            signal["option_mid"] = None
+            signal["spread_pct"] = None
+
         signals.append(signal)
 
     cur.close()
@@ -378,6 +432,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     invalidation,
                     option_symbol, option_strike, option_expiry,
                     option_delta, option_theta,
+                    option_bid, option_ask, option_mid,
+                    spread_pct,
                     iv_rank, iv_rv_spread, net_gex
                 ) VALUES (
                     %(symbol)s, %(strategy)s, %(direction)s, %(status)s,
@@ -390,6 +446,8 @@ def save_signals(conn, signals: list[dict]) -> int:
                     %(invalidation)s,
                     %(option_symbol)s, %(option_strike)s, %(option_expiry)s,
                     %(option_delta)s, %(option_theta)s,
+                    %(option_bid)s, %(option_ask)s, %(option_mid)s,
+                    %(spread_pct)s,
                     %(iv_rank)s, %(iv_rv_spread)s, %(net_gex)s
                 )
                 ON CONFLICT (symbol, strategy, direction, timeframe, created_at)

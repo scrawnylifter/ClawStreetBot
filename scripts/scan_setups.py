@@ -437,6 +437,7 @@ def evaluate_symbol(
         "option_bid": opt["bid"],
         "option_ask": opt["ask"],
         "option_mid": mid,
+        "spread_pct": opt.get("spread_pct"),
         "option_iv": opt.get("iv"),
         # Trend context (from market.trend_status)
         "volume_ratio": _fnum(cand.get("volume_ratio")),
@@ -487,6 +488,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 option_symbol, option_strike, option_expiry,
                 option_delta, option_theta,
                 option_bid, option_ask, option_mid,
+                spread_pct,
                 iv_rank, iv_rv_spread, net_gex
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
@@ -500,6 +502,7 @@ def save_signal(conn, sig: dict) -> int | None:
                 %s, %s, %s,
                 %s, %s,
                 %s, %s, %s,
+                %s,
                 %s, %s, %s
             )
             ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
@@ -521,6 +524,7 @@ def save_signal(conn, sig: dict) -> int | None:
             sig["option_symbol"], sig["option_strike"], sig["option_expiry"],
             sig["option_delta"], sig["option_theta"],
             sig["option_bid"], sig["option_ask"], sig["option_mid"],
+            sig.get("spread_pct"),
             sig.get("iv_rank"), sig["iv_rv_spread"],
             sig.get("net_gex"),
         ))

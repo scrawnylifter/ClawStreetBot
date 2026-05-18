@@ -435,7 +435,8 @@ def save_signal(conn, sig: dict) -> int | None:
                 invalidation,
                 option_symbol, option_strike, option_expiry,
                 option_delta, option_theta,
-                option_bid, option_ask, option_mid
+                option_bid, option_ask, option_mid,
+                spread_pct
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s,
@@ -443,7 +444,8 @@ def save_signal(conn, sig: dict) -> int | None:
                 %s,
                 %s, %s, %s,
                 %s, %s,
-                %s, %s, %s
+                %s, %s, %s,
+                %s
             )
             ON CONFLICT (symbol, strategy, direction, timeframe, created_at)
             DO NOTHING
@@ -459,6 +461,7 @@ def save_signal(conn, sig: dict) -> int | None:
             sig.get("option_expiry"),
             sig.get("option_delta"), sig.get("option_theta"),
             sig.get("option_bid"), sig.get("option_ask"), sig.get("option_mid"),
+            sig.get("spread_pct"),
         ))
         row = cur.fetchone()
         conn.commit()
@@ -553,6 +556,7 @@ def main() -> int:
                     sig["option_bid"]    = opt["bid"]
                     sig["option_ask"]    = opt["ask"]
                     sig["option_mid"]    = opt["mid"]
+                    sig["spread_pct"]    = opt.get("spread_pct")
                 else:
                     log.info("%s: no suitable option within budget", sig["symbol"])
 

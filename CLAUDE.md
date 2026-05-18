@@ -156,6 +156,16 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - No `feed=` param on Alpaca option requests (raises error)
 - Paper tier returns `open_interest=None` sometimes
 
+### Bid-Ask Spread Filter (single source of truth: `scripts/constants.py`)
+- **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `scripts/constants.py`, imported everywhere else
+- **Definition:** `spread_pct = (ask - bid) / mid` — symmetric around the midpoint
+- **Why 15%:** Wider spreads make the round-trip cost alone large enough to wipe a 3:1 R:R setup. Anything tighter than 15% mid is treated as liquid enough to trade
+- **Three-layer enforcement** (a stale signal must survive all three to execute):
+  1. **Scanner-time** — `fetch_alpaca_snapshot.select_best_option` rejects contracts above the cap before they ever land in `market.signal_alerts`. `detect_ema_crossover.py` additionally re-queries Alpaca after its DB pick and nullifies `option_symbol` if the live spread is too wide (signal still fires, just stock-only)
+  2. **Persistence** — `market.signal_alerts.spread_pct` (migration 031) stores the value at signal time; `alert_telegram` red-flags (🚩) anything above the cap in the Telegram Quote line so the user sees the wide spread before they tap Approve
+  3. **Preflight** — `process_approved.py` re-checks the spread against the same `MAX_SPREAD_PCT` import. Catches stale signals that widened between scan and approval
+- **Mid-price policy:** All option limit prices submitted to Alpaca (`execute_trade.py`) use `(bid + ask) / 2` rounded to a penny — never the ask. Crossing the spread on every entry leaks edge proportional to `spread_pct/2`; the mid is the fair price the market makers are happy to fill near
+
 ### PDT Rule (Account < $25K) — ✅ ENFORCED IN `process_approved.py`
 - **3 day trades max in a rolling 5-business-day window**
 - 1st DT: normal, planned trade

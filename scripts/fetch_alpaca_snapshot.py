@@ -43,6 +43,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def load_env(filename: str) -> None:
@@ -73,8 +74,9 @@ DELTA_MAX = 0.70
 
 # Maximum acceptable bid-ask spread as a fraction of mid price. Contracts
 # with wider spreads are illiquid — the round-trip cost alone can wipe a
-# 3:1 R:R setup. Mirrored in process_approved.py for the preflight gate.
-MAX_SPREAD_PCT = 0.15
+# 3:1 R:R setup. Shared with process_approved.py via scripts.constants
+# so the scanner-time and preflight gates can't drift apart.
+from constants import MAX_SPREAD_PCT  # noqa: E402
 
 # Risk-mode-aware delta bands. Standard matches the historical scanner band.
 # Conservative tightens around the high-probability core (0.55–0.65, aim 0.60)
