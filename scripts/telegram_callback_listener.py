@@ -265,11 +265,13 @@ def handle_callback(
         # below instead of silently overwriting risk_mode.
         cur.execute(
             """SELECT id, symbol, strategy, direction, status, user_action,
-                      telegram_msg_id
+                      telegram_msg_id, created_at
                  FROM market.signal_alerts WHERE id = %s FOR UPDATE""",
             (signal_id,),
         )
         row = cur.fetchone()
+
+        now = datetime.now(timezone.utc)  # used for freshness check + approval timestamps
 
         if row is None:
             log.warning("Callback for unknown signal_id=%s", signal_id)
@@ -291,6 +293,43 @@ def handle_callback(
             conn.rollback()
             return
 
+        # --- Freshness gate: reject stale signals ---
+        # Each strategy has a TTL window (from constants.py). If the signal
+        # is older than its TTL, we expire it and reject the approval.
+        # ORB signals from 9:45 AM shouldn't be approved at 2 PM.
+        from datetime import timedelta
+        from constants import SIGNAL_TTL_MINUTES, DEFAULT_SIGNAL_TTL_MINUTES
+
+        strategy = row.get("strategy") or ""
+        ttl_minutes = SIGNAL_TTL_MINUTES.get(strategy, DEFAULT_SIGNAL_TTL_MINUTES)
+        created_at = row["created_at"] if "created_at" in row else None
+
+        if created_at is not None:
+            # Ensure timezone-aware comparison
+            signal_age = now - created_at.astimezone(timezone.utc) if created_at.tzinfo else now - created_at.replace(tzinfo=timezone.utc)
+            age_minutes = signal_age.total_seconds() / 60
+
+            if age_minutes > ttl_minutes:
+                log.warning(
+                    "Signal %s (%s %s) is %.0f min old (TTL=%d min) — EXPIRING and rejecting %s",
+                    signal_id, row["symbol"], strategy, age_minutes, ttl_minutes, action,
+                )
+                # Expire the signal so the alert_dispatch cron doesn't keep trying
+                cur.execute(
+                    """UPDATE market.signal_alerts
+                          SET status = 'expired'
+                        WHERE id = %s""",
+                    (signal_id,),
+                )
+                conn.commit()
+                answer_callback(
+                    token, cb_id,
+                    f"⚠️ Signal expired ({int(age_minutes)} min old, max {ttl_minutes} min for {strategy})."
+                )
+                if row["telegram_msg_id"]:
+                    clear_message_keyboard(token, chat_id, row["telegram_msg_id"])
+                return
+
         # Optional sanity check: the message the user pressed should be the
         # one we recorded as the alert message. Log a warning if not, but
         # still honor the decision (user may have forwarded buttons etc.).
@@ -300,7 +339,6 @@ def handle_callback(
                 signal_id, row["telegram_msg_id"], message_id,
             )
 
-        now = datetime.now(timezone.utc)
         if action == "approve":
             cur.execute(
                 """UPDATE market.signal_alerts

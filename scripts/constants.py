@@ -20,3 +20,31 @@ from decimal import Decimal
 #      between scan and approval.
 MAX_SPREAD_PCT = 0.15
 MAX_SPREAD_PCT_DECIMAL = Decimal("0.15")
+
+# ---------------------------------------------------------------------------
+# Signal freshness / expiry windows
+# ---------------------------------------------------------------------------
+# How long a signal remains actionable after creation. After this window
+# elapses, alert_telegram.py expires the row to 'expired' status and
+# telegram_callback_listener.py rejects approval.
+#
+# The key insight: ORB signals are only valid for ~60 min after market open
+# (they're based on a fixed opening range — by 11 AM the range is stale
+# and the probability of continuation has decayed). Setup scanner signals
+# are broader but still involve live option quotes that go stale.
+#
+# Strategy-specific windows (minutes). Default is 120 min for strategies
+# not listed here. Used by:
+#   - alert_telegram.py: expire_stale_new() per-strategy TTL
+#   - telegram_callback_listener.py: reject stale approvals
+#   - detect_orb.py: skip generation outside the ORB session window
+SIGNAL_TTL_MINUTES: dict[str, int] = {
+    "orb": 60,                  # ORB is opening-range only; stale after ~1h
+    "ema_crossover_15m": 60,   # 15m timing signal; stale within an hour
+    "ema_crossover": 240,      # Daily EMA cross has more staying power
+    "setup_scanner": 120,      # 8-gate composite; 2h is reasonable
+    "liquidity_sweep": 90,     # 5m sweep setup; decay faster than daily
+    "intraday_signal": 30,     # 5-min re-score; very time-sensitive
+}
+
+DEFAULT_SIGNAL_TTL_MINUTES = 120  # fallback for strategies not in the dict

@@ -238,17 +238,30 @@ def edit_message_text(
 # ---------------------------------------------------------------------------
 # Lifecycle: expirer + error surfacer
 # ---------------------------------------------------------------------------
+# Per-strategy TTL (minutes) — imported from constants.py so the same
+# values are available to telegram_callback_listener.py and the scanners.
+from constants import SIGNAL_TTL_MINUTES, DEFAULT_SIGNAL_TTL_MINUTES
 
-EXPIRY_HOURS = 24
+
+def _ttl_line(strategy: str) -> str:
+    """Return a one-liner showing when this alert expires."""
+    ttl = SIGNAL_TTL_MINUTES.get(strategy, DEFAULT_SIGNAL_TTL_MINUTES)
+    if ttl >= 60:
+        hours, mins = divmod(ttl, 60)
+        if mins:
+            return f"⏱ Expires in {hours}h {mins}m"
+        return f"⏱ Expires in {hours}h"
+    return f"⏱ Expires in {ttl}m"
+
 
 def expire_stale_new(conn, token: str | None, chat_id: str | None) -> int:
-    """Flip status='new' rows older than EXPIRY_HOURS to 'expired'.
+    """Flip status='new' rows past their strategy-specific TTL to 'expired'.
 
-    Without this, alerts the user never acted on accumulate forever — the
-    Telegram keyboard stays live and a stale tap days later runs through
-    telegram_callback_listener's idempotency branch (correctly rejected, but
-    cluttering chat) and the rows show up in PDT / drawdown projections
-    that shouldn't include them.
+    Each strategy has a freshness window (SIGNAL_TTL_MINUTES in constants.py):
+    ORB signals expire after 60 min, 15m EMA crosses after 60 min, setup
+    scanner after 120 min, etc. After the window elapses, the signal is stale
+    — the market conditions that triggered it have changed, option quotes
+    have moved, and executing on it would be contra-competitive.
 
     Also strips the inline keyboard from each expiring row's original
     message so the user can't tap a dead button. Keyboard removal failure
@@ -256,28 +269,58 @@ def expire_stale_new(conn, token: str | None, chat_id: str | None) -> int:
     message itself deleted; the state machine still needs to advance.
 
     Returns the number of rows expired (for logging)."""
+    total_expired = 0
+    strategies = set(SIGNAL_TTL_MINUTES.keys()) | {DEFAULT_SIGNAL_TTL_MINUTES}
+
     with conn.cursor() as cur:
+        # Strategy-specific expiry: each strategy gets its own TTL window.
+        for strategy, ttl_minutes in SIGNAL_TTL_MINUTES.items():
+            cur.execute(
+                """UPDATE market.signal_alerts
+                      SET status = 'expired'
+                    WHERE status = 'new'
+                      AND strategy = %s
+                      AND created_at < NOW() - make_interval(mins => %s)
+                    RETURNING id, telegram_msg_id""",
+                (strategy, ttl_minutes),
+            )
+            rows = cur.fetchall()
+            if rows and token and chat_id:
+                for sid, msg_id in rows:
+                    if msg_id:
+                        clear_message_keyboard(token, chat_id, msg_id,
+                                               allowed_chat_id=chat_id)
+            if rows:
+                log.info("Expired %d stale '%s' signal(s) (> %d min old)",
+                         len(rows), strategy, ttl_minutes)
+            total_expired += len(rows)
+
+        # Default TTL: catch any strategy not in the explicit dict.
+        # Build the NOT IN clause from keys already processed above.
+        known = list(SIGNAL_TTL_MINUTES.keys())
         cur.execute(
             """UPDATE market.signal_alerts
                   SET status = 'expired'
                 WHERE status = 'new'
-                  AND created_at < NOW() - make_interval(hours => %s)
+                  AND (strategy NOT IN %s OR strategy IS NULL)
+                  AND created_at < NOW() - make_interval(mins => %s)
                 RETURNING id, telegram_msg_id""",
-            (EXPIRY_HOURS,),
+            (tuple(known) if known else ("__none__",), DEFAULT_SIGNAL_TTL_MINUTES),
         )
-        expired = cur.fetchall()
+        default_rows = cur.fetchall()
+        if default_rows and token and chat_id:
+            for sid, msg_id in default_rows:
+                if msg_id:
+                    clear_message_keyboard(token, chat_id, msg_id,
+                                           allowed_chat_id=chat_id)
+        if default_rows:
+            log.info("Expired %d stale signal(s) (> %d min default TTL)",
+                     len(default_rows), DEFAULT_SIGNAL_TTL_MINUTES)
+        total_expired += len(default_rows)
+
     conn.commit()
-
-    if not expired:
-        return 0
-
-    if token and chat_id:
-        for sid, msg_id in expired:
-            if msg_id:
-                clear_message_keyboard(token, chat_id, msg_id, allowed_chat_id=chat_id)
-    log.info("Expired %d stale 'new' signal_alerts row(s) (> %sh old)",
-             len(expired), EXPIRY_HOURS)
-    return len(expired)
+    log.info("Total expired: %d signal_alerts row(s)", total_expired)
+    return total_expired
 
 
 def notify_errors(conn, token: str | None, chat_id: str | None, limit: int = 20) -> int:
@@ -547,6 +590,7 @@ def format_15m_crossover_alert(signal: dict) -> str:
         for cond in invalidation:
             lines.append(f"  ⛔ {html_mod.escape(str(cond))}")
 
+    lines.append(_ttl_line("ema_crossover_15m"))
     return "\n".join(lines)
 
 
@@ -649,6 +693,7 @@ def format_ema_crossover_alert(signal: dict) -> str:
         for cond in invalidation:
             lines.append(f"  ⛔ {html_mod.escape(str(cond))}")
 
+    lines.append(_ttl_line("ema_crossover"))
     return "\n".join(lines)
 
 
@@ -770,6 +815,7 @@ def format_setup_scanner_alert(signal: dict) -> str:
                 for rule in rules:
                     lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
+    lines.append(_ttl_line("setup_scanner"))
     return "\n".join(lines)
 
 
@@ -835,6 +881,7 @@ def format_intraday_signal_alert(signal: dict) -> str:
                 for rule in rules:
                     lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
+    lines.append(_ttl_line("intraday_signal"))
     return "\n".join(lines)
 
 
@@ -888,6 +935,7 @@ def format_liquidity_sweep_alert(signal: dict) -> str:
     lines.append("⚡ Close-beyond confirmation passed")
     lines.append("Backtest: PF 1.56 | WR 32.4% | avg +0.16R (259 trades)")
 
+    lines.append(_ttl_line("liquidity_sweep"))
     return "\n".join(lines)
 
 
@@ -998,6 +1046,7 @@ def format_orb_alert(signal: dict) -> str:
         for rule in reasons:
             lines.append(f"  ⛔ {html_mod.escape(str(rule))}")
 
+    lines.append(_ttl_line("orb"))
     return "\n".join(lines)
 
 

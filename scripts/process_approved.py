@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from constants import MAX_SPREAD_PCT_DECIMAL as MAX_SPREAD_PCT  # noqa: E402
+from constants import SIGNAL_TTL_MINUTES, DEFAULT_SIGNAL_TTL_MINUTES  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Trading rules (mirrored from CLAUDE.md — single source of truth lives there)
@@ -444,6 +445,19 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
     sid = signal.get("id")
     """Return [(status, message)] entries describing each gate's verdict."""
     out: list[tuple[str, str]] = []
+
+    # 0) Freshness gate — reject stale signals before any sizing/preflight checks.
+    #    ORB signals from 9:45 AM shouldn't execute at 2 PM.
+    created_at = signal.get("created_at")
+    strategy = signal.get("strategy") or ""
+    ttl_minutes = SIGNAL_TTL_MINUTES.get(strategy, DEFAULT_SIGNAL_TTL_MINUTES)
+    if created_at is not None:
+        from datetime import datetime, timezone
+        age_minutes = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds() / 60
+        if age_minutes > ttl_minutes:
+            out.append((CHECK_FAIL, f"Signal {age_minutes:.0f} min old (TTL={ttl_minutes} min for {strategy}) — STALE"))
+        else:
+            out.append((CHECK_PASS, f"Signal {age_minutes:.0f} min old (within {ttl_minutes} min)"))
 
     # 1) R:R floor
     rr = _to_decimal(signal.get("risk_reward"))
