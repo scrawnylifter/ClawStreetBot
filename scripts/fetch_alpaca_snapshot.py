@@ -70,6 +70,21 @@ MIN_DTE = 30
 DELTA_MIN = 0.50
 DELTA_MAX = 0.70
 
+# Risk-mode-aware delta bands. Standard matches the historical scanner band.
+# Conservative tightens around the high-probability core (0.55–0.65, aim 0.60)
+# so the contract has more in-the-money cushion. Aggressive widens to capture
+# more leverage: lower-delta contracts (closer to 0.40) cost less per contract,
+# higher-delta (closer to 0.80) approach share-equivalent — both increase
+# per-dollar exposure relative to a 0.60 baseline. Aim 0.50 on aggressive
+# pushes toward the cheaper, higher-leverage end of the band.
+#
+# Keyed by signal_alerts.risk_mode (see migration 023 + telegram_callback_listener).
+DELTA_BANDS = {
+    "conservative": {"min": 0.55, "max": 0.65, "target": 0.60},
+    "standard":     {"min": 0.50, "max": 0.70, "target": 0.60},
+    "aggressive":   {"min": 0.40, "max": 0.80, "target": 0.50},
+}
+
 
 def fnum(x) -> float | None:
     if x is None:
@@ -134,10 +149,23 @@ def get_underlying_price(symbol: str) -> float | None:
 
 
 def select_best_option(symbol: str, want_type: str | None,
-                       min_dte: int, max_dte: int) -> dict | None:
-    """Return the single best contract matching strategy filters, or None."""
+                       min_dte: int, max_dte: int,
+                       risk_mode: str = "standard") -> dict | None:
+    """Return the single best contract matching strategy filters, or None.
+
+    risk_mode picks the delta band + score target from DELTA_BANDS:
+      conservative → tighter 0.55–0.65, aim 0.60 (high prob, share-like)
+      standard     → 0.50–0.70, aim 0.60 (current default)
+      aggressive   → 0.40–0.80, aim 0.50 (lower-delta = more leverage / cheaper)
+    Unknown risk_mode falls back to 'standard'.
+    """
     client = OptionHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
     today = date.today()
+
+    band = DELTA_BANDS.get(risk_mode) or DELTA_BANDS["standard"]
+    delta_min = band["min"]
+    delta_max = band["max"]
+    delta_target = band["target"]
 
     req = OptionChainRequest(
         underlying_symbol=symbol,
@@ -150,7 +178,7 @@ def select_best_option(symbol: str, want_type: str | None,
     chain = client.get_option_chain(req)
 
     best: dict | None = None
-    best_score = float("inf")  # lower is better — distance from delta=0.60
+    best_score = float("inf")  # lower is better — distance from delta_target
 
     for occ, snap in chain.items():
         parsed = parse_occ(occ)
@@ -172,7 +200,7 @@ def select_best_option(symbol: str, want_type: str | None,
             continue
 
         abs_delta = abs(delta)
-        if abs_delta < DELTA_MIN or abs_delta > DELTA_MAX:
+        if abs_delta < delta_min or abs_delta > delta_max:
             continue
 
         # Reject sign mismatches (Alpaca usually returns negative delta for puts).
@@ -189,8 +217,8 @@ def select_best_option(symbol: str, want_type: str | None,
         mid = (bid + ask) / 2.0
         iv = fnum(getattr(snap, "implied_volatility", None))
 
-        # Score: prefer delta closest to 0.60 (midpoint of 0.50–0.70 band).
-        score = abs(abs_delta - 0.60)
+        # Score: prefer delta closest to the risk-mode-specific target.
+        score = abs(abs_delta - delta_target)
         if score < best_score:
             best_score = score
             best = {

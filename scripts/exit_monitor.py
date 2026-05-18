@@ -541,6 +541,16 @@ def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
 
     # Stock close — market order. Liquidity makes the limit dance unnecessary.
     sym = row["symbol"]
+
+    # H7: stock entries are submitted as BRACKET orders by execute_trade,
+    # so Alpaca is holding two child OCO legs (stop_loss + take_profit).
+    # If we submit our own SELL while those legs are open, the parent
+    # position would be over-sold (or, more likely, Alpaca rejects with
+    # 'cannot exceed position qty'). Cancel any open orders for this
+    # symbol first so our exit_monitor SELL is the only thing going through.
+    # Idempotent — if no bracket is live, cancel_orders is a no-op.
+    _cancel_open_orders_for_symbol(client, sym)
+
     req = MarketOrderRequest(
         symbol=sym, qty=int(qty), side=side, time_in_force=TimeInForce.DAY,
         client_order_id=client_order_id,
@@ -552,6 +562,41 @@ def submit_close(client, row: dict, qty: Decimal, reason: str) -> dict:
         "order_type": "market",
         "symbol": sym,
     }
+
+
+def _cancel_open_orders_for_symbol(client, symbol: str) -> int:
+    """Cancel every open order at Alpaca for `symbol`. Used before submitting
+    an exit_monitor close so we don't fight the bracket legs we attached at
+    entry (H7). Best-effort — any individual cancel failure is logged but
+    not raised; the subsequent close submit will surface a real problem if
+    the bracket can't be displaced.
+
+    Returns the count of orders that were cancelled."""
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol], limit=50)
+        orders = client.get_orders(filter=req)
+    except Exception:
+        log.exception("_cancel_open_orders_for_symbol: list failed for %s; "
+                      "proceeding with close anyway", symbol)
+        return 0
+
+    cancelled = 0
+    for o in orders:
+        oid = getattr(o, "id", None)
+        if oid is None:
+            continue
+        try:
+            client.cancel_order_by_id(oid)
+            cancelled += 1
+        except Exception:
+            log.warning("_cancel_open_orders_for_symbol: cancel failed for "
+                        "order_id=%s symbol=%s (continuing)", oid, symbol)
+    if cancelled:
+        log.info("Cancelled %d open order(s) for %s before exit_monitor close",
+                 cancelled, symbol)
+    return cancelled
 
 
 # ---------------------------------------------------------------------------
