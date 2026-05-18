@@ -284,6 +284,73 @@ def reconcile_one(
             v = getattr(order, attr, None)
             if v:
                 reason += f" {attr}={v}"
+
+        # Alpaca can return a terminal cancel/expiration WITH a partial fill
+        # already executed (filled_qty > 0 at filled_avg_price). Marking the
+        # signal 'error' and stopping here would leave the user holding the
+        # partial fill at Alpaca with NO position row in the DB — exit_monitor
+        # would never close it. Mirror the partial-fill branch already in
+        # reconcile_exits: INSERT a position for the partial qty, mark the
+        # signal filled, and record the cancel in error_message for audit.
+        if filled_qty > 0 and filled_avg_price is not None and filled_avg_price > 0:
+            asset_id = resolve_asset_id(conn, sym)
+            if asset_id is None:
+                msg = (f"asset '{sym}' not in market.assets — partial fill "
+                       f"{filled_qty}@${filled_avg_price} stranded at Alpaca, "
+                       f"cancel reason: {reason}")
+                if dry_run:
+                    return f"#{sid} {sym} DRY-RUN would error (asset gap) — {msg}"
+                mark_error(conn, sid, msg)
+                conn.commit()
+                log.error("#%s %s ERROR — %s", sid, sym, msg)
+                return f"#{sid} {sym} ERROR — {msg}"
+
+            has_option = bool(signal.get("option_symbol"))
+            direction = position_direction(signal, has_option)
+            stop_loss   = _to_decimal(signal.get("stop_price"))
+            take_profit = _to_decimal(signal.get("tp1_price"))
+
+            if dry_run:
+                return (f"#{sid} {sym} DRY-RUN would partial-fill on cancel — "
+                        f"INSERT positions(qty={filled_qty}, avg={filled_avg_price}); "
+                        f"mark signal filled with note: {reason}")
+
+            try:
+                position_id = insert_position(
+                    conn,
+                    asset_id=asset_id,
+                    direction=direction,
+                    entry_price=filled_avg_price,
+                    quantity=filled_qty,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    alpaca_order_id=order_id,
+                )
+                mark_filled(conn, sid, position_id)
+                # Stash the cancel reason in error_message so the operator
+                # sees that the order didn't fully fill, even though we
+                # treat the partial as a real position.
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE market.signal_alerts
+                              SET error_message = %s
+                            WHERE id = %s""",
+                        (f"partial fill before cancel: {reason}", sid),
+                    )
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.exception("#%s DB error during partial-cancel reconciliation", sid)
+                return (f"#{sid} {sym} WARN — DB error during partial-cancel: "
+                        f"{type(e).__name__}: {e}")
+
+            log.info("#%s %s FILLED (partial-then-%s) — position_id=%s qty=%s avg=%s",
+                     sid, sym, status, position_id, filled_qty, filled_avg_price)
+            return (f"#{sid} {sym} FILLED partial-then-{status} — "
+                    f"position_id={position_id} qty={filled_qty} "
+                    f"@ ${filled_avg_price} (canceled before completion)")
+
+        # Genuine zero-fill cancel — nothing executed at Alpaca, safe to error.
         if dry_run:
             return f"#{sid} {sym} DRY-RUN would mark error — {reason}"
         mark_error(conn, sid, reason)

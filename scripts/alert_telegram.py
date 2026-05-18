@@ -265,26 +265,36 @@ def notify_errors(conn, token: str | None, chat_id: str | None, limit: int = 20)
     immediately to keep the queue from filling — the operator can grep
     logs by signal id.
 
-    Returns the count of rows processed."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id, symbol, strategy, direction, error_message,
-                      telegram_msg_id
-                 FROM market.signal_alerts
-                WHERE status = 'error'
-                  AND error_notified_at IS NULL
-                ORDER BY id ASC
-                LIMIT %s
-                FOR UPDATE SKIP LOCKED""",
-            (limit,),
-        )
-        rows = cur.fetchall()
-        if not rows:
-            conn.commit()
-            return 0
+    Returns the count of rows processed.
 
-        notified = 0
-        for sid, sym, strat, direction, err_msg, msg_id in rows:
+    One-row-at-a-time fetch + per-row commit. The batch-fetch
+    FOR UPDATE SKIP LOCKED + single-commit-at-end pattern was unsafe:
+      (a) the lock window stretched across all Telegram edits (up to 20×
+          15s = 5 min on a network outage), starving concurrent crons;
+      (b) an exception mid-loop rolled back every error_notified_at
+          UPDATE that had succeeded earlier, so the next tick re-edited
+          the same error messages with no progress recorded.
+    Per-row commit fixes both — lock window is one edit call, and each
+    success is durable independently."""
+    notified = 0
+    while notified < limit:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, symbol, strategy, direction, error_message,
+                          telegram_msg_id
+                     FROM market.signal_alerts
+                    WHERE status = 'error'
+                      AND error_notified_at IS NULL
+                    ORDER BY id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED""",
+            )
+            row = cur.fetchone()
+            if row is None:
+                conn.commit()
+                break
+
+            sid, sym, strat, direction, err_msg, msg_id = row
             err_text = (err_msg or "(no message)")[:500]
             text = (
                 f"❌ <b>ERROR — {sym} {strat} {direction}</b>\n"
@@ -300,9 +310,11 @@ def notify_errors(conn, token: str | None, chat_id: str | None, limit: int = 20)
                     WHERE id = %s""",
                 (sid,),
             )
-            notified += 1
+        # Per-row commit releases the FOR UPDATE lock + persists progress
+        # so an exception on the NEXT row doesn't roll this one back.
+        conn.commit()
+        notified += 1
 
-    conn.commit()
     if notified:
         log.info("Surfaced %d error row(s) to Telegram", notified)
     return notified

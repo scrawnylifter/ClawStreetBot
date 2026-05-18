@@ -68,19 +68,125 @@ log = logging.getLogger("reconcile_exits")
 # DB
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Orphan exit recovery — scan Alpaca for SELLs whose DB stamp was lost
+# ---------------------------------------------------------------------------
+
+# client_order_id format from exit_monitor.submit_close:
+#   csb-exit-<position_id>-<reason>
+# reason ∈ {stop, premium_stop, tp1_partial, tp2, time_stop, expiry, trail_stop}
+_EXIT_CLIENT_ID_PREFIX = "csb-exit-"
+
+
+def _parse_exit_client_order_id(client_order_id: str) -> tuple[int, str] | None:
+    """Returns (position_id, reason) parsed from a 'csb-exit-N-reason' id,
+    or None if it doesn't match the pattern. Bot-side defensive parser —
+    Alpaca will pass through any string we sent."""
+    if not client_order_id or not client_order_id.startswith(_EXIT_CLIENT_ID_PREFIX):
+        return None
+    suffix = client_order_id[len(_EXIT_CLIENT_ID_PREFIX):]
+    parts = suffix.split("-", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        pid = int(parts[0])
+    except ValueError:
+        return None
+    return pid, parts[1]
+
+
+def recover_orphan_exit_sells(conn, client) -> int:
+    """Backfill positions.sell_order_id / tp1_sell_order_id for SELLs that
+    are live at Alpaca but missing from the DB.
+
+    The submit-close → DB-stamp pair in exit_monitor.process_one is not
+    atomic. A SIGKILL between submit_close (which returns from Alpaca with
+    a real order id) and stamp_full_close / stamp_tp1_partial leaves the
+    DB with sell_order_id IS NULL while Alpaca has a live SELL. Next
+    exit_monitor tick re-detects the exit condition and re-submits — but
+    Alpaca rejects the duplicate client_order_id, so exit_monitor logs an
+    ERROR and the position is stuck open while the original SELL runs to
+    completion at Alpaca. Money parks at the broker.
+
+    This helper queries Alpaca for OPEN orders with our csb-exit-* prefix,
+    parses position_id and reason from each client_order_id, and stamps
+    the corresponding DB column if it's still NULL. Idempotent: an
+    already-stamped row is left alone.
+
+    Returns the number of rows backfilled (for logging)."""
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
+        orders = client.get_orders(filter=req)
+    except Exception:
+        log.exception("recover_orphan_exit_sells: Alpaca order list failed")
+        return 0
+
+    recovered = 0
+    for order in orders:
+        cid = getattr(order, "client_order_id", None) or ""
+        parsed = _parse_exit_client_order_id(cid)
+        if parsed is None:
+            continue
+        pid, reason = parsed
+        order_id = str(order.id)
+        submitted_at = getattr(order, "submitted_at", None)
+
+        # tp1_partial → tp1_sell_order_id column; everything else →
+        # sell_order_id column. Match the column exit_monitor would have
+        # stamped if it hadn't crashed.
+        if reason == "tp1_partial":
+            target_col = "tp1_sell_order_id"
+            extras = """
+                  AND tp1_filled_at IS NULL
+                  AND tp1_sell_order_id IS NULL
+            """
+        else:
+            target_col = "sell_order_id"
+            extras = "AND sell_order_id IS NULL"
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE trading.positions
+                       SET {target_col}     = %s,
+                           exit_submitted_at = COALESCE(exit_submitted_at, %s),
+                           exit_reason       = COALESCE(exit_reason, %s)
+                     WHERE id = %s
+                       AND status = 'open'
+                       {extras}
+                    RETURNING id""",
+                (order_id, submitted_at, reason, pid),
+            )
+            if cur.fetchone() is not None:
+                recovered += 1
+                log.warning(
+                    "Recovered orphan SELL → positions.id=%s %s=%s reason=%s",
+                    pid, target_col, order_id, reason,
+                )
+    conn.commit()
+    if recovered:
+        log.info("recover_orphan_exit_sells: backfilled %d row(s)", recovered)
+    return recovered
+
+
+_PENDING_EXIT_SELECT = """
+    SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
+           p.entry_price, p.quantity, p.sell_order_id, p.exit_submitted_at,
+           p.exit_reason, p.opened_at,
+           s.option_symbol
+      FROM trading.positions p
+      LEFT JOIN market.signal_alerts s ON s.position_id = p.id
+     WHERE p.status = 'open'
+       AND p.sell_order_id IS NOT NULL
+"""
+
+
 def fetch_pending_exits(conn, position_id: int | None, limit: int) -> list[dict]:
-    """Open positions with a SELL submitted, joined to their originating signal
-    so we know whether it's an option (×100 multiplier on P&L)."""
-    sql = """
-        SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
-               p.entry_price, p.quantity, p.sell_order_id, p.exit_submitted_at,
-               p.exit_reason, p.opened_at,
-               s.option_symbol
-          FROM trading.positions p
-          LEFT JOIN market.signal_alerts s ON s.position_id = p.id
-         WHERE p.status = 'open'
-           AND p.sell_order_id IS NOT NULL
+    """Plain (unlocked) batch fetch — retained for read-only inspection / tests.
+    The live main loop uses fetch_one_pending_exit_locked instead.
     """
+    sql = _PENDING_EXIT_SELECT
     params: list = []
     if position_id is not None:
         sql += " AND p.id = %s"
@@ -90,6 +196,36 @@ def fetch_pending_exits(conn, position_id: int | None, limit: int) -> list[dict]
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, params)
         return list(cur.fetchall())
+
+
+def fetch_one_pending_exit_locked(
+    conn, position_id: int | None, exclude_ids: list[int] | None = None,
+) -> dict | None:
+    """Lock the next single open position with a SELL in flight.
+
+    FOR UPDATE OF p SKIP LOCKED guarantees two overlapping reconcile_exits
+    runs see DIFFERENT rows — otherwise both could call mark_closed's
+    COALESCE+= or partial_close_sell's quantity-= on the same row and
+    double-count P&L / under-count quantity.
+
+    exclude_ids: rows already visited in THIS run. After commit, the lock
+    is released; if reconcile_one's outcome leaves the row in a state that
+    still matches the WHERE predicates (shouldn't happen in steady-state
+    but possible on the dry-run + WARN paths), we'd refetch it
+    indefinitely.
+    """
+    sql = _PENDING_EXIT_SELECT
+    params: list = []
+    if position_id is not None:
+        sql += " AND p.id = %s"
+        params.append(position_id)
+    if exclude_ids:
+        sql += " AND p.id <> ALL(%s)"
+        params.append(list(exclude_ids))
+    sql += " ORDER BY p.exit_submitted_at ASC NULLS LAST LIMIT 1 FOR UPDATE OF p SKIP LOCKED"
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, params)
+        return cur.fetchone()
 
 
 def mark_closed(
@@ -163,21 +299,25 @@ def clear_exit_submission(conn, position_id: int) -> None:
         )
 
 
+_PENDING_TP1_SELECT = """
+    SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
+           p.entry_price, p.quantity, p.tp1_sell_order_id,
+           p.tp1_hit_at, p.exit_reason, p.opened_at,
+           s.option_symbol
+      FROM trading.positions p
+      LEFT JOIN market.signal_alerts s ON s.position_id = p.id
+     WHERE p.status = 'open'
+       AND p.tp1_sell_order_id IS NOT NULL
+       AND p.tp1_filled_at IS NULL
+"""
+
+
 def fetch_pending_tp1_partials(
     conn, position_id: int | None, limit: int,
 ) -> list[dict]:
-    """Open positions with a TP1 partial SELL submitted but not yet reconciled."""
-    sql = """
-        SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
-               p.entry_price, p.quantity, p.tp1_sell_order_id,
-               p.tp1_hit_at, p.exit_reason, p.opened_at,
-               s.option_symbol
-          FROM trading.positions p
-          LEFT JOIN market.signal_alerts s ON s.position_id = p.id
-         WHERE p.status = 'open'
-           AND p.tp1_sell_order_id IS NOT NULL
-           AND p.tp1_filled_at IS NULL
-    """
+    """Plain (unlocked) batch fetch — for tests / inspection only. The live
+    main loop uses fetch_one_pending_tp1_locked instead."""
+    sql = _PENDING_TP1_SELECT
     params: list = []
     if position_id is not None:
         sql += " AND p.id = %s"
@@ -187,6 +327,28 @@ def fetch_pending_tp1_partials(
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, params)
         return list(cur.fetchall())
+
+
+def fetch_one_pending_tp1_locked(
+    conn, position_id: int | None, exclude_ids: list[int] | None = None,
+) -> dict | None:
+    """Lock the next single open position with a TP1 partial SELL in flight.
+    Same FOR UPDATE OF p SKIP LOCKED + seen-set pattern as
+    fetch_one_pending_exit_locked. Without this, concurrent reconcile_exits
+    runs could both apply mark_tp1_partial_filled, decrementing
+    positions.quantity twice (real money-loss of accounting)."""
+    sql = _PENDING_TP1_SELECT
+    params: list = []
+    if position_id is not None:
+        sql += " AND p.id = %s"
+        params.append(position_id)
+    if exclude_ids:
+        sql += " AND p.id <> ALL(%s)"
+        params.append(list(exclude_ids))
+    sql += " ORDER BY p.tp1_hit_at ASC NULLS LAST LIMIT 1 FOR UPDATE OF p SKIP LOCKED"
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, params)
+        return cur.fetchone()
 
 
 def mark_tp1_partial_filled(
@@ -498,24 +660,6 @@ def main() -> int:
     args = parser.parse_args()
 
     conn = pa.get_connection()
-    try:
-        full_rows = fetch_pending_exits(conn, args.id, args.limit)
-        partial_rows = fetch_pending_tp1_partials(conn, args.id, args.limit)
-    except Exception:
-        conn.close()
-        raise
-
-    if not full_rows and not partial_rows:
-        if args.id is not None:
-            print(f"No open position with id={args.id} and a SELL in flight.")
-        else:
-            print("No SELL orders to reconcile.")
-        conn.close()
-        return 0
-
-    log.info("Reconciling %d full close(s) + %d TP1 partial(s)%s",
-             len(full_rows), len(partial_rows),
-             " (DRY RUN)" if args.dry_run else "")
 
     try:
         client = rc._alpaca_client()
@@ -524,32 +668,87 @@ def main() -> int:
         conn.close()
         return 2
 
-    results: list[str] = []
-    try:
-        for r in full_rows:
+    # Reap orphan exit SELLs (Alpaca-live, DB-missing) BEFORE the main loop.
+    # exit_monitor's submit→stamp pair isn't atomic; a crash between them
+    # leaves the SELL live at Alpaca and the position stuck open with
+    # sell_order_id IS NULL. The Alpaca scan backfills the missing stamp
+    # so the normal reconcile path picks it up this tick.
+    if args.id is None and not args.dry_run:
+        try:
+            recover_orphan_exit_sells(conn, client)
+        except Exception:
+            log.exception("recover_orphan_exit_sells failed — continuing")
             try:
-                results.append(reconcile_one(conn, client, r, args.dry_run, args.verbose))
+                conn.rollback()
+            except Exception:
+                pass
+
+    results: list[str] = []
+    # One-at-a-time fetch under FOR UPDATE OF p SKIP LOCKED. The PER-ROW
+    # lock holds across the inner reconcile_*'s Alpaca lookup + DB writes
+    # and is released by the inner commit/rollback, so a second cron run
+    # sees DIFFERENT rows. A previous batch-fetch implementation released
+    # all locks after the first row's commit, leaving the remaining batch
+    # racy.
+    seen_full: list[int] = []
+    seen_partial: list[int] = []
+    try:
+        while len(results) < args.limit:
+            try:
+                row = fetch_one_pending_exit_locked(conn, args.id, seen_full)
+            except Exception:
+                log.exception("Lock fetch (full) failed; aborting full pass")
+                conn.rollback()
+                break
+            if row is None:
+                conn.commit()
+                break
+            seen_full.append(row["position_id"])
+            try:
+                results.append(reconcile_one(conn, client, row, args.dry_run, args.verbose))
             except Exception:
                 log.exception("Unhandled error reconciling position #%s",
-                              r["position_id"])
-                results.append(f"position #{r['position_id']} ERROR — internal")
+                              row["position_id"])
+                results.append(f"position #{row['position_id']} ERROR — internal")
                 try:
                     conn.rollback()
                 except Exception:
                     pass
-        for r in partial_rows:
+
+        while len(results) < args.limit + len(seen_full):
+            try:
+                row = fetch_one_pending_tp1_locked(conn, args.id, seen_partial)
+            except Exception:
+                log.exception("Lock fetch (TP1 partial) failed; aborting partial pass")
+                conn.rollback()
+                break
+            if row is None:
+                conn.commit()
+                break
+            seen_partial.append(row["position_id"])
             try:
                 results.append(
-                    reconcile_partial_one(conn, client, r, args.dry_run, args.verbose)
+                    reconcile_partial_one(conn, client, row, args.dry_run, args.verbose)
                 )
             except Exception:
                 log.exception("Unhandled error reconciling TP1 partial on position #%s",
-                              r["position_id"])
-                results.append(f"position #{r['position_id']} ERROR — TP1 partial internal")
+                              row["position_id"])
+                results.append(f"position #{row['position_id']} ERROR — TP1 partial internal")
                 try:
                     conn.rollback()
                 except Exception:
                     pass
+
+        if not results:
+            if args.id is not None:
+                print(f"No open position with id={args.id} and a SELL in flight "
+                      f"(or all are locked by another reconcile_exits run).")
+            else:
+                print("No SELL orders to reconcile.")
+            return 0
+
+        log.info("Reconciled %d row(s)%s", len(results),
+                 " (DRY RUN)" if args.dry_run else "")
     finally:
         conn.close()
 

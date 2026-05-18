@@ -539,12 +539,20 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
         ]:
             pct = dd[key]
             if pct is None:
-                # No snapshot for this horizon — halt is uncomputable. WARN
-                # so it surfaces in the dry-run / live logs; do NOT block.
-                out.append((CHECK_WARN,
+                # No snapshot for this horizon — halt is uncomputable.
+                # FAIL (not WARN): drawdown is the LAST line of defense
+                # and a silent miss would let trades through during an
+                # actual drawdown. The operator must run snapshot_equity.py
+                # manually (or wait for the next cron tick) before this
+                # signal can execute. Idempotent UPSERT on
+                # market.equity_snapshots makes catch-up trivial.
+                out.append((CHECK_FAIL,
                             f"Drawdown {label}: no equity_snapshot at period "
-                            f"boundary — halt can't be computed (run "
-                            f"scripts/snapshot_equity.py daily)"))
+                            f"boundary — halt can't be computed; refusing to "
+                            f"trade until snapshot is run "
+                            f"(docker exec clawstreet-worker python "
+                            f"/app/scripts/snapshot_equity.py)"))
+                halted = True
                 continue
             if pct < -threshold:
                 out.append((CHECK_FAIL,

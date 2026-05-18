@@ -152,9 +152,22 @@ def lock_and_mark_executing(conn, signal_id: int) -> dict | None:
         if row is None:
             conn.rollback()
             return None
+        # Stamp executed_at HERE (not in record_execution). The orphan
+        # reaper recover_orphan_executing requires executed_at to be set so
+        # it can age rows past the 5-min grace window. Without this stamp,
+        # a SIGKILL between this UPDATE and record_execution leaves a row
+        # with status='executing' AND alpaca_order_id IS NULL AND
+        # executed_at IS NULL — invisible to BOTH fetch_executing (filters
+        # by alpaca_order_id) AND recover_orphan_executing (filters by
+        # executed_at), so it rots forever.
+        # record_execution still UPDATEs executed_at to the post-submit
+        # timestamp on success — that's fine and slightly more accurate
+        # (the column is "when Alpaca confirmed the BUY"), but for
+        # recovery purposes any non-NULL stamp old enough works.
         cur.execute(
             """UPDATE market.signal_alerts
-                  SET status = 'executing'
+                  SET status      = 'executing',
+                      executed_at = NOW()
                 WHERE id = %s""",
             (signal_id,),
         )
