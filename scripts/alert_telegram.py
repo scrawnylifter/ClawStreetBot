@@ -866,6 +866,116 @@ def format_liquidity_sweep_alert(signal: dict) -> str:
     return "\n".join(lines)
 
 
+def format_orb_alert(signal: dict) -> str:
+    """Format an ORB (Opening Range Breakout) signal (detect_orb.py).
+
+    Shows the ORB range, breakout direction, ATR-based stops, and an
+    external-level warning if the underlying is near yesterday's high/low
+    (the strategy's main invalidation risk)."""
+    symbol = signal["symbol"]
+    direction = signal["direction"]
+    price = signal["trigger_price"]
+    stop = signal["stop_price"]
+    tp1 = signal["tp1_price"]
+    tp2 = signal["tp2_price"]
+    rr = signal["risk_reward"]
+    atr = signal.get("atr_14")
+
+    emoji = "🟢" if direction == "bullish" else "🔴"
+    action = "BUY" if direction == "bullish" else "SHORT"
+
+    # Pull ORB-specific fields from the invalidation JSONB blob.
+    invalidation = signal.get("invalidation")
+    inv: dict = {}
+    if invalidation:
+        if isinstance(invalidation, str):
+            try:
+                inv = json.loads(invalidation)
+            except (json.JSONDecodeError, TypeError):
+                inv = {}
+        elif isinstance(invalidation, dict):
+            inv = invalidation
+
+    orb_high = inv.get("orb_range_high")
+    orb_low  = inv.get("orb_range_low")
+    breakout_type = inv.get("breakout_type", "direct")
+    near_pdh = bool(inv.get("near_prev_day_high"))
+    near_pdl = bool(inv.get("near_prev_day_low"))
+
+    lines = [
+        f"{emoji} <b>{action} Signal: {symbol}</b>",
+        f"{'─' * 30}",
+        f"Strategy: ORB | Timeframe: {signal.get('timeframe', '5m')}",
+        f"Stock: ${float(price):.2f}",
+    ]
+
+    if orb_high is not None and orb_low is not None:
+        lines.append(
+            f"ORB Range: ${float(orb_low):.2f}–${float(orb_high):.2f} "
+            f"(width ${float(orb_high) - float(orb_low):.2f})"
+        )
+    cross_word = ("above ORB high" if direction == "bullish"
+                  else "below ORB low")
+    breakout_word = "retest entry" if breakout_type == "retest" else "direct breakout"
+    lines.append(f"Breakout: 5-min close {cross_word} ({breakout_word})")
+
+    if atr is not None:
+        lines.append(f"ATR: ${float(atr):.2f}")
+
+    # Trade plan (matches the rest of the scanner formatters).
+    risk_dollars = (float(price) - float(stop) if direction == "bullish"
+                    else float(stop) - float(price))
+    reward_dollars = (float(tp1) - float(price) if direction == "bullish"
+                      else float(price) - float(tp1))
+    rr_check = "✅" if float(rr) >= 3 else "⚠️"
+    lines.append("")
+    lines.append(
+        f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | "
+        f"Target: ${float(tp1):.2f} / ${float(tp2):.2f}"
+    )
+    lines.append(
+        f"Risk ${risk_dollars:.2f} → Reward ${reward_dollars:.2f} "
+        f"({float(rr):.1f}:1) {rr_check}"
+    )
+
+    # Suggested option contract.
+    opt_sym = signal.get("option_symbol")
+    if opt_sym:
+        opt_strike = signal.get("option_strike", 0)
+        opt_expiry = signal.get("option_expiry", "?")
+        opt_delta = signal.get("option_delta", 0)
+        opt_mid = signal.get("option_mid")
+        contract_type = "C" if direction == "bullish" else "P"
+        lines.append("")
+        lines.append(
+            f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} "
+            f"exp {opt_expiry} (Δ{float(opt_delta):.2f})"
+        )
+        if opt_mid is not None:
+            lines.append(f"Mid: ${float(opt_mid):.2f}")
+
+    # External-level warning. detect_orb refuses to fire when within 0.5%
+    # of prev-day H/L, so these flags will normally be False — but the
+    # JSONB blob records them defensively, so surface them if present.
+    if near_pdh or near_pdl:
+        lines.append("")
+        which = "high" if near_pdh else "low"
+        lines.append(
+            f"⚠️ Underlying near previous day's {which} — "
+            "liquidity magnet, higher invalidation risk"
+        )
+
+    # Bail conditions from the invalidation blob.
+    reasons = inv.get("reasons") or []
+    if reasons:
+        lines.append("")
+        lines.append("<b>Bail if:</b>")
+        for rule in reasons:
+            lines.append(f"  ⛔ {rule}")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -976,6 +1086,8 @@ def main():
             alert_text = format_liquidity_sweep_alert(signal)
         elif signal["strategy"] == "intraday_signal":
             alert_text = format_intraday_signal_alert(signal)
+        elif signal["strategy"] == "orb":
+            alert_text = format_orb_alert(signal)
         else:
             # Generic fallback
             emoji = "📈" if signal["direction"] == "bullish" else "📉"
