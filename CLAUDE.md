@@ -305,7 +305,7 @@ ClawStreetBot/
 │   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
 │   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
 │   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R + volume_ratio, trend context, GEX)
-│   ├── alert_telegram.py              ← Phase 5A+5C: Telegram alert sender (inline keyboard for approval/deny); expire_stale_new() + notify_errors() on every cron tick
+│   ├── alert_telegram.py              ← Phase 5A+5C+5D: Telegram alert sender (inline keyboard for approval/deny); expire_stale_new() + notify_errors() on every cron tick; per-row commit in notify_errors prevents rollback on Telegram outage
 │   ├── telegram_callback_listener.py  ← Phase 5B: Long-poll listener for Telegram callback queries (approve/deny)
 │   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
 │   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
@@ -317,11 +317,11 @@ ClawStreetBot/
 │   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
 │   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
 │   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
-│   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (dry-run by default, --confirm to submit)
-│   ├── reconcile_orders.py           ← Phase 5B+5C: Polls Alpaca for BUY fill state → trading.positions; recover_orphan_executing() flips stale executing→error
-│   ├── reconcile_exits.py            ← Phase 5B: Polls Alpaca for SELL fill state → closed + realized_pnl; partial_close_sell() for partial fills
-│   ├── exit_monitor.py              ← Phase 5B+5C: TP/SL/trailing-stop/time-stop monitor (TRAIL_ACTIVATE + TRAIL_UPDATE for swing after TP2, SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard)
-│   ├── process_approved.py          ← Phase 5B: Pre-flight checks — PDT counter, drawdown halts, risk_mode → position sizing
+│   ├── execute_trade.py              ← Phase 5B: Alpaca paper order submission (sets executed_at=NOW() BEFORE Alpaca submit to prevent orphan rows; dry-run by default, --confirm to submit)
+│   ├── reconcile_orders.py           ← Phase 5B+5C+5D: Polls Alpaca for BUY fill state → trading.positions; CANCEL branch writes position with status='cancelled' + partial-fill qty; recover_orphan_executing() catches NULL alpaca_order_id AND NULL executed_at
+│   ├── reconcile_exits.py            ← Phase 5B+5D: Polls Alpaca for SELL fill state → closed + realized_pnl; FOR UPDATE OF p SKIP LOCKED + one-row-at-a-time fetch (concurrency safe); recover_orphan_sells() scans Alpaca for orphan SELL orders; partial_close_sell() for partial fills
+│   ├── exit_monitor.py              ← Phase 5B+5C+5D: TP/SL/trailing-stop/time-stop monitor; fails position with status='error' on missing signal row (no silent default-to-bullish); TRAIL_ACTIVATE + TRAIL_UPDATE for swing after TP2, SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard
+│   ├── process_approved.py          ← Phase 5B+5D: Pre-flight checks — PDT counter, drawdown halts (missing equity snapshot = FAIL, not WARN), risk_mode → position sizing
 │   ├── snapshot_equity.py           ← Phase 5B: Alpaca equity snapshot for drawdown denominator
 └── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
@@ -400,12 +400,12 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [x] Pre-flight checks (`process_approved.py`) — Laws, PDT (projected, business-day-aware), drawdown halts (period-start denominator + unrealized via Alpaca equity)
 - [x] Telegram alert dispatch (`alert_telegram.py` + `alert_dispatch` n8n cron) — 4-button approval keyboard (Approve / Conservative / Aggressive / Deny)
 - [x] Telegram callback listener (`telegram_callback_listener.py`) — long-poll daemon, writes `risk_mode`
-- [x] Alpaca paper execution (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing
-- [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, per-row commit, partial UNIQUE indexes on `alpaca_order_id` / `position_id`
-- [x] Exit monitor (`exit_monitor.py`) — stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry; `seen_ids` livelock guard; `risk_mode`-aware time-stop (aggressive = day-trade flattening); **trailing stop after TP2 for swing** (TRAIL_ACTIVATE + TRAIL_UPDATE actions)
+- [x] Alpaca paper execution (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing; sets `executed_at=NOW()` before Alpaca submit to prevent orphan rows
+- [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, per-row commit, partial UNIQUE indexes on `alpaca_order_id` / `position_id`; CANCEL branch writes `position` with `status='cancelled'` + partial-fill qty; `recover_orphan_executing()` catches both NULL `alpaca_order_id` and NULL `executed_at`
+- [x] Exit monitor (`exit_monitor.py`) — stop / premium / TP2 / TP1 partial / time-stop (12:45 PDT) / DTE expiry; fails position with `status='error'` on missing signal row (no silent default to 'bullish'); `seen_ids` livelock guard; `risk_mode`-aware time-stop (aggressive = day-trade flattening); **trailing stop after TP2 for swing** (TRAIL_ACTIVATE + TRAIL_UPDATE actions)
 - [x] TP1 50% partial close — submit, reconcile, reduce position quantity
-- [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`
-- [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator
+- [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`; `FOR UPDATE OF p SKIP LOCKED` + one-row-at-a-time fetch (concurrency safe); `recover_orphan_sells()` scans Alpaca for orphan SELLs; `partial_close_sell()` for partial fills
+- [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator; missing snapshot = FAIL in `process_approved.py` (not WARN)
 - [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique, 027 positions alpaca_order_id, 028 error_notified, 029 position trail_stop_price
 - [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
 
@@ -428,6 +428,15 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 #### PR #16 — Phase 5C: Orphan Recovery + Trailing Stop
 - **Orphan executing recovery** — `recover_orphan_executing()` in `reconcile_orders.py` flips `status='executing'` AND `alpaca_order_id IS NULL` AND `executed_at < NOW() - 5 min` to `status='error'`; runs at top of every `reconcile_orders` cron tick before normal fetch; `notify_errors` surfaces failure on next `alert_dispatch`
 - **Trailing stop after TP2 for swing** — `exit_monitor.py` now activates a trailing stop instead of full-closing at TP2 for swing positions; new actions `TRAIL_ACTIVATE` (initial trail = underlying ∓ 2×ATR) + `TRAIL_UPDATE` (monotonically raise/lower); migration 029 adds `trading.positions.trail_stop_price` (NULL ⇒ trail not active); trail breach fires `ACTION_FULL_CLOSE` with `reason='trail_stop'`; day/long_term modes still full-close at TP2
+
+#### PR #17 — Pass-4 Audit: 7 Critical Money-Loss/State-Loss Fixes
+- **C1 — Orphan executing rows rotted forever** — `execute_trade.py` now sets `executed_at=NOW()` before Alpaca submit (was NULL until fill, making reaper unable to find them); `recover_orphan_executing()` in `reconcile_orders.py` now catches both `alpaca_order_id IS NULL` and `executed_at IS NULL` cases
+- **C2 — Partial-then-cancel BUYs silently lost** — `reconcile_orders.py` had no CANCEL handling path; partially filled then cancelled BUYs left no position row, so `exit_monitor` never closed them; fixed with CANCEL branch that writes a `position` with `status='cancelled'` and any partial-fill quantity
+- **C3 — `decide_exit` defaulted to 'bullish' on missing signal** — LEFT JOIN + COALESCE meant a missing signal row produced a default 'bullish' stance, inverting bearish exit logic; fixed by failing the position with `status='error'` when no signal row is found
+- **C4 — `reconcile_exits` double-decremented quantity / double-counted P&L** — no row locks let concurrent crons process the same SELL fill twice; fixed with `FOR UPDATE OF p SKIP LOCKED` + one-row-at-a-time fetch + per-row commit
+- **C5 — Orphan SELL orders had no recovery** — SIGKILL mid-reconcile left a live SELL at Alpaca but DB stuck open; added `recover_orphan_sells()` in `reconcile_exits.py` that scans Alpaca for SELL orders with no matching DB position and either marks position closed or logs for manual review
+- **C6 — Drawdown halt bypassed on missing equity snapshot** — missing snapshot logged WARN (not FAIL), allowing 10/20/30% thresholds to be silently bypassed; fixed: missing snapshot = FAIL in `process_approved.py`
+- **C7 — `notify_errors` batch-commit rolled back on Telegram outage** — exception mid-loop rolled back all progress, re-notifying already-surfaced errors on retry; fixed with per-row commit in `alert_telegram.py`
 
 ### Phase 5C: Backlog (deferred)
 - [ ] ORB breakout detector (`detect_orb.py`) — opening range + volume + VWAP
