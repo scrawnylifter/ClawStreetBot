@@ -33,18 +33,20 @@ MAX_SPREAD_PCT_DECIMAL = Decimal("0.15")
 # and the probability of continuation has decayed). Setup scanner signals
 # are broader but still involve live option quotes that go stale.
 #
-# Strategy-specific windows (minutes). Default is 120 min for strategies
-# not listed here. Used by:
+# Strategy-specific windows (minutes). Options prices move fast —
+# 15 min is the hard cap. Only swing-style daily signals get longer.
+# Used by:
 #   - alert_telegram.py: expire_stale_new() per-strategy TTL
 #   - telegram_callback_listener.py: reject stale approvals
+#   - process_approved.py: preflight gate #0
 #   - detect_orb.py: skip generation outside the ORB session window
 SIGNAL_TTL_MINUTES: dict[str, int] = {
-    "orb": 60,                  # ORB is opening-range only; stale after ~1h
-    "ema_crossover_15m": 60,   # 15m timing signal; stale within an hour
-    "ema_crossover": 240,      # Daily EMA cross has more staying power
-    "setup_scanner": 120,      # 8-gate composite; 2h is reasonable
-    "liquidity_sweep": 90,     # 5m sweep setup; decay faster than daily
-    "intraday_signal": 30,     # 5-min re-score; very time-sensitive
+    "orb": 15,                  # Opening range — seconds count at the bell
+    "ema_crossover_15m": 15,   # 15m cross — tight window
+    "ema_crossover": 60,       # Daily EMA cross — swing trade, more room
+    "setup_scanner": 15,       # 8-gate composite with live option quotes
+    "liquidity_sweep": 15,     # 5m sweep — momentum decays fast
+    "intraday_signal": 15,     # 5-min re-score — very time-sensitive
 }
 
-DEFAULT_SIGNAL_TTL_MINUTES = 120  # fallback for strategies not in the dict
+DEFAULT_SIGNAL_TTL_MINUTES = 15  # fallback for strategies not in the dict
