@@ -84,9 +84,12 @@ PDT_MAX_NORMAL = 2   # normal allowance (3rd = emergency only)
 PDT_MAX_TOTAL = 3   # 4th = PDT violation
 
 # Drawdown halt thresholds (% of equity)
-DRAWDOWN_DAILY_PCT   = Decimal("0.10")   # 10% daily → halt
-DRAWDOWN_WEEKLY_PCT  = Decimal("0.20")   # 20% weekly → halt
-DRAWDOWN_MONTHLY_PCT = Decimal("0.30")   # 30% monthly → halt
+# Options-trading volatility is wide enough that the old 10/20/30 caps
+# halted on every normal swing; thresholds widened to fit premium-based
+# stops (50% per contract) and paper-account experimentation.
+DRAWDOWN_DAILY_PCT   = Decimal("0.30")   # 30% daily → halt
+DRAWDOWN_WEEKLY_PCT  = Decimal("0.40")   # 40% weekly → halt
+DRAWDOWN_MONTHLY_PCT = Decimal("0.50")   # 50% monthly → halt
 
 # Default paper-account equity if we can't (or are told not to) query Alpaca.
 DEFAULT_EQUITY = Decimal("100000")
@@ -373,41 +376,36 @@ def count_day_trades(
 
 
 def calc_drawdown(conn, current_equity: Decimal) -> dict[str, Decimal | None]:
-    """Drawdown over rolling daily / weekly / monthly windows.
+    """Drawdown vs the most-recent equity snapshot.
 
     Returns fractions: positive = profit, negative = loss. Computed as
-        (current_equity - start_equity) / start_equity
-    where start_equity is read from market.equity_snapshots at the start of
-    the relevant period:
-        daily   → most recent snapshot before today
-        weekly  → most recent snapshot before this week (Mon-start)
-        monthly → most recent snapshot before this month (1st)
+        (current_equity - last_snapshot) / last_snapshot
+
+    The denominator is the single most-recent row in
+    market.equity_snapshots — not the period boundary, not the account
+    origin. The paper account started at $100K but that's irrelevant once
+    real P&L has accumulated; the user wants the halt to fire on a sharp
+    move *from the latest known baseline*, not from where the account was
+    created. All three periods (daily/weekly/monthly) compare against the
+    same most-recent snapshot; the three thresholds are layered safety
+    caps of increasing looseness rather than rolling-window measurements.
 
     current_equity is the live Alpaca paper account equity, which already
-    reflects unrealized P&L on open positions — so both realized and
-    unrealized movement over the window are captured without separately
-    summing positions.
+    reflects unrealized P&L on open positions.
 
-    Returns None for any period with no snapshot yet. Preflight surfaces a
-    WARN on None rather than mistakenly clearing the halt.
+    Returns None when no snapshot exists yet.
     """
     if current_equity is None or current_equity <= 0:
         return {"daily": None, "weekly": None, "monthly": None}
 
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT
-              (SELECT equity FROM market.equity_snapshots
-                WHERE snapshot_date < CURRENT_DATE
-                ORDER BY snapshot_date DESC LIMIT 1) AS daily_start,
-              (SELECT equity FROM market.equity_snapshots
-                WHERE snapshot_date < date_trunc('week', CURRENT_DATE)::date
-                ORDER BY snapshot_date DESC LIMIT 1) AS weekly_start,
-              (SELECT equity FROM market.equity_snapshots
-                WHERE snapshot_date < date_trunc('month', CURRENT_DATE)::date
-                ORDER BY snapshot_date DESC LIMIT 1) AS monthly_start
+            SELECT equity FROM market.equity_snapshots
+            ORDER BY snapshot_date DESC LIMIT 1
         """)
         row = cur.fetchone()
+        last = row[0] if row else None
+        row = (last, last, last)
 
     def delta(raw) -> Decimal | None:
         if raw is None:
