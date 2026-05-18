@@ -42,6 +42,7 @@ import psycopg2.extras
 # env loading, mode mapping, sizing, preflight, and the human-readable plan.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import process_approved as pa  # noqa: E402
+from alert_telegram import send_telegram_message  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -399,11 +400,107 @@ def hard_fail_reason(signal: dict, sizing: dict, checks: list[tuple[str, str]]) 
 
 
 # ---------------------------------------------------------------------------
+# Telegram confirmation notifications
+# ---------------------------------------------------------------------------
+
+def notify_execution(result: dict, signal: dict) -> None:
+    """Send a Telegram confirmation after order submission/error/skip.
+
+    Fires for every execution attempt so the user sees what happened
+    without checking Alpaca or the DB. Best-effort: failures to send
+    are logged but never block the execution loop.
+    """
+    try:
+        cfg = pa.load_env("telegram")
+        token = cfg.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = cfg.get("TELEGRAM_CHAT_ID", "")
+        if not token or not chat_id:
+            log.warning("notify_execution: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — skipping notification")
+            return
+
+        status = result.get("status", "unknown")
+        sym = signal.get("symbol") or "—"
+        direction = signal.get("direction") or "—"
+        direction_emoji = {"bullish": "📈", "bearish": "📉"}.get(direction, "📊")
+        strat = signal.get("strategy") or "—"
+        option_sym = signal.get("option_symbol") or ""
+
+        if status == "submitted":
+            # Build the confirmation message with real execution details
+            lines = [
+                f"✅ <b>ORDER SUBMITTED</b>",
+                f"{direction_emoji} {sym} {direction}",
+            ]
+            if option_sym:
+                lines.append(f"📋 Contract: {option_sym}")
+            qty = result.get("qty", "?")
+            lines.append(f"📦 Qty: {qty}")
+
+            submitted_price = result.get("submitted_price")
+            if submitted_price is not None:
+                cost = Decimal(str(submitted_price)) * Decimal(str(qty)) if isinstance(qty, (int, float)) and qty else None
+                lines.append(f"💰 Limit: ${submitted_price}")
+                if cost:
+                    lines.append(f"💵 Cost: ${cost:,.2f}")
+
+            order_id = result.get("order_id", "?")
+            lines.append(f"🔑 Order: {order_id[:8]}…")
+            lines.append(f"📋 Strategy: {strat}")
+
+            # Risk/reward context from the signal
+            risk_reward = signal.get("risk_reward")
+            stop = signal.get("stop_price")
+            tp1 = signal.get("tp1_price")
+            tp2 = signal.get("tp2_price")
+            if risk_reward:
+                lines.append(f"📊 R:R {risk_reward}:1")
+            if stop:
+                lines.append(f"🛑 Stop: ${stop}")
+            if tp1:
+                lines.append(f"🎯 TP1: ${tp1}")
+
+            text = "\n".join(lines)
+
+        elif status == "error":
+            lines = [
+                f"❌ <b>ORDER FAILED</b>",
+                f"{direction_emoji} {sym} {direction}",
+                f"⚠️ {result.get('message', 'Unknown error')}",
+            ]
+            text = "\n".join(lines)
+
+        elif status == "skipped":
+            lines = [
+                f"⏭️ <b>ORDER SKIPPED</b>",
+                f"{direction_emoji} {sym} {direction}",
+                f"⚠️ {result.get('reason', 'Unknown reason')}",
+            ]
+            text = "\n".join(lines)
+
+        else:
+            lines = [
+                f"ℹ️ <b>ORDER {status.upper()}</b>",
+                f"{direction_emoji} {sym} {direction}",
+            ]
+            text = "\n".join(lines)
+
+        send_telegram_message(token, chat_id, text, allowed_chat_id=chat_id)
+
+    except Exception:
+        # Never let a notification failure block the execution path
+        log.exception("notify_execution: failed to send Telegram notification — continuing")
+
+
+# ---------------------------------------------------------------------------
 # Main per-row flow
 # ---------------------------------------------------------------------------
 
-def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> str:
-    """With --confirm: actually submit. Returns a human-readable status line."""
+def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> dict:
+    """With --confirm: actually submit. Returns a result dict with keys:
+       status: 'submitted' | 'skipped' | 'error'
+       message: human-readable status line
+       plus status-specific keys like order_id, submitted_price, qty, etc.
+    """
     sid = signal["id"]
     risk_mode = signal.get("risk_mode") or "standard"
     mode = pa.infer_trade_mode(signal.get("strategy"), signal.get("timeframe"),
@@ -421,7 +518,9 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
         entry = pa._to_decimal(signal.get("trigger_price"))
         stop  = pa._to_decimal(signal.get("stop_price"))
         if entry is None or stop is None:
-            return f"#{sid} SKIP — no trigger_price/stop_price for stock fallback"
+            msg = f"no trigger_price/stop_price for stock fallback"
+            notify_execution({"status": "skipped", "reason": msg}, signal)
+            return {"status": "skipped", "message": f"#{sid} SKIP — {msg}", "reason": msg}
         sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"],
                                         risk_mode=risk_mode)
 
@@ -431,12 +530,15 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
         log.warning("#%s SKIP — %s", sid, blocker)
         if verbose:
             print(pa.render_plan(signal, mode, equity, sizing, checks, verbose=True))
-        return f"#{sid} {signal['symbol']} SKIP — {blocker}"
+        notify_execution({"status": "skipped", "reason": blocker}, signal)
+        return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {blocker}", "reason": blocker}
 
     # Race-safe transition to 'executing'.
     locked = lock_and_mark_executing(conn, sid)
     if locked is None:
-        return f"#{sid} {signal['symbol']} SKIP — row no longer approved (race lost)"
+        msg = "row no longer approved (race lost)"
+        notify_execution({"status": "skipped", "reason": msg}, signal)
+        return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {msg}", "reason": msg}
 
     # Submit.
     try:
@@ -444,7 +546,9 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
     except Exception as e:
         log.exception("Alpaca submission failed for signal #%s", sid)
         record_error(conn, sid, f"{type(e).__name__}: {e}")
-        return f"#{sid} {signal['symbol']} ERROR — {type(e).__name__}: {e}"
+        err_msg = f"{type(e).__name__}: {e}"
+        notify_execution({"status": "error", "message": err_msg}, signal)
+        return {"status": "error", "message": f"#{sid} {signal['symbol']} ERROR — {err_msg}"}
 
     record_execution(conn, sid, result["order_id"], result["submitted_price"])
     price_str = (f" @ ${result['submitted_price']}"
@@ -454,9 +558,19 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> s
         sid, locked["symbol"], result["order_type"], result["symbol"],
         sizing["qty"], result["tif"], price_str, result["order_id"],
     )
-    return (f"#{sid} {locked['symbol']} SUBMITTED — "
-            f"{result['order_type']} {result['symbol']} x{sizing['qty']}{price_str} "
-            f"→ order_id={result['order_id']}")
+    notify_result = {
+        "status": "submitted",
+        "order_id": result["order_id"],
+        "submitted_price": float(result["submitted_price"]) if result["submitted_price"] else None,
+        "order_type": result["order_type"],
+        "qty": sizing["qty"],
+        "symbol": result["symbol"],
+    }
+    notify_execution(notify_result, signal)
+    msg = (f"#{sid} {locked['symbol']} SUBMITTED — "
+           f"{result['order_type']} {result['symbol']} x{sizing['qty']}{price_str} "
+           f"→ order_id={result['order_id']}")
+    return {"status": "submitted", "message": msg, **notify_result}
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +632,7 @@ def main() -> int:
     # --confirm path.
     log.info("LIVE PAPER EXECUTION — %d row(s).  Equity: $%s", len(rows), f"{equity:,.2f}")
     client = _alpaca_client()
-    results: list[str] = []
+    results: list[dict] = []
     try:
         for r in rows:
             try:
@@ -530,16 +644,18 @@ def main() -> int:
                     record_error(conn, r["id"], "internal error — see logs")
                 except Exception:
                     log.exception("Could not even record_error for #%s", r["id"])
-                results.append(f"#{r['id']} {r['symbol']} ERROR — internal")
+                err_dict = {"status": "error", "message": f"#{r['id']} {r['symbol']} ERROR — internal"}
+                notify_execution(err_dict, r)
+                results.append(err_dict)
     finally:
         conn.close()
 
     print()
-    for line in results:
-        print(line)
-    submitted = sum(1 for line in results if "SUBMITTED" in line)
-    errored   = sum(1 for line in results if "ERROR" in line)
-    skipped   = sum(1 for line in results if "SKIP" in line)
+    for r in results:
+        print(r.get("message", str(r)))
+    submitted = sum(1 for r in results if r.get("status") == "submitted")
+    errored   = sum(1 for r in results if r.get("status") == "error")
+    skipped   = sum(1 for r in results if r.get("status") == "skipped")
     print(f"\nDONE — submitted={submitted}, error={errored}, skipped={skipped}")
     return 0
 

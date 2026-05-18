@@ -383,10 +383,28 @@ def handle_callback(
     # UI: remove buttons + reply with verdict.
     if row["telegram_msg_id"]:
         clear_message_keyboard(token, chat_id, row["telegram_msg_id"])
-    reply_text = (
-        f"{verdict_emoji} <b>{verdict_label}</b> "
-        f"by @{user_name} at {now.strftime('%H:%M:%S UTC')}"
-    )
+
+    # Build a rich reply with trade context.
+    direction_emoji = {"bullish": "📈", "bearish": "📉"}.get(row.get("direction") or "", "📊")
+    strat = row.get("strategy") or "—"
+    sym = row.get("symbol") or "—"
+    direction = row.get("direction") or "—"
+
+    if action == "approve":
+        reply_text = (
+            f"{verdict_emoji} <b>{verdict_label}</b>\n"
+            f"{direction_emoji} {sym} {direction}\n"
+            f"📋 Strategy: {strat}\n"
+            f"⏱ Queued for execution\n"
+            f"👤 by @{user_name} at {now.strftime('%H:%M:%S UTC')}"
+        )
+    else:
+        reply_text = (
+            f"{verdict_emoji} <b>{verdict_label}</b>\n"
+            f"{direction_emoji} {sym} {direction}\n"
+            f"👤 by @{user_name} at {now.strftime('%H:%M:%S UTC')}"
+        )
+
     if row["telegram_msg_id"]:
         send_reply(token, chat_id, row["telegram_msg_id"], reply_text)
     answer_callback(token, cb_id, f"{verdict_emoji} {verdict_label}")
