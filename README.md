@@ -95,7 +95,10 @@ ClawStreetBot/
 │   ├── 023_risk_mode.sql             # risk_mode column on signal_alerts
 │   ├── 024_position_tp1_partial.sql  # TP1 50% partial close columns
 │   ├── 025_equity_snapshots.sql      # Daily equity snapshots (drawdown denominator)
-│   └── 026_signal_alerts_unique.sql  # UNIQUE on alpaca_order_id, position_id (prevent double-fill)
+│   ├── 026_signal_alerts_unique.sql  # UNIQUE on alpaca_order_id, position_id (prevent double-fill)
+│   ├── 027_positions_alpaca_order_id.sql # alpaca_order_id on positions + UNIQUE partial index
+│   ├── 028_error_notified.sql         # error_notified_at on signal_alerts (Telegram edit tracking)
+│   └── 029_position_trail_stop.sql    # trail_stop_price on positions (swing trailing stop after TP2)
 ├── docker/
 │   ├── worker/Dockerfile       # Python 3.11 worker image (n8n execs into this)
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
@@ -126,7 +129,7 @@ ClawStreetBot/
 │       ├── trend_daily.json
 │       └── regime_weekly.json
 ├── scripts/                    # Python scripts
-│   ├── alert_telegram.py         # Telegram alert sender (shows bid/ask/mid) ★
+│   ├── alert_telegram.py         # Telegram alert sender + keyboard remover + error surfacer + expirer ★
 │   ├── backfill_historical_iv.py  # Historical IV backfill
 │   ├── backfill_runner.py        # n8n wrapper: queries pending symbols, runs backfill_symbol.py
 │   ├── backfill_signals.py       # Historical signal backfill across 501 days
@@ -163,9 +166,9 @@ ClawStreetBot/
 │   ├── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
 │   ├── snapshot_equity.py            # Daily Alpaca equity snapshot (drawdown denominator)
 │   ├── execute_trade.py              # Alpaca paper order submission (approved → executing)
-│   ├── exit_monitor.py              # TP/SL/time-stop decision tree
-│   ├── reconcile_orders.py          # BUY fill → trading.positions
-│   ├── reconcile_exits.py          # SELL fill → closed + realized_pnl + status='exited'
+│   ├── exit_monitor.py              # TP/SL/trail-stop/time-stop decision tree (swing trails after TP2)
+│   ├── reconcile_orders.py          # BUY fill → trading.positions; orphan executing recovery
+│   ├── reconcile_exits.py          # SELL/TP1 partial fills → close position + cumulative P&L + status='exited'
 │   ├── process_approved.py          # Drawdown halts + pre-flight checks before execution
 │   └── telegram_callback_listener.py # Telegram callback server for inline-approve/deny
 └── obsidian/vault/             # Knowledge base
@@ -280,7 +283,7 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `execute_trade` | Mon–Fri every 1min 6–13 | Approved → Alpaca paper submit (`status='executing'`) |
 | `reconcile_orders` | Mon–Fri every 1min 6–14 | BUY fill state → `trading.positions`, `status='filled'` |
 | `reconcile_exits` | Mon–Fri every 1min 6–14 | SELL / TP1-partial fills → close position + record P&L + `status='exited'` |
-| `exit_monitor` | Mon–Fri every 5min 6–13 | TP/SL/time-stop decision tree; submits closes with `client_order_id` |
+| `exit_monitor` | Mon–Fri every 5min 6–13 | TP/SL/trail-stop/time-stop decision tree; trail stop after TP2 for swing; submits closes with `client_order_id` |
 | `equity_snapshot_daily` | Mon–Fri 14:30 | Daily equity snapshot for drawdown halt denominator |
 | `trend_daily` | Mon–Fri 11:00 | Multi-timeframe trend detection + status |
 | `regime_weekly` | Sat 8:00 | Classify regime + optimize weights + compare |
@@ -369,12 +372,21 @@ Switch to `paper=False` for live trading with real money (requires SIP data subs
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta/theta budget per strategy
 
 ### Phase 5B — Exit Monitors & Alert Delivery
-- [ ] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
-- [ ] Alert formatting + Telegram delivery (Y/N approval flow)
-- [ ] Pre-flight checks — Laws, PDT, drawdown, greeks
-- [ ] Alpaca execution — bracket orders, tiered exits
-- [ ] Risk alerts — drawdown halt, PDT warning, position breach
-- [ ] DB migrations: alert_history, positions, pdt_status
+- [x] Exit monitor: price-based (TP1/TP2/stop) + invalidation + greeks deterioration
+- [x] Alert formatting + Telegram delivery (Y/N approval flow)
+- [x] Pre-flight checks — Laws, PDT, drawdown, greeks
+- [x] Alpaca execution — bracket orders, tiered exits
+- [x] Risk alerts — drawdown halt, PDT warning, position breach
+- [x] DB migrations: alert_history, positions, pdt_status
+- [x] Lifecycle hardening — expirer, error surfacing, partial fills, position→order link (#15)
+
+### Phase 5C — Trailing Stop & Orphan Recovery
+- [x] Orphan executing recovery — reap `status='executing'` rows with no `alpaca_order_id` after 5-min grace (#16)
+- [x] Position→order direct link — `alpaca_order_id` on `trading.positions` with UNIQUE partial index (migration 027)
+- [x] Error surfacing — `error_notified_at` on `signal_alerts`; `alert_telegram` edits original message with failure (#15, migration 028)
+- [x] Trailing stop after TP2 — swing-mode positions trail instead of full-close on TP2 hit (migration 029, `exit_monitor.py`)
+- [x] Partial fill handling — `reconcile_exits` accumulates P&L across partial SELL fills (#15)
+- [x] Alert keyboard expiry — `clear_message_keyboard` on stale alert rows; `editMessageText` for error surfacing (#15)
 
 ### Remaining Items
 - [ ] Position sizing calculator (backtest has it, no standalone tool)

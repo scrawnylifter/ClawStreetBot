@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-20
+updated: 2026-05-17
 tags: [home, mOC]
 ---
 
@@ -42,7 +42,7 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [[Polygon.io API]] — Fundamentals, flat-file backfill (secondary data source)
 - [[Greeks Strategy]] — IV regime, delta entry/exit, theta budgets, vanna risk
 - [[Database Architecture]] — Postgres schemas, Redis usage
-- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 22 migrations; Docker socket isolation
+- [[n8n Scheduler]] — 22 active workflows, 42 scripts, 29 migrations; Docker socket isolation
 - [[Telegram Alert System]] — Strategy-specific trade alerts with entry + exit plans (EMA, ORB, Dip)
 - [[Order Execution Engine]] — Alpaca paper trading with Laws compliance
 - [[Monitoring & Dashboards]] — Portfolio, signals, pipeline health, risk visibility
@@ -119,8 +119,8 @@ Rules constrain *whether* you trade. Criteria trigger *when* to look. The checkl
 - [ ] **Buy the 5% Dip detector** (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche scale-in
 - [ ] **Per-risk-mode option selection** — scanner currently binds 0.50-0.70 delta at scan time, before the user picks Conservative/Aggressive (audit M1)
 - [ ] **Bracket orders for stock entries** — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)
-- [ ] **Trailing stop after TP2** for swing mode — currently TP2 full-closes
+- [x] **Trailing stop after TP2** for swing mode — `029_position_trail_stop.sql` adds `trail_stop_price` column; exit_monitor raises monotonically after TP2 fires (`exit_reason=trail_stop`)
 - [ ] **Risk alerts** (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
 - [ ] **Aggressive button UX** — silently promotes a swing setup to day-mode for PDT purposes; surface in Telegram preview before approval
 - [ ] **status=expired cron** — schedule a periodic job to flip `signal_alerts` rows stuck in `pending`/`approved` past EOD to `status='expired'` (prevents stale execution)
-- [ ] **Orphan executing rows** — add a reconciler or guard in `execute_trade.py` / `reconcile_orders.py` that detects and recovers `signal_alerts` stuck in `executing` status (e.g., no matching `alpaca_order_id` after a timeout), resetting to `approved` or marking `expired`
+- [x] **Orphan executing rows** — `028_error_notified.sql` adds `error_notified_at` column for error notification tracking; reconciler in `execute_trade.py` / `reconcile_orders.py` detects `executing` rows with no matching order and recovers them
