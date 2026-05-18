@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import logging
+from decimal import Decimal
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -321,6 +322,97 @@ def notify_errors(conn, token: str | None, chat_id: str | None, limit: int = 20)
 
 
 # ---------------------------------------------------------------------------
+# Exit-fill notifications — fire-and-forget from reconcile_exits
+# ---------------------------------------------------------------------------
+
+# Exit reasons emit different lead emojis so the chat is glance-readable.
+# Wins (TP hits, profitable trails) → 💰; losses / risk-management exits → ⛔;
+# neutral mechanics (time stop, expiry, partial fills) → 📤.
+_EXIT_EMOJI = {
+    "stop":          "⛔",
+    "premium_stop":  "⛔",
+    "trail_stop":    "💰",
+    "tp2":           "💰",
+    "tp1_partial":   "📤",   # 50% close, position still open
+    "time_stop":     "📤",
+    "expiry":        "📤",
+}
+
+
+def format_exit_notification(
+    *, symbol: str, strategy: str, direction: str, reason: str,
+    entry_price: Decimal | float, exit_price: Decimal | float,
+    qty: Decimal | float, realized_pnl: Decimal | float,
+    is_option: bool, is_partial: bool = False, residual_qty: Decimal | float | None = None,
+) -> str:
+    """Build the Telegram message body for a position exit (full close or
+    partial). Pure formatter — no I/O — so the caller controls when to
+    actually send (must be AFTER the DB commit, so we never notify on a
+    rolled-back close)."""
+    from decimal import Decimal as D
+    entry = D(str(entry_price)) if entry_price is not None else D("0")
+    exit_ = D(str(exit_price)) if exit_price is not None else D("0")
+    qty_d = D(str(qty)) if qty is not None else D("0")
+    pnl = D(str(realized_pnl)) if realized_pnl is not None else D("0")
+
+    emoji = _EXIT_EMOJI.get(reason, "📤")
+    sign = "+" if pnl >= 0 else "-"
+    pnl_str = f"{sign}${abs(pnl):,.2f}"
+
+    # % move on the underlying / option premium for the closed slice.
+    # For shorts (rare in this bot) we'd want (entry - exit) / entry — but
+    # the realized_pnl already has the sign baked in by compute_realized_pnl,
+    # so we just use that for the percent label on the close direction.
+    if entry > 0:
+        pct = (exit_ - entry) / entry * D("100")
+        if direction != "bullish":
+            pct = -pct
+        pct_str = f"{'+' if pct >= 0 else ''}{pct:.1f}%"
+    else:
+        pct_str = "—"
+
+    if is_partial and reason == "tp1_partial":
+        verb = "💰 TP1 PARTIAL"
+        emoji = "📤"
+    elif is_partial:
+        verb = "⚠️ PARTIAL CLOSE"
+    elif reason == "stop" or reason == "premium_stop":
+        verb = f"{emoji} EXITED (loss)"
+    else:
+        verb = f"{emoji} EXITED"
+
+    lines = [
+        f"{verb} — <b>{symbol}</b> {direction}",
+        f"<i>via {strategy} · reason: {reason}</i>",
+        f"",
+        f"Entry: ${entry:,.2f} → Exit: ${exit_:,.2f} ({pct_str} on "
+        f"{'option premium' if is_option else 'underlying'})",
+        f"Quantity: {qty_d}{' contracts' if is_option else ' shares'}",
+        f"Realized P&L: <b>{pnl_str}</b>",
+    ]
+    if is_partial and residual_qty is not None:
+        lines.append(f"Residual still open: {D(str(residual_qty))}"
+                     f"{' contracts' if is_option else ' shares'}")
+    return "\n".join(lines)
+
+
+def send_exit_notification(text: str) -> None:
+    """Fire-and-forget notification. Loads creds from .env.telegram and
+    sends. Any failure is logged but NEVER raises — reconcile_exits must
+    not roll back a close because Telegram is down."""
+    try:
+        cfg = get_telegram_config()
+        token = cfg.get("TELEGRAM_BOT_TOKEN")
+        chat_id = cfg.get("TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
+            log.warning("send_exit_notification: missing TELEGRAM_BOT_TOKEN/CHAT_ID")
+            return
+        send_telegram_message(token, chat_id, text, allowed_chat_id=chat_id)
+    except Exception:
+        log.exception("send_exit_notification failed — close already committed")
+
+
+# ---------------------------------------------------------------------------
 # Alert formatters (per strategy)
 # ---------------------------------------------------------------------------
 
@@ -351,6 +443,7 @@ def format_15m_crossover_alert(signal: dict) -> str:
     lines = [
         f"{emoji} <b>{symbol} — {action} Signal (15m)</b>",
         f"{'─' * 30}",
+        f"Strategy: EMA 9/21 Crossover (intraday) | Timeframe: {signal.get('timeframe', '15m')}",
     ]
 
     # --- Trade Plan ---
@@ -451,6 +544,7 @@ def format_ema_crossover_alert(signal: dict) -> str:
     lines = [
         f"{emoji} <b>{symbol} — {action} Signal</b>",
         f"{'─' * 30}",
+        f"Strategy: EMA 9/21 Crossover (daily) | Timeframe: {signal.get('timeframe', '1d')}",
     ]
 
     # --- Trade Plan (the most important numbers upfront) ---
@@ -553,6 +647,7 @@ def format_setup_scanner_alert(signal: dict) -> str:
     lines = [
         f"{emoji} <b>{action} Signal: {symbol}</b>",
         f"{'─' * 30}",
+        f"Strategy: Setup Scanner (8-gate) | Timeframe: {signal.get('timeframe', '1d')}",
     ]
 
     # --- Composite + Regime ---

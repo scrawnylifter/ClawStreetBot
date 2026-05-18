@@ -56,6 +56,41 @@ import psycopg2.extras
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import process_approved as pa  # noqa: E402
 import reconcile_orders as rc  # reuse _alpaca_client + status partitions  # noqa: E402
+import alert_telegram as at  # exit-fill push notifications  # noqa: E402
+
+
+def _notify_exit(
+    row: dict, reason: str, exit_price: Decimal, qty: Decimal,
+    realized_pnl: Decimal, is_partial: bool, residual_qty: Decimal | None,
+) -> None:
+    """Build + fire the exit-fill Telegram notification. Wrapped here so the
+    three close call-sites stay readable. Never raises — at.send_exit_notification
+    swallows all I/O failures.
+
+    Called AFTER conn.commit() at each close site so we never notify on a
+    rolled-back DB write. Row data (symbol, strategy, direction) is pulled
+    from the SELECT joins, NOT re-queried — keeps this a pure formatter
+    call."""
+    try:
+        is_option = bool(row.get("option_symbol"))
+        text = at.format_exit_notification(
+            symbol=row.get("symbol") or "?",
+            strategy=row.get("strategy") or "unknown",
+            direction=row.get("direction") or "?",
+            reason=reason,
+            entry_price=row["entry_price"],
+            exit_price=exit_price,
+            qty=qty,
+            realized_pnl=realized_pnl,
+            is_option=is_option,
+            is_partial=is_partial,
+            residual_qty=residual_qty,
+        )
+        at.send_exit_notification(text)
+    except Exception:
+        log.exception("_notify_exit failed — close already committed, "
+                      "operator can grep DB by position_id=%s",
+                      row.get("position_id"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -174,7 +209,7 @@ _PENDING_EXIT_SELECT = """
     SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
            p.entry_price, p.quantity, p.sell_order_id, p.exit_submitted_at,
            p.exit_reason, p.opened_at,
-           s.option_symbol
+           s.symbol, s.strategy, s.direction, s.option_symbol
       FROM trading.positions p
       LEFT JOIN market.signal_alerts s ON s.position_id = p.id
      WHERE p.status = 'open'
@@ -303,7 +338,7 @@ _PENDING_TP1_SELECT = """
     SELECT p.id AS position_id, p.asset_id, p.direction AS pos_direction,
            p.entry_price, p.quantity, p.tp1_sell_order_id,
            p.tp1_hit_at, p.exit_reason, p.opened_at,
-           s.option_symbol
+           s.symbol, s.strategy, s.direction, s.option_symbol
       FROM trading.positions p
       LEFT JOIN market.signal_alerts s ON s.position_id = p.id
      WHERE p.status = 'open'
@@ -464,6 +499,12 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
                     log.exception("position #%s DB error closing", pid)
                     return (f"position #{pid} WARN — DB error during close: "
                             f"{type(e).__name__}: {e}")
+                # Notify AFTER commit — never on a rolled-back close.
+                _notify_exit(
+                    row, reason=row.get("exit_reason") or status,
+                    exit_price=filled_avg, qty=filled_qty,
+                    realized_pnl=realized, is_partial=False, residual_qty=None,
+                )
                 sign = "+" if realized >= 0 else ""
                 log.info("position #%s CLOSED — fully filled before %s exit=%s "
                          "qty=%s realized_pnl=%s%s",
@@ -485,6 +526,11 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
                 log.exception("position #%s DB error on partial close", pid)
                 return (f"position #{pid} WARN — DB error during partial close: "
                         f"{type(e).__name__}: {e}")
+            _notify_exit(
+                row, reason=f"partial_before_{status}",
+                exit_price=filled_avg, qty=filled_qty,
+                realized_pnl=realized, is_partial=True, residual_qty=residual,
+            )
             sign = "+" if realized >= 0 else ""
             log.info("position #%s PARTIAL — %s after %s/%s @ %s realized=%s%s",
                      pid, status, filled_qty, pos_qty, filled_avg, sign, realized)
@@ -532,6 +578,11 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
             log.exception("position #%s DB error on partial close (filled)", pid)
             return (f"position #{pid} WARN — DB error during partial close: "
                     f"{type(e).__name__}: {e}")
+        _notify_exit(
+            row, reason="partial_filled_lt_qty",
+            exit_price=filled_avg, qty=filled_qty,
+            realized_pnl=realized, is_partial=True, residual_qty=residual,
+        )
         sign = "+" if realized >= 0 else ""
         log.warning("position #%s PARTIAL — alpaca filled but %s/%s @ %s",
                     pid, filled_qty, pos_qty, filled_avg)
@@ -553,6 +604,11 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
         return (f"position #{pid} WARN — DB error during close: "
                 f"{type(e).__name__}: {e}")
 
+    _notify_exit(
+        row, reason=row.get("exit_reason") or "exit",
+        exit_price=filled_avg, qty=filled_qty,
+        realized_pnl=realized, is_partial=False, residual_qty=None,
+    )
     sign = "+" if realized >= 0 else ""
     log.info("position #%s CLOSED — exit=%s qty=%s realized_pnl=%s%s",
              pid, filled_avg, filled_qty, sign, realized)
@@ -627,6 +683,7 @@ def reconcile_partial_one(conn, client, row: dict, dry_run: bool, verbose: bool)
                 f"entry={entry_price} exit={filled_avg} qty={filled_qty} "
                 f"tp1_realized_pnl={realized}")
 
+    pos_qty = rc._to_decimal(row.get("quantity")) or Decimal("0")
     try:
         mark_tp1_partial_filled(conn, pid, filled_qty, filled_avg, realized)
         conn.commit()
@@ -636,6 +693,12 @@ def reconcile_partial_one(conn, client, row: dict, dry_run: bool, verbose: bool)
         return (f"position #{pid} WARN — DB error during TP1 partial: "
                 f"{type(e).__name__}: {e}")
 
+    residual = pos_qty - filled_qty if pos_qty > 0 else None
+    _notify_exit(
+        row, reason="tp1_partial",
+        exit_price=filled_avg, qty=filled_qty,
+        realized_pnl=realized, is_partial=True, residual_qty=residual,
+    )
     sign = "+" if realized >= 0 else ""
     log.info("position #%s TP1 PARTIAL FILLED — exit=%s qty=%s tp1_pnl=%s%s",
              pid, filled_avg, filled_qty, sign, realized)
