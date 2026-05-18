@@ -373,6 +373,27 @@ def record_error(conn, signal_id: int, message: str) -> None:
     conn.commit()
 
 
+def record_skip(conn, signal_id: int, reason: str) -> None:
+    """Move an approved signal to 'skipped' so it won't be re-picked.
+
+    Without this, a signal that fails preflight (drawdown halt, stale,
+    etc.) stays status='approved' and gets processed again every cron
+    tick — generating duplicate Telegram notifications forever.
+    Skipped is terminal (like error) but semantically distinct: the
+    signal was validly approved but blocked by a hard gate.
+    """
+    msg = (reason or "")[:1000]
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE market.signal_alerts
+                  SET status = 'skipped',
+                      error_message = %s
+                WHERE id = %s""",
+            (msg, signal_id),
+        )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Hard-fail gates (preflight CHECK_FAIL + extras specific to live submission)
 # ---------------------------------------------------------------------------
@@ -528,6 +549,7 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
         stop  = pa._to_decimal(signal.get("stop_price"))
         if entry is None or stop is None:
             msg = f"no trigger_price/stop_price for stock fallback"
+            record_skip(conn, sid, msg)
             notify_execution({"status": "skipped", "reason": msg}, signal)
             return {"status": "skipped", "message": f"#{sid} SKIP — {msg}", "reason": msg}
         sizing = pa.size_stock_position(equity, mode, entry, stop, signal["direction"],
@@ -544,6 +566,7 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
         # flag it without sending a duplicate Telegram message here.
         reason = blocker
         is_drawdown = "Drawdown halt" in reason
+        record_skip(conn, sid, reason)
         notify_execution({"status": "skipped", "reason": reason}, signal, suppress=is_drawdown)
         return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {reason}", "reason": reason, "is_drawdown": is_drawdown}
 
@@ -551,6 +574,7 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
     locked = lock_and_mark_executing(conn, sid)
     if locked is None:
         msg = "row no longer approved (race lost)"
+        record_skip(conn, sid, msg)
         notify_execution({"status": "skipped", "reason": msg}, signal)
         return {"status": "skipped", "message": f"#{sid} {signal['symbol']} SKIP — {msg}", "reason": msg}
 
