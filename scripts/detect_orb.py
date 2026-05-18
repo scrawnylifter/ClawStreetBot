@@ -310,11 +310,14 @@ def detect_orb_signals(
         return signals
 
     # Only consider bars AFTER the ORB closes (i.e. 9:45 ET on). Iterate
-    # forward through the FULL session — the first close-beyond candle is
-    # the breakout signal; once detected, we break. 4-hour cooldown in
-    # save_signal handles dedup across cron ticks.
+    # forward through the FULL session — record the FIRST close-beyond
+    # candle in each direction. A symbol can produce up to 2 signals per
+    # day (1 bullish + 1 bearish) when price whipsaws through both ORB
+    # boundaries. 4-hour cooldown in save_signal handles dedup across
+    # cron ticks.
     orb_end_et = time(9, 45)
     today_et = datetime.now(ET).date()
+    seen_directions: set[str] = set()
 
     for i in range(len(bars_5m)):
         bar = bars_5m[i]
@@ -331,13 +334,13 @@ def detect_orb_signals(
             continue
 
         direction: str | None = None
-        if bar.c > orb_high:
+        if bar.c > orb_high and "bullish" not in seen_directions:
             direction = "bullish"
             entry = bar.c
             stop = entry - atr * RULES["stop_mult"]
             tp1  = entry + atr * RULES["tp1_mult"]
             tp2  = entry + atr * RULES["tp2_mult"]
-        elif bar.c < orb_low:
+        elif bar.c < orb_low and "bearish" not in seen_directions:
             direction = "bearish"
             entry = bar.c
             stop = entry + atr * RULES["stop_mult"]
@@ -382,9 +385,10 @@ def detect_orb_signals(
             "%s: %s ORB breakout — close $%.2f vs ORB(%.2f/%.2f) ATR $%.2f",
             symbol, direction.upper(), bar.c, orb_high, orb_low, atr,
         )
-        # One signal per symbol per cron tick — the 4h cooldown handles
-        # repeated breakouts across runs.
-        break
+        seen_directions.add(direction)
+        # Stop once we've recorded both directions for this symbol.
+        if len(seen_directions) == 2:
+            break
 
     return signals
 
