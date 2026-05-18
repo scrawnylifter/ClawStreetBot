@@ -127,6 +127,7 @@ def insert_position(
     quantity: Decimal,
     stop_loss: Decimal | None,
     take_profit: Decimal | None,
+    alpaca_order_id: str | None = None,
 ) -> int:
     """INSERT one row into trading.positions, return its id.
 
@@ -135,16 +136,23 @@ def insert_position(
     contract via signal_alerts.option_symbol (joined via position_id) and
     decide whether to flatten based on either the underlying or the option
     premium.
+
+    alpaca_order_id: the broker BUY order this fill came from. Stored
+    directly on the position so audit/recovery doesn't have to round-trip
+    through signal_alerts (migration 027). The UNIQUE partial index also
+    fails closed if a duplicate reconciliation bypasses the row lock.
     """
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO trading.positions
                   (asset_id, direction, entry_price, quantity,
-                   stop_loss, take_profit, status, opened_at)
-               VALUES (%s, %s, %s, %s, %s, %s, 'open', %s)
+                   stop_loss, take_profit, status, opened_at,
+                   alpaca_order_id)
+               VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, %s)
                RETURNING id""",
             (asset_id, direction, entry_price, quantity,
-             stop_loss, take_profit, datetime.now(timezone.utc)),
+             stop_loss, take_profit, datetime.now(timezone.utc),
+             alpaca_order_id),
         )
         return cur.fetchone()[0]
 
@@ -280,6 +288,7 @@ def reconcile_one(
             quantity=filled_qty,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            alpaca_order_id=order_id,
         )
         mark_filled(conn, sid, position_id)
         conn.commit()

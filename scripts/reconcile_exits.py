@@ -98,13 +98,20 @@ def mark_closed(
     """Close the position and flip the originating signal_alerts row to
     status='exited' (the documented terminal lifecycle state from migration
     020_alert_lifecycle). Both updates run in the caller's transaction —
-    the caller commits."""
+    the caller commits.
+
+    realized_pnl is ADDED to any previously-recorded P&L on this position
+    (a closing SELL that only partially filled before cancellation will
+    have already accumulated some P&L into realized_pnl via
+    partial_close_sell). For the common case where the closing SELL fills
+    fully on the first attempt, realized_pnl was NULL and COALESCE(...,0)+x
+    is identical to `= x`."""
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE trading.positions
                   SET status       = 'closed',
                       closed_at    = %s,
-                      realized_pnl = %s
+                      realized_pnl = COALESCE(realized_pnl, 0) + %s
                 WHERE id = %s""",
             (closed_at, realized_pnl, position_id),
         )
@@ -114,6 +121,32 @@ def mark_closed(
                 WHERE position_id = %s
                   AND status = 'filled'""",
             (position_id,),
+        )
+
+
+def partial_close_sell(
+    conn, position_id: int,
+    filled_qty: Decimal, realized_pnl: Decimal,
+) -> None:
+    """A closing SELL only partially filled (typically a cancel-with-partial
+    or, defensively, status='filled' with filled_qty < quantity). Record
+    realized P&L on the filled slice, decrement quantity, and wipe sell
+    stamps so exit_monitor retries the residual on the next pass.
+
+    Note this does NOT close the position — quantity is reduced and the row
+    remains status='open' so the monitor's WHERE p.status='open' still
+    matches. signal_alerts.status stays 'filled' (the position is still
+    partially live)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE trading.positions
+                  SET quantity          = quantity - %s,
+                      realized_pnl      = COALESCE(realized_pnl, 0) + %s,
+                      sell_order_id     = NULL,
+                      exit_submitted_at = NULL,
+                      exit_reason       = NULL
+                WHERE id = %s""",
+            (filled_qty, realized_pnl, position_id),
         )
 
 
@@ -236,8 +269,67 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
             log.info(msg)
         return msg
 
+    pos_qty = rc._to_decimal(row["quantity"]) or Decimal("0")
+    entry_price = rc._to_decimal(row["entry_price"])
+    is_option = bool(row.get("option_symbol"))
+
     # --- Dead (canceled / rejected / expired / done_for_day) ---
     if status in rc.DEAD_STATUSES:
+        # Alpaca can report a partial fill alongside a terminal cancel:
+        # filled_qty=2 out of 3 then canceled. If we just clear the sell
+        # stamps without recording those 2, the next exit_monitor pass
+        # sees positions.quantity=3 and submits another SELL for 3 —
+        # double-selling the 2 that already executed at Alpaca.
+        if filled_qty > 0 and filled_avg is not None and filled_avg > 0:
+            realized = compute_realized_pnl(
+                is_option=is_option,
+                pos_direction=row["pos_direction"],
+                entry_price=entry_price,
+                exit_price=filled_avg,
+                qty=filled_qty,
+            )
+            if filled_qty >= pos_qty:
+                # All of it filled before cancel — treat as a full close.
+                if dry_run:
+                    return (f"position #{pid} DRY-RUN would close "
+                            f"(fully filled before {status}) — "
+                            f"qty={filled_qty} realized_pnl={realized}")
+                try:
+                    mark_closed(conn, pid, datetime.now(timezone.utc), realized)
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    log.exception("position #%s DB error closing", pid)
+                    return (f"position #{pid} WARN — DB error during close: "
+                            f"{type(e).__name__}: {e}")
+                sign = "+" if realized >= 0 else ""
+                log.info("position #%s CLOSED — fully filled before %s exit=%s "
+                         "qty=%s realized_pnl=%s%s",
+                         pid, status, filled_avg, filled_qty, sign, realized)
+                return (f"position #{pid} CLOSED — fully filled before {status} "
+                        f"exit={filled_avg} qty={filled_qty} "
+                        f"realized_pnl={sign}{realized}")
+            # Partial fill before cancel — record what filled, retry the rest.
+            residual = pos_qty - filled_qty
+            if dry_run:
+                return (f"position #{pid} DRY-RUN would partial-close "
+                        f"(partial before {status}) — "
+                        f"filled={filled_qty}/{pos_qty} residual={residual}")
+            try:
+                partial_close_sell(conn, pid, filled_qty, realized)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.exception("position #%s DB error on partial close", pid)
+                return (f"position #{pid} WARN — DB error during partial close: "
+                        f"{type(e).__name__}: {e}")
+            sign = "+" if realized >= 0 else ""
+            log.info("position #%s PARTIAL — %s after %s/%s @ %s realized=%s%s",
+                     pid, status, filled_qty, pos_qty, filled_avg, sign, realized)
+            return (f"position #{pid} PARTIAL — {status} after {filled_qty}/{pos_qty} "
+                    f"@ {filled_avg} realized_pnl={sign}{realized}, "
+                    f"residual {residual} will retry")
+        # Cancel with zero fills — wipe stamps and retry next pass.
         msg = f"SELL didn't fill (alpaca_status={status}) — will retry"
         if dry_run:
             return f"position #{pid} DRY-RUN would clear sell_order_id — {msg}"
@@ -253,8 +345,6 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
         return (f"position #{pid} WARN — SELL filled but fill data incomplete "
                 f"(qty={filled_qty}, avg={filled_avg})")
 
-    entry_price = rc._to_decimal(row["entry_price"])
-    is_option = bool(row.get("option_symbol"))
     realized = compute_realized_pnl(
         is_option=is_option,
         pos_direction=row["pos_direction"],
@@ -262,6 +352,30 @@ def reconcile_one(conn, client, row: dict, dry_run: bool, verbose: bool) -> str:
         exit_price=filled_avg,
         qty=filled_qty,
     )
+
+    # Defensive: Alpaca reports status='filled' with filled_qty < submitted
+    # qty rarely (if ever), but if it does, closing the row here would leave
+    # the residual long at Alpaca with DB saying closed. Treat as partial.
+    if pos_qty > 0 and filled_qty < pos_qty:
+        residual = pos_qty - filled_qty
+        if dry_run:
+            return (f"position #{pid} DRY-RUN would partial-close "
+                    f"(filled<qty) — filled={filled_qty}/{pos_qty} "
+                    f"residual={residual}")
+        try:
+            partial_close_sell(conn, pid, filled_qty, realized)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.exception("position #%s DB error on partial close (filled)", pid)
+            return (f"position #{pid} WARN — DB error during partial close: "
+                    f"{type(e).__name__}: {e}")
+        sign = "+" if realized >= 0 else ""
+        log.warning("position #%s PARTIAL — alpaca filled but %s/%s @ %s",
+                    pid, filled_qty, pos_qty, filled_avg)
+        return (f"position #{pid} PARTIAL — filled={filled_qty}/{pos_qty} "
+                f"@ {filled_avg} realized_pnl={sign}{realized}, "
+                f"residual {residual} will retry")
 
     if dry_run:
         return (f"position #{pid} DRY-RUN would close — "
