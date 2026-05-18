@@ -701,9 +701,13 @@ def render_plan(
     if sizing["qty"] <= 0:
         lines.append("  [SKIP] sized to 0 — nothing to submit.")
     elif sizing["instrument"] == "option" and opt_sym:
-        # Crossing the spread at the ask is the realistic fill assumption for a
-        # market-able limit on options paper.
-        limit = opt_ask if opt_ask is not None else opt_mid
+        # Mirror execute_trade.py: submit at mid, not ask. Crossing the full
+        # ask guarantees the worst fill; mid is what the live submit path
+        # actually uses, so the dry-run must show the same number.
+        if opt_bid is not None and opt_ask is not None and opt_bid > 0 and opt_ask > 0:
+            limit = ((opt_bid + opt_ask) / Decimal("2")).quantize(Decimal("0.01"))
+        else:
+            limit = opt_mid
         lines.append(f"  client.submit_order(")
         lines.append(f"      symbol={opt_sym!r},")
         lines.append(f"      qty={sizing['qty']},")
