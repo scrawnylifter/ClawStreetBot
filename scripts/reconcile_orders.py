@@ -157,15 +157,46 @@ def insert_position(
         return cur.fetchone()[0]
 
 
-def mark_filled(conn, signal_id: int, position_id: int) -> None:
+def mark_filled(
+    conn,
+    signal_id: int,
+    position_id: int,
+    *,
+    fill_price: Decimal | None = None,
+    quantity: Decimal | None = None,
+    reference_price: Decimal | None = None,
+) -> None:
+    """Flip a signal row to status='filled' and record slippage vs the
+    signal-time reference price.
+
+    Args:
+        signal_id: market.signal_alerts.id.
+        position_id: newly inserted trading.positions.id.
+        fill_price: actual avg fill (option premium or underlying).
+        quantity: contracts/shares filled — for dollar slippage math.
+        reference_price: option_mid for option signals, trigger_price for
+            stock-only signals. NULL or zero suppresses slippage math.
+    """
+    slip_pct: Decimal | None = None
+    slip_dollars: Decimal | None = None
+    if (fill_price is not None and reference_price is not None
+            and reference_price > 0):
+        diff = fill_price - reference_price
+        slip_pct = (diff / reference_price) * Decimal("100")
+        if quantity is not None:
+            slip_dollars = diff * quantity
+
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE market.signal_alerts
-                  SET status = 'filled',
-                      position_id = %s,
-                      error_message = NULL
+                  SET status           = 'filled',
+                      position_id      = %s,
+                      fill_price       = %s,
+                      slippage_pct     = %s,
+                      slippage_dollars = %s,
+                      error_message    = NULL
                 WHERE id = %s""",
-            (position_id, signal_id),
+            (position_id, fill_price, slip_pct, slip_dollars, signal_id),
         )
 
 
@@ -315,6 +346,10 @@ def reconcile_one(
                         f"INSERT positions(qty={filled_qty}, avg={filled_avg_price}); "
                         f"mark signal filled with note: {reason}")
 
+            has_option_pc = bool(signal.get("option_symbol"))
+            reference_price_pc = (_to_decimal(signal.get("option_mid"))
+                                  if has_option_pc
+                                  else _to_decimal(signal.get("trigger_price")))
             try:
                 position_id = insert_position(
                     conn,
@@ -326,7 +361,12 @@ def reconcile_one(
                     take_profit=take_profit,
                     alpaca_order_id=order_id,
                 )
-                mark_filled(conn, sid, position_id)
+                mark_filled(
+                    conn, sid, position_id,
+                    fill_price=filled_avg_price,
+                    quantity=filled_qty,
+                    reference_price=reference_price_pc,
+                )
                 # Stash the cancel reason in error_message so the operator
                 # sees that the order didn't fully fill, even though we
                 # treat the partial as a real position.
@@ -380,6 +420,10 @@ def reconcile_one(
     direction = position_direction(signal, has_option)
     stop_loss   = _to_decimal(signal.get("stop_price"))
     take_profit = _to_decimal(signal.get("tp1_price"))
+    # Slippage reference: option_mid was the signal-time fair-mid for option
+    # signals; trigger_price is the equivalent for stock-only signals.
+    reference_price = (_to_decimal(signal.get("option_mid")) if has_option
+                       else _to_decimal(signal.get("trigger_price")))
 
     if dry_run:
         return (f"#{sid} {sym} DRY-RUN would fill — "
@@ -400,7 +444,12 @@ def reconcile_one(
             take_profit=take_profit,
             alpaca_order_id=order_id,
         )
-        mark_filled(conn, sid, position_id)
+        mark_filled(
+            conn, sid, position_id,
+            fill_price=filled_avg_price,
+            quantity=filled_qty,
+            reference_price=reference_price,
+        )
         conn.commit()
     except Exception as e:
         conn.rollback()
