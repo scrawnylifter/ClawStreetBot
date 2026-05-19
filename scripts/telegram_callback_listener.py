@@ -266,7 +266,7 @@ def handle_callback(
         # below instead of silently overwriting risk_mode.
         cur.execute(
             """SELECT id, symbol, strategy, direction, status, user_action,
-                      telegram_msg_id, created_at
+                      telegram_msg_id, created_at, executed_at
                  FROM market.signal_alerts WHERE id = %s FOR UPDATE""",
             (signal_id,),
         )
@@ -280,14 +280,30 @@ def handle_callback(
             conn.rollback()
             return
 
-        # Idempotency: only 'new' rows are actionable.
-        if row["status"] != "new" or row["user_action"] is not None:
+        # Idempotency: only 'new' rows accept Approve. Deny gets one extra
+        # affordance — an auto-approved row that hasn't been submitted yet
+        # can still be vetoed (executed_at IS NULL means execute_trade hasn't
+        # flipped it to 'executing' nor sent the order to Alpaca).
+        is_auto_veto = (
+            action == "deny"
+            and row["status"] == "approved"
+            and row["user_action"] == "auto_approved"
+            and row.get("executed_at") is None
+        )
+        if (row["status"] != "new" or row["user_action"] is not None) and not is_auto_veto:
             log.info(
                 "Signal %s already %s (user_action=%s) — ignoring duplicate %s",
                 signal_id, row["status"], row["user_action"], action,
             )
             already = (row["user_action"] or row["status"]).upper()
-            answer_callback(token, cb_id, f"Already {already}.")
+            # Auto-approved rows that already hit Alpaca get a specific
+            # "too late" message instead of a generic "Already APPROVED"
+            # — the user pressed Deny expecting a veto, so be explicit.
+            if (action == "deny" and row["user_action"] == "auto_approved"
+                    and row.get("executed_at") is not None):
+                answer_callback(token, cb_id, "Too late — order already submitted.")
+            else:
+                answer_callback(token, cb_id, f"Already {already}.")
             # Make sure the buttons are gone even if we got here by accident.
             if row["telegram_msg_id"]:
                 clear_message_keyboard(token, chat_id, row["telegram_msg_id"])

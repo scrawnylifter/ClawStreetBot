@@ -30,7 +30,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from constants import MAX_SPREAD_PCT  # noqa: E402
+from constants import MAX_SPREAD_PCT, AUTO_APPROVE_STRATEGIES  # noqa: E402
 
 
 def _format_quote_line(opt_bid, opt_ask, opt_mid, spread_pct) -> str:
@@ -96,6 +96,22 @@ def get_telegram_config():
                 k, _, v = line.partition("=")
                 config[k.strip()] = v.strip()
     return config
+
+
+def build_deny_only_keyboard(signal_id: int) -> dict:
+    """Single-button keyboard for auto-approved alerts.
+
+    Auto-approved strategies (ORB, liquidity_sweep) are already in the
+    execution queue by the time the alert arrives — the Deny button is a
+    last-chance veto that only succeeds before Alpaca confirms the BUY.
+    Past that point, the callback handler reports "too late" without
+    canceling the order.
+    """
+    return {
+        "inline_keyboard": [
+            [{"text": "❌ Deny (veto auto-approve)", "callback_data": f"deny:{signal_id}"}],
+        ]
+    }
 
 
 def build_approval_keyboard(signal_id: int) -> dict:
@@ -1180,8 +1196,25 @@ def main():
             conn.rollback()
             continue
 
-        # Send via Telegram with Approve / Deny buttons
-        keyboard = build_approval_keyboard(signal["id"])
+        # Auto-approve momentum strategies (ORB, liquidity_sweep): skip the
+        # human button, but ALWAYS still send the alert + run preflight in
+        # execute_trade. Manual strategies keep the 4-button keyboard.
+        is_auto_approve = signal["strategy"] in AUTO_APPROVE_STRATEGIES
+
+        if is_auto_approve:
+            # Prepend a notice so the chat reads top-down: this fired and is
+            # already in flight; veto with the Deny button before fill.
+            alert_text = (
+                "⚡ <b>AUTO-APPROVED — order submitting</b>\n"
+                f"<i>{signal['strategy']} bypasses manual approval — "
+                "tap Deny within the TTL window to veto.</i>\n"
+                f"{'─' * 30}\n"
+                f"{alert_text}"
+            )
+            keyboard = build_deny_only_keyboard(signal["id"])
+        else:
+            keyboard = build_approval_keyboard(signal["id"])
+
         result = send_telegram_message(
             tg_token, tg_chat_id, alert_text,
             allowed_chat_id=tg_chat_id,
@@ -1189,15 +1222,48 @@ def main():
         )
         if result and result.get("ok"):
             msg_id = result["result"]["message_id"]
-            # Mark as sent
-            cur.execute("""
-                UPDATE market.signal_alerts
-                SET telegram_sent = TRUE, telegram_msg_id = %s
-                WHERE id = %s
-            """, (msg_id, signal["id"]))
-            conn.commit()
-            sent_count += 1
-            log.info("Sent alert for %s %s (msg_id=%s)", signal["symbol"], signal["strategy"], msg_id)
+            if is_auto_approve:
+                # Single UPDATE flips status='approved' + records the auto
+                # bypass + stores the message id, so the row is immediately
+                # eligible for execute_signal_immediate below (and the cron
+                # safety net if that fails).
+                cur.execute(
+                    """UPDATE market.signal_alerts
+                          SET telegram_sent    = TRUE,
+                              telegram_msg_id  = %s,
+                              status           = 'approved',
+                              user_action      = 'auto_approved',
+                              approved_at      = NOW(),
+                              risk_mode        = COALESCE(risk_mode, 'standard')
+                        WHERE id = %s""",
+                    (msg_id, signal["id"]),
+                )
+                conn.commit()
+                sent_count += 1
+                log.info("AUTO-APPROVED alert for %s %s (msg_id=%s) — "
+                         "dispatching execute_signal_immediate",
+                         signal["symbol"], signal["strategy"], msg_id)
+                # Inline execution — same in-process trigger the listener
+                # uses for manual approves. Best effort: a failure here just
+                # leaves the row for the next execute_trade cron tick.
+                try:
+                    from execute_trade import execute_signal_immediate
+                    exec_result = execute_signal_immediate(signal["id"])
+                    log.info("Immediate exec #%s → %s", signal["id"],
+                             exec_result.get("status"))
+                except Exception:
+                    log.exception("Immediate exec failed for #%s — cron will retry",
+                                  signal["id"])
+            else:
+                cur.execute(
+                    """UPDATE market.signal_alerts
+                          SET telegram_sent = TRUE, telegram_msg_id = %s
+                        WHERE id = %s""",
+                    (msg_id, signal["id"]),
+                )
+                conn.commit()
+                sent_count += 1
+                log.info("Sent alert for %s %s (msg_id=%s)", signal["symbol"], signal["strategy"], msg_id)
         else:
             # Telegram send failed — release the lock so the next cron run
             # can retry. The seen_ids guard keeps us from busy-looping on the

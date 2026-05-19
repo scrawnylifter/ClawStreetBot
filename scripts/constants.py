@@ -50,3 +50,16 @@ SIGNAL_TTL_MINUTES: dict[str, int] = {
 }
 
 DEFAULT_SIGNAL_TTL_MINUTES = 15  # fallback for strategies not in the dict
+
+# ---------------------------------------------------------------------------
+# Auto-approved strategies (no human button required)
+# ---------------------------------------------------------------------------
+# Strategies in this list bypass the manual Approve keyboard. alert_telegram
+# writes the row at status='approved' (instead of 'new'), sends a notice with
+# a Deny-only keyboard, and triggers execute_trade.execute_signal_immediate
+# inline. All preflight checks (PDT, drawdown, spread, sizing) still run —
+# auto-approve only skips the human button press, NOT risk gating.
+#
+# Reserved for momentum-based strategies whose entries are time-critical and
+# whose 15-min TTL leaves no room for a manual approval round-trip.
+AUTO_APPROVE_STRATEGIES: list[str] = ["orb", "liquidity_sweep"]
