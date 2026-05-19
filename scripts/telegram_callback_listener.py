@@ -32,6 +32,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -408,6 +409,33 @@ def handle_callback(
     if row["telegram_msg_id"]:
         send_reply(token, chat_id, row["telegram_msg_id"], reply_text)
     answer_callback(token, cb_id, f"{verdict_emoji} {verdict_label}")
+
+    # Latency killer: dispatch execution in-process the moment the user
+    # approves. Without this we wait for the next execute_trade cron tick,
+    # which n8n can delay by 20+ minutes when its SQLite store stalls.
+    # Run in a thread so the long-poll loop stays responsive — execute_one
+    # makes synchronous Alpaca calls that can take a second or two.
+    if action == "approve":
+        threading.Thread(
+            target=_dispatch_execute_safe,
+            args=(signal_id,),
+            name=f"exec-{signal_id}",
+            daemon=True,
+        ).start()
+
+
+def _dispatch_execute_safe(signal_id: int) -> None:
+    """Wrapper that calls execute_trade.execute_signal_immediate without ever
+    raising back into the listener loop. Errors are logged; the row's
+    status='error' surfacing happens via alert_telegram.notify_errors."""
+    try:
+        # Lazy import: keeps the listener bootable even when alpaca-py is not
+        # installed in some dev environments.
+        from execute_trade import execute_signal_immediate
+        result = execute_signal_immediate(signal_id)
+        log.info("Immediate exec #%s → %s", signal_id, result.get("status"))
+    except Exception:
+        log.exception("Immediate exec thread for #%s crashed", signal_id)
 
 
 # ---------------------------------------------------------------------------

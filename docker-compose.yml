@@ -94,6 +94,7 @@ services:
     env_file:
       - .env.db
       - .env.telegram
+      - .env.alpaca
     environment:
       - POSTGRES_HOST=postgres
       - PYTHONPATH=/app
@@ -102,6 +103,7 @@ services:
       - ./scripts:/app/scripts:ro
       - ./.env.db:/app/.env.db:ro
       - ./.env.telegram:/app/.env.telegram:ro
+      - ./.env.alpaca:/app/.env.alpaca:ro
       - ./state:/app/state
     depends_on:
       postgres:

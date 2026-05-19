@@ -612,6 +612,61 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
 
 
 # ---------------------------------------------------------------------------
+# In-process immediate execution (latency-killer entry point)
+# ---------------------------------------------------------------------------
+
+def execute_signal_immediate(signal_id: int) -> dict:
+    """Execute a single approved signal in-process, bypassing the cron loop.
+
+    Called by telegram_callback_listener.py right after the user approves an
+    alert, and by alert_telegram.py for auto-approved strategies. Skipping
+    the 1-min cron wait collapses approval-to-fill latency from minutes
+    (n8n schedule drift can push it well past 20 min when the cron DB lags)
+    down to a couple of seconds.
+
+    Args:
+        signal_id: market.signal_alerts.id to execute. Must already be
+            status='approved' with executed_at IS NULL.
+
+    Returns:
+        Result dict from execute_one, or a status='skipped'/'error' dict
+        describing why execution did not proceed.
+    """
+    conn = None
+    try:
+        conn = pa.get_connection()
+        rows = pa.fetch_approved(conn, signal_id, 1)
+        if not rows:
+            log.info("execute_signal_immediate: signal #%s not in 'approved' "
+                     "state (race / already executed)", signal_id)
+            return {"status": "skipped", "reason": "not approved"}
+        row = rows[0]
+        if row.get("status") != "approved" or row.get("executed_at") is not None:
+            log.info("execute_signal_immediate: signal #%s already %s",
+                     signal_id, row.get("status"))
+            return {"status": "skipped", "reason": "already actioned"}
+
+        try:
+            equity = pa.get_alpaca_equity()
+        except Exception:
+            log.exception("execute_signal_immediate: equity fetch failed, "
+                          "falling back to DEFAULT_EQUITY")
+            equity = pa.DEFAULT_EQUITY
+
+        client = _alpaca_client()
+        return execute_one(conn, client, row, equity, verbose=False)
+    except Exception as e:
+        log.exception("execute_signal_immediate failed for signal #%s", signal_id)
+        return {"status": "error", "message": f"{type(e).__name__}: {e}"}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
