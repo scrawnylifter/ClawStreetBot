@@ -33,19 +33,6 @@
         520,
         300
       ]
-    },
-    {
-      "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --strategy ema_crossover"
-      },
-      "id": "alert",
-      "name": "send Telegram alerts",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [
-        800,
-        300
-      ]
     }
   ],
   "connections": {
@@ -59,22 +46,10 @@
           }
         ]
       ]
-    },
-    "detect EMA crossovers": {
-      "main": [
-        [
-          {
-            "node": "send Telegram alerts",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
     "timezone": "America/Los_Angeles"
-  },
-  "active": true
+  }
 }
