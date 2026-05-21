@@ -27,6 +27,10 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+# Sibling imports (constants + option lookup)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from constants import SESSION_OPEN, SESSION_CLOSE, is_market_day, is_market_hours  # noqa: E402
+
 ET = ZoneInfo("America/New_York")
 
 import psycopg2
@@ -58,8 +62,7 @@ DB_CONFIG = {
     "user": os.environ["POSTGRES_USER"],
     "password": os.environ["POSTGRES_PASSWORD"],
 }
-# Sibling imports (for option lookup)
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Sibling imports (for option lookup — sys.path already set above)
 
 # ── Strategy rules (backtest-validated) ──
 
@@ -72,8 +75,6 @@ RULES = {
     "tp2_rr": 5.0,
     "tp1_size": 0.50,
     "tp2_size": 0.50,
-    "session_start": "09:30",
-    "session_end": "16:00",
     "min_rr": 3.0,
     # Symbols where the strategy works (skip known failures)
     "skip_symbols": {"RKLB", "RDDT", "OKLO"},
@@ -231,8 +232,8 @@ def detect_sweep_signals(symbol, daily, bars_5m, rules):
     if not bars_5m or not all_levels:
         return signals
 
-    session_start = datetime.strptime(rules["session_start"], "%H:%M").time()
-    session_end = datetime.strptime(rules["session_end"], "%H:%M").time()
+    session_start = SESSION_OPEN
+    session_end = SESSION_CLOSE
 
     # In live mode, only check the last 2 bars (current bar for sweep, next bar for close-beyond)
     # We scan from i = len(bars_5m) - 2 back a few bars to handle timing edge cases
@@ -452,13 +453,13 @@ def main() -> int:
                         help="Max option premium budget (default $2000)")
     args = parser.parse_args()
 
-    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    # Market-hours gate: only fire during regular session (weekday + market hours via constants).
     now_et = datetime.now(ET)
-    if now_et.weekday() >= 5:
-        log.info("Weekend (%s ET) — market closed, exiting silent.",
+    if not is_market_day(now_et.date()):
+        log.info("Non-market day (%s ET) — market closed, exiting silent.",
                  now_et.strftime("%a %H:%M"))
         return 0
-    if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+    if not is_market_hours(now_et.time()):
         log.info("Outside market hours (%s ET) — exiting silent.",
                  now_et.strftime("%H:%M"))
         return 0

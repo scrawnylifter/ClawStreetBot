@@ -2,6 +2,11 @@
 
 Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, historical data from Polygon.io, knowledge base in Obsidian.
 
+## Coding Conventions (MUST follow)
+
+- **Market hours:** NEVER hardcode 9:30, 16:00, 09:30, session times, or market-open/close strings. ALWAYS import from `scripts/constants.py` (which loads from `config/market_hours.yml`). Use `SESSION_OPEN`, `SESSION_CLOSE`, `SCANNER_ORB_START`, `INGEST_INTRADAY_START/END`, `is_market_day()`, `is_market_hours()`, `NYSE_HOLIDAYS`. The YAML is the single source of truth — n8n cron schedules should match the ingestion/scanner windows defined there.
+- **Watchlist:** ALWAYS query `market.assets WHERE active=TRUE` — never hardcode symbol lists. The YAML at `config/watchlist.yml` is the source of truth for what should be active; `setup_watchlist.py` syncs it to the DB.
+
 ## Architecture
 
 - **Language:** Python 3.11

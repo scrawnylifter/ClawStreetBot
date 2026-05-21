@@ -2,9 +2,9 @@
 """ORB (Opening Range Breakout) Scanner — live detection on 5m bars.
 
 Strategy summary:
-  1. Use the FIRST 15-min candle after 9:30 ET as the Opening Range.
+  1. Use the FIRST 15-min candle after SESSION_OPEN ET as the Opening Range.
      ORB high = that bar's high; ORB low = that bar's low (wicks count).
-  2. On 5-min bars AFTER 9:45 ET, detect:
+  2. On 5-min bars AFTER SCANNER_ORB_START ET, detect:
        • a CLOSE above ORB high  → bullish breakout
        • a CLOSE below ORB low   → bearish breakout
      A wick through is NOT a breakout — must be a full body close.
@@ -45,8 +45,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ET = ZoneInfo("America/New_York")
 
-# Sibling imports (option lookup)
+# Sibling imports (constants + option lookup)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from constants import SESSION_OPEN, SCANNER_ORB_START, is_market_day  # noqa: E402
 
 
 # ── Env loading ──
@@ -84,20 +85,20 @@ RULES = {
     # once is noise that drowns out the best setups. Rank by R:R and keep
     # only the top N.
     "max_signals": 3,
-    # ORB is an opening-range strategy. The range forms at 9:45 ET and
+    # ORB is an opening-range strategy. The range forms at SCANNER_ORB_START ET and
     # breakouts that happen in the first 30-60 minutes are the ones worth
     # trading — they have momentum and volume. A "breakout" at 11 AM or
     # 2 PM is just price drifting below the morning low — not the same
     # pattern at all. Hard-stop scanning after this time.
     "cutoff_time_et": "10:30",
-    # Scan ALL of today's post-9:45 ET 5m bars (not just the last N).
+    # Scan ALL of today's post-SCANNER_ORB_START ET 5m bars (not just the last N).
     # alpaca_ohlcv_intraday ingests bars HOURLY at :05 PDT; the ORB scanner
     # cron runs every 5min. With a small scan window (N=3), a breakout
     # that landed in the middle of an ingestion window (say 10:30 ET)
     # would be missed: by the time the next ingestion adds it to the DB
     # (11:05 PDT), the next scanner tick (11:10 PDT) only looks at the
     # 3 most recent bars (10:55-11:05 PDT = 10:55-11:05 ET) and skips
-    # right past it. Iterating the full post-9:45 ET window keeps every
+    # right past it. Iterating the full post-SCANNER_ORB_START ET window keeps every
     # breakout in scope; the 4-hour cooldown SELECT in save_signal
     # blocks duplicate alerts so we don't re-fire on every cron tick.
     "scan_full_session": True,
@@ -163,15 +164,15 @@ def get_active_symbols(conn) -> list[str]:
 
 
 def fetch_first_15m_bar_today(conn, symbol: str) -> tuple[float, float] | None:
-    """Return (orb_high, orb_low) from today's 9:30-9:45 ET 15-min bar, or
-    None if the bar isn't in market.ohlcv yet (pre-9:45 ET or ingestion
+    """Return (orb_high, orb_low) from today's SESSION_OPEN-to-ORB_END 15-min bar, or
+    None if the bar isn't in market.ohlcv yet (pre-ORB or ingestion
     hasn't caught up).
 
-    Alpaca's 15m bars are aligned to :00/:15/:30/:45 — the 9:30 ET bar
-    covers 9:30:00–9:44:59 ET, so timestamp = 9:30 ET in UTC.
+    Alpaca's 15M bars are aligned to :00/:15/:30/:45 — the SESSION_OPEN ET bar
+    covers SESSION_OPEN to SCANNER_ORB_START ET, so timestamp = SESSION_OPEN ET in UTC.
     """
     today_et = datetime.now(ET).date()
-    bar_start_et = datetime.combine(today_et, time(9, 30), tzinfo=ET)
+    bar_start_et = datetime.combine(today_et, SESSION_OPEN, tzinfo=ET)
     bar_start_utc = bar_start_et.astimezone(timezone.utc)
     with conn.cursor() as cur:
         cur.execute("""
@@ -309,13 +310,13 @@ def detect_orb_signals(
         )
         return signals
 
-    # Only consider bars AFTER the ORB closes (i.e. 9:45 ET on). Iterate
+    # Only consider bars AFTER the ORB closes (i.e. SCANNER_ORB_START ET on). Iterate
     # forward through the FULL session — record the FIRST close-beyond
     # candle in each direction. A symbol can produce up to 2 signals per
     # day (1 bullish + 1 bearish) when price whipsaws through both ORB
     # boundaries. 4-hour cooldown in save_signal handles dedup across
     # cron ticks.
-    orb_end_et = time(9, 45)
+    orb_end_et = SCANNER_ORB_START
     today_et = datetime.now(ET).date()
     seen_directions: set[str] = set()
 
@@ -504,10 +505,14 @@ def main() -> int:
     args = parser.parse_args()
 
     # Hard-fail-early when we're outside the session window: the ORB range
-    # doesn't exist until 9:45 ET, and breakouts after the cutoff are stale.
+    # doesn't exist until SCANNER_ORB_START ET, and breakouts after the cutoff are stale.
     # The cron may fire at 6:00 PDT (= 9:00 ET) before any ORB candle exists.
     now_et = datetime.now(ET)
-    if now_et.time() < time(9, 45):
+    if not is_market_day(now_et.date()):
+        log.info("Non-market day (%s) — market closed, exiting silent.",
+                 now_et.strftime("%A"))
+        return 0
+    if now_et.time() < SCANNER_ORB_START:
         log.info("Pre-ORB-close (%s ET) — ORB range not yet formed, exiting silent.",
                  now_et.strftime("%H:%M"))
         return 0
@@ -516,10 +521,6 @@ def main() -> int:
     if now_et.time() > time(cutoff_h, cutoff_m):
         log.info("Post-ORB-cutoff (%s ET, cutoff %s) — midday breakouts are noise, exiting silent.",
                  now_et.strftime("%H:%M"), cutoff)
-        return 0
-    if now_et.weekday() >= 5:
-        log.info("Weekend (%s) — market closed, exiting silent.",
-                 now_et.strftime("%A"))
         return 0
 
     conn = get_connection()

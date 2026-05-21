@@ -55,6 +55,7 @@ from fetch_alpaca_snapshot import (  # noqa: E402
     get_underlying_price,
     select_best_option,
 )
+from constants import is_market_day, is_market_hours  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -591,13 +592,13 @@ def main() -> int:
                         help="Max per-contract premium in dollars (default 2000)")
     args = parser.parse_args()
 
-    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    # Market-hours gate: only fire during regular session (weekday + market hours via constants).
     now_et = datetime.now(ET)
-    if now_et.weekday() >= 5:
-        log.info("Weekend (%s ET) — market closed, exiting silent.",
+    if not is_market_day(now_et.date()):
+        log.info("Non-market day (%s ET) — market closed, exiting silent.",
                  now_et.strftime("%a %H:%M"))
         return 0
-    if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+    if not is_market_hours(now_et.time()):
         log.info("Outside market hours (%s ET) — exiting silent.",
                  now_et.strftime("%H:%M"))
         return 0
