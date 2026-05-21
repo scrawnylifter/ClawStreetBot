@@ -40,7 +40,7 @@
     }
   ],
   "connections": {
-    "Hourly :05 6:30-13:00 PDT": {
+    "Hourly :05 6:00-13:30 PDT": {
       "main": [
         [
           {
