@@ -221,12 +221,16 @@ def ingest_symbol(conn, symbol: str) -> int:
     snapshot = fetch_snapshot(ticker)
     rows = collect_quarters(ticker, snapshot)
     if not rows:
-        # No quarterly history available — still record the snapshot under today's date.
+        # No quarterly history available (ETFs like SPY) — record the snapshot
+        # under the first day of the current calendar quarter so repeated weekly
+        # runs land on the same (symbol, date, period) row instead of accumulating.
         today = date.today()
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        q_start = date(today.year, q_start_month, 1)
         rows = [{
-            "date": today,
-            "period": period_label(today),
-            "fiscal_year": today.year,
+            "date": q_start,
+            "period": period_label(q_start),
+            "fiscal_year": q_start.year,
             "revenue": None, "net_income": None, "eps": None,
             "gross_profit": None, "operating_income": None, "free_cash_flow": None,
             "total_assets": None, "total_liabilities": None,
