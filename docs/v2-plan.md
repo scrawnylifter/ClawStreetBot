@@ -177,6 +177,19 @@ CREATE TABLE market.signal_alerts_v2 (
 7. **`record_skip()` on EVERY fail path** — or signals get re-picked forever (v1 had 130+ duplicate alerts from missing this once)
 8. **No n8n cron for execution** — FastAPI webhook for signal triggers, single background worker for reconciliation
 
+## TradingView — Real-Time Data Pipeline
+
+See [[TradingView Webhook Pipeline]] for full docs.
+
+**Core insight:** Alpaca free tier = IEX data = 15 minutes delayed. TradingView has real-time data. Pull via [TradingView-API](https://github.com/Mathieu2301/TradingView-API) on 30s polling loop. All scanner logic stays in-repo.
+
+**Decision:** Polling (30s) over Pine webhooks — all code version controlled here, no strategy logic on TV's servers.
+
+**Division of labor:**
+- **TradingView (data only):** Real-time OHLCV + indicators pulled every 30s
+- **Our server (all logic):** EMA cross, ORB, sweeps, ADX/RSI, IV gates, contract selection, risk, execution
+- **Cron scanners (backup):** Same logic on Alpaca delayed data, automatic failover
+
 ## Build Order
 
 1. ✅ Archive v1 (git tag `v1-archive`)

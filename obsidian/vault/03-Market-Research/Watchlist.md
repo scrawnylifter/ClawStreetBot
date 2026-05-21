@@ -44,5 +44,6 @@ tags: [watchlist, mOC]
 
 ## See Also
 
+- [[Watchlist — Rebuild Reference]] — Full rebuild baseline: scan criteria, pipeline, known issues
 - [[Alpaca API]] — API reference
 - [[Alpaca Data Pipeline]] — Ingestion scripts
