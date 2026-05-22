@@ -52,6 +52,10 @@ See [[Long-Term Holding]] for category overview.
 - **Paper** — Running on Alpaca Paper Trading for ≥30 days (Law 5 — min 30 DTE applies to paper trades too)
 - **Validated** — Paper results prove positive expected value, ready for live capital
 
+## Strategy Template
+
+Every strategy must document its Entry Plan, Exit Plan, and Trade Logging per the **[[Strategy Template & Data Pipeline]]**. Risk parameters are inherited from [[Risk Management]] — strategies do NOT define their own.
+
 ## See Also
 
 - [[Laws of Trading]] — Non-negotiable rules
