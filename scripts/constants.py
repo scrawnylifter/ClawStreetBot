@@ -101,3 +101,34 @@ SIGNAL_TTL_MINUTES: dict[str, int] = {
 }
 
 DEFAULT_SIGNAL_TTL_MINUTES = 15  # fallback for strategies not in the dict
+
+
+# ---------------------------------------------------------------------------
+# DB env loading — shared so v2 scripts don't each redefine it
+# ---------------------------------------------------------------------------
+def load_env(filename: str) -> None:
+    """Source a KEY=VALUE .env file into os.environ (setdefault — won't clobber)."""
+    path = PROJECT_ROOT / filename
+    if not path.exists():
+        alt = Path("/app") / filename
+        if alt.exists():
+            path = alt
+        else:
+            return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+load_env(".env.db")
+
+DB_CONFIG = {
+    "host": os.environ.get("POSTGRES_HOST", "localhost"),
+    "port": int(os.environ.get("POSTGRES_PORT", 5432)),
+    "dbname": os.environ.get("POSTGRES_DB", "clawstreet"),
+    "user": os.environ.get("POSTGRES_USER", "clawstreet"),
+    "password": os.environ.get("POSTGRES_PASSWORD", ""),
+}
