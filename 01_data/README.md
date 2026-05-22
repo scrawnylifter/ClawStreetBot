@@ -12,7 +12,7 @@ The foundation — all raw data ingestion and derived analytics.
 | `compute_technical_indicators.py` | EMA/RSI/MACD/ATR/VWAP/Bollinger | Daily |
 | `compute_iv_rank.py` | IV rank percentiles | Daily |
 | `compute_realized_vol.py` | 20d/5d annualized RV | Daily |
-| `compute_regime.py` | ⚠️ MISSING — market regime classification | Should be daily |
+| `compute_regime.py` | Market regime classification (bull/bear/transition) | Daily (derived_daily) |
 | `compute_gex_dex.py` | GEX/DEX per strike/expiry | Daily |
 | `compute_greeks_filter.py` | IV regime + contract filtering | Daily |
 | `compute_iv_outliers.py` | 3σ z-score IV outlier flags | Daily |

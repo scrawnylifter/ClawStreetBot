@@ -111,6 +111,19 @@
         2000,
         300
       ]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_regime.py --days 400"
+      },
+      "id": "compute_regime",
+      "name": "compute regime",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        300
+      ]
     }
   ],
   "connections": {
@@ -185,6 +198,17 @@
         [
           {
             "node": "compute iv outliers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compute iv outliers": {
+      "main": [
+        [
+          {
+            "node": "compute regime",
             "type": "main",
             "index": 0
           }
