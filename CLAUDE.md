@@ -176,7 +176,7 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - `ema_crossover_15m` / `orb` / timeframe `5m`/`15m` → **day**
 - `liquidity_sweep` with 5m/15m → **day**, else **swing**
 - `ema_crossover` / `setup_scanner` / `daily_signal` → **swing**
-- **long_term** is defined in RISK_PCT but not yet produced by any scanner
+- `dip_buy` / `accumulation` strategy or `risk_mode='long_term'` → **long_term**
 
 ### Risk Per Trade (position sizing in `process_approved.py`)
 - **Day:** 5% of equity (`RISK_PCT['day'] = 0.05`)
@@ -207,7 +207,8 @@ All stops and targets are ATR(14) multiples, NOT percentages. The ATR source var
 ### Time Stops
 - **Day trades:** Flatten by 12:45 PDT (15 min before close) in `exit_monitor.py`
 - **Swing/long-term:** No time stop (held for days/weeks)
-- **No stale-swing timeout implemented** — positions can trail indefinitely after TP2
+- **Swing stale timeout:** Full close if open > 7 days and underlying hasn't moved > 0.5×ATR from entry
+- **Long-term stale timeout:** Full close if open > 30 days and underlying hasn't moved > 0.5×ATR from entry
 
 ### DTE Rules
 - **Entry:** Minimum 30 DTE — enforced in all scanners, preflight, and option selection (`MIN_DTE = 30`)
@@ -231,15 +232,41 @@ All stops and targets are ATR(14) multiples, NOT percentages. The ATR source var
 - Baseline = latest `market.equity_snapshots` value (NOT the origin $100K)
 - Binary enforcement only (no graded yellow/red tiers) — see [[Risk Management Framework]] for the full 3-tier design (not yet implemented)
 
-### Delta Bands (option strike selection)
-- **Scanner-time:** `select_best_option()` uses standard band 0.50–0.70 for ALL strategies
-- **Post-approval:** `reselect_option_for_risk_mode()` adjusts:
-  - `standard`: 0.50–0.70
-  - `conservative`: 0.55–0.65
-  - `aggressive`: 0.40–0.80
-- **Preflight:** Accepts 0.50–0.80 (single band for all modes)
-- **NOT YET ENFORCED:** Day-trade 0.70–0.80 spec, long-term 0.60–0.80 spec (see [[Greeks Strategy]])
-- **Hard reject:** |delta| < 0.50 (lottery ticket) or > 0.90 (just buy shares)
+### Unified Greeks Strategy (`shared/constants.py` — single source of truth)
+
+All greeks constants live in `shared/constants.py` — scanner, preflight, and execution all import from there so they can't drift.
+
+**Mode-keyed delta bands** (`MODE_DELTA_BANDS` + `MODE_DELTA_TARGETS`):
+- **Day:** 0.65–0.85, target 0.75 (share-like, tight timeframe — you want the contract to track the underlying closely)
+- **Swing:** 0.50–0.70, target 0.60 (moderate leverage — paying for extrinsic is OK when you have days-to-weeks)
+- **Long_term:** 0.65–0.85, target 0.75 (share-replacement — minimal theta bleed, behaves like synthetic shares with a built-in stop)
+- **Hard floor/ceiling:** |Δ| < 0.50 = lottery ticket (always reject), |Δ| > 0.90 = just buy shares (always reject)
+- **Risk_mode shift** in `select_best_option()`: conservative shifts target -0.05, aggressive shifts +0.05
+
+**Theta budget** (`THETA_BUDGETS` = `|θ|/mid` per mode):
+- **Day:** < 5% (high budget — held minutes-to-hours, theta barely compounds)
+- **Swing:** < 3% (moderate — held days, theta starts mattering)
+- **Long_term:** < 1% (tightest — held weeks-to-months, theta compounds aggressively)
+- Scanner: soft scoring penalty + hard reject at 2× budget
+- Preflight: hard gate at budget
+- Execution: re-verify after re-snapshot
+
+**IV regime recheck** (`classify_regime()` in `shared/constants.py`):
+- `buy_premium` (iv_rank < 25): ideal for buying options
+- `directional` (25 ≤ iv_rank < 50): OK for directional plays
+- `spreads_cautious` (50 ≤ iv_rank < 75): WARN — premium getting expensive, consider spreads
+- `sell_premium` (iv_rank ≥ 75): FAIL — naked long premium contraindicated, IV crush risk
+
+**Additional preflight IV checks:**
+- IV drift WARN: if |signal_iv_rank - current_iv_rank| > 15 since signal was created
+- IV outlier FAIL: if `market.iv_outliers` has direction='high' for today (3σ intraday spike guard)
+
+**Execution-time greeks refresh:**
+- `reselect_option_for_risk_mode()` now ALWAYS re-snapshots greeks (even for standard risk_mode — was previously a no-op)
+- Re-verifies delta within MODE_DELTA_BANDS and theta within THETA_BUDGETS
+- Returns None (skip execution) if re-verification fails
+
+See [[Greeks Strategy]] in Obsidian for the full design rationale.
 
 ### Bid-Ask Spread Filter (single source of truth: `shared/constants.py`)
 - **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `shared/constants.py`, imported everywhere else
@@ -259,8 +286,9 @@ First match wins:
 3. **Trail stop** — if trail_stop_price set (after TP2 in swing) → close on breach / ratchet tighter
 4. **TP2** — day/long_term: full close; swing: trail-activate (2× ATR from entry)
 5. **TP1** — 50% partial close (`qty // 2`), one-shot (sticky `tp1_hit_at`)
-6. **Time stop** — day-trade ≥ 12:45 PDT → full close
-7. **DTE ≤ 1** — full close (Law 5)
+6. **Stale position** — swing > 7 days or long_term > 30 days with underlying within 0.5×ATR of entry → full close
+7. **Time stop** — day-trade ≥ 12:45 PDT → full close
+8. **DTE ≤ 1** — full close (Law 5)
 
 ## 🔐 MANDATORY: Secrets & Credentials
 
@@ -438,8 +466,8 @@ ClawStreetBot/
 │       └── reconcile_exits.json      ← Mon-Fri every 1min 6-14 PDT
 │
 ├── shared/                     ← Cross-layer Python utilities (imported by 02_scanner, 03_alert, etc.)
-│   ├── constants.py                      ← Market hours, session times, MAX_SPREAD_PCT, load_env(), is_market_*()
-│   └── fetch_alpaca_snapshot.py          ← ★ Real-time stock + best option snapshot; DELTA_BANDS; reselect_option_for_risk_mode()
+│   ├── constants.py                      ← Market hours, session times, load_env(), is_market_*(), MODE_DELTA_BANDS, THETA_BUDGETS, classify_regime()
+│   └── fetch_alpaca_snapshot.py          ← ★ Real-time stock + best option snapshot; mode-keyed delta selection; theta scoring
 │
 ├── admin/                      ← Operational tooling (not part of the live pipeline)
 │   ├── scripts/
