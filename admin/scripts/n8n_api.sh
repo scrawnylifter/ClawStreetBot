@@ -7,11 +7,11 @@
 #   ./scripts/n8n_api.sh activate CJNUeFiG4Sp1Hsyj
 #   ./scripts/n8n_api.sh deactivate CJNUeFiG4Sp1Hsyj
 #   ./scripts/n8n_api.sh delete CJNUeFiG4Sp1Hsyj
-#   ./scripts/n8n_api.sh import n8n/workflows/derived_daily.json
+#   ./admin/scripts/n8n_api.sh import 01_data/n8n/derived_daily.json
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env.n8n"
 
 # Source the env file
