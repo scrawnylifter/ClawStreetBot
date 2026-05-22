@@ -19,7 +19,6 @@ Trade plan (Laws of Trading — swing):
 
 Schedule: Runs every 15 minutes during market hours (SESSION_OPEN–SESSION_CLOSE ET)
 """
-import os
 import sys
 import logging
 from pathlib import Path
@@ -35,7 +34,9 @@ import numpy as np
 # Allow `import fetch_alpaca_snapshot` regardless of CWD (n8n runs from /).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
 from fetch_alpaca_snapshot import select_best_option  # noqa: E402
-from constants import is_market_day, is_market_hours  # noqa: E402
+from constants import DB_CONFIG, is_market_day, is_market_hours, load_env  # noqa: E402
+
+load_env(".env.db")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,20 +50,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def get_connection():
-    env_path = Path("/app/.env.db")
-    conn_params = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                conn_params[k.strip()] = v.strip()
-    return psycopg2.connect(
-        host=conn_params.get("POSTGRES_HOST", "postgres"),
-        user=conn_params.get("POSTGRES_USER", "clawstreet"),
-        password=conn_params.get("POSTGRES_PASSWORD", ""),
-        dbname=conn_params.get("POSTGRES_DB", "clawstreet"),
-    )
+    return psycopg2.connect(**DB_CONFIG)
 
 
 # ---------------------------------------------------------------------------

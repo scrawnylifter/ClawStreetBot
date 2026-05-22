@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 import json
 import os
 from datetime import date, timedelta
@@ -34,31 +35,11 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import Json, execute_values
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
 
-
-def load_env(filename: str) -> None:
-    """Load environment variables from a dotenv-style file."""
-    path = PROJECT_ROOT / filename
-    if not path.exists():
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
+from constants import DB_CONFIG, load_env  # noqa: E402
 
 load_env(".env.db")
-
-DB_CONFIG = {
-    "host": os.environ.get("POSTGRES_HOST", "localhost"),
-    "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-    "dbname": os.environ["POSTGRES_DB"],
-    "user": os.environ["POSTGRES_USER"],
-    "password": os.environ["POSTGRES_PASSWORD"],
-}
 
 FETCH_SYMBOLS_SQL = """
 SELECT symbol FROM market.assets
