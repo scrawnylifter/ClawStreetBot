@@ -105,75 +105,65 @@ ClawStreetBot/
 │   └── n8n/Dockerfile          # n8n + docker CLI for Execute Command nodes
 │   # docker-socket-proxy (wollomatic/socket-proxy) is pulled directly,
 │   # configured inline in docker-compose.yml — no Dockerfile needed.
-├── n8n/
-│   └── workflows/              # Source-of-truth JSON — 23 active workflows
+├── 01_data/                    # Layer 1 — Data ingestion & derived analytics
+│   ├── scripts/
+│   │   ├── setup_watchlist.py         # Sync YAML watchlist → Alpaca + Postgres
+│   │   ├── ingest_alpaca_ohlcv.py      # OHLCV bars → market.ohlcv (1d/15m/5m) ★
+│   │   ├── ingest_alpaca_options.py    # Options chains + greeks + bid/ask ★
+│   │   ├── ingest_alpaca_iv.py         # Implied volatility snapshots
+│   │   ├── ingest_yfinance_fundamentals.py # yfinance quarterly financials
+│   │   ├── compute_realized_vol.py     # 20d/5d realized volatility + IV-RV spread
+│   │   ├── compute_iv_rank.py          # IV rank from historical IV percentiles
+│   │   ├── compute_gex_dex.py          # GEX/DEX by strike/expiry + overview per underlying
+│   │   ├── compute_technical_indicators.py # EMA/RSI/MACD/ATR/VWAP/Bollinger
+│   │   ├── compute_greeks_filter.py    # IV regime + delta/theta-budget gating
+│   │   ├── compute_iv_outliers.py      # 3σ z-score IV outlier flags
+│   │   ├── compute_trend.py            # Multi-timeframe trend detection
+│   │   └── compute_regime.py           # Market regime classification (bull/bear/transition)
+│   └── n8n/                   # Workflows for this layer
 │       ├── watchlist_sync.json
 │       ├── backfill_pending.json
-│       ├── alpaca_ohlcv_daily.json       # 1d Alpaca bars
-│       ├── alpaca_ohlcv_intraday.json    # 15m + 5m Alpaca bars
-│       ├── alpaca_options_daily.json     # Alpaca options + greeks + bid/ask
+│       ├── alpaca_ohlcv_daily.json
+│       ├── alpaca_ohlcv_intraday.json
+│       ├── alpaca_options_daily.json
 │       ├── derived_daily.json
-│       ├── fundamentals_daily.json       # Polygon quarterly fundamentals (last Polygon-backed cron)
-│       ├── rss_news_scanner.json
-│       ├── signals_daily.json
-│       ├── intraday_signal_5m.json
+│       ├── fundamentals_weekly.json
+│       └── trend_daily.json
+├── 02_scanner/                 # Layer 2 — Pattern detection
+│   ├── scripts/
+│   │   ├── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
+│   │   ├── detect_ema_crossover.py       # Daily EMA 9/21 crossover + ADX>25 (supplementary)
+│   │   ├── detect_ema_crossover_15m.py   # 15m EMA crossover + real-time snapshot (supplementary)
+│   │   ├── detect_liquidity_sweep.py     # ★ 5m + daily liquidity sweep scanner
+│   │   └── detect_orb.py                 # ★ ORB scanner (opening range breakout on 5m bars)
+│   └── n8n/
+│       ├── setup_scanner.json
 │       ├── ema_crossover_detector.json
-│       ├── ema_crossover_15m.json        # EMA crossover on 15m + realtime snapshot
-│       ├── setup_scanner.json            # PRIMARY — 8-gate BUY signal scanner (every 15min market hours)
-│       ├── liquidity_sweep.json          # 5m + daily liquidity sweep scanner
-│       ├── orb_detector.json             # ★ ORB scanner (every 5min 6-13 PDT, opening range breakout on 5m bars)
-│       ├── alert_dispatch.json           # alert_telegram.py every 1min market hours
-│       ├── execute_trade.json            # Alpaca paper submit (approved → executing)
-│       ├── reconcile_orders.json         # BUY fill → trading.positions
-│       ├── reconcile_exits.json          # SELL fill → closed + realized_pnl + status='exited'
-│       ├── exit_monitor.json             # TP/SL/time-stop decision tree
-│       ├── equity_snapshot_daily.json    # Daily equity snapshot for drawdown denominator
-│       ├── trend_daily.json
-│       └── regime_weekly.json
-├── scripts/                    # Python scripts
-│   ├── alert_telegram.py         # Telegram dispatcher (entry alerts w/ Strategy: header + 4-button keyboard) + expirer + error surfacer + exit-fill push notifications ★
-│   ├── backfill_historical_iv.py  # Historical IV backfill
-│   ├── backfill_runner.py        # n8n wrapper: queries pending symbols, runs backfill_symbol.py
-│   ├── backfill_signals.py       # Historical signal backfill across 501 days
-│   ├── backfill_symbol.py        # Full ingestion chain for one symbol
-│   ├── backtest.py                # Backtesting engine
-│   ├── backtest_liquidity.py     # Liquidity sweep v1 backtest (superseded by v3)
-│   ├── backtest_liquidity_v2.py   # Liquidity sweep v2 backtest (superseded by v3)
-│   ├── backtest_liquidity_v3.py  # Liquidity sweep v3 — refinement tests (close-beyond = PF 1.56)
-│   ├── compute_gex_dex.py        # GEX/DEX by strike/expiry + overview per underlying
-│   ├── compute_greeks_filter.py   # IV regime + delta/theta-budget gating
-│   ├── compute_iv_outliers.py     # 3σ z-score IV outlier flags
-│   ├── compute_iv_rank.py        # IV rank from historical IV percentiles
-│   ├── compute_realized_vol.py   # 20d/5d realized volatility + IV-RV spread
-│   ├── compute_technical_indicators.py # EMA/RSI/MACD/ATR/VWAP/Bollinger
-│   ├── compute_trend.py           # Multi-timeframe trend detection
-│   ├── detect_ema_crossover.py    # Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
-│   ├── detect_ema_crossover_15m.py # 15m EMA crossover + real-time snapshot enrichment (supplementary)
-│   ├── detect_liquidity_sweep.py   # ★ LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram)
-│   ├── detect_orb.py               # ★ ORB scanner (opening range breakout on 5m bars, strategy='orb')
-│   ├── diagnose_liquidity_backtest.py  # v1 diagnostics
-│   ├── explore_data.py             # Alpaca data explorer
-│   ├── explore_options.py          # Options chain explorer
-│   ├── fetch_alpaca_snapshot.py     # Real-time stock price + best option at signal time; DELTA_BANDS dict (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80) ★
-│   ├── generate_signals.py         # Composite signal scoring (6-factor, 0-100)
-│   ├── ingest_alpaca_ohlcv.py      # Alpaca OHLCV bars → market.ohlcv (1d/15m/5m) ★
-│   ├── ingest_alpaca_options.py    # Alpaca options chains + greeks + bid/ask ★
-│   ├── ingest_polygon_fundamentals.py # Polygon quarterly financials (still active)
-│   ├── ingest_polygon_ohlcv.py     # DECOMMISSIONED — replaced by ingest_alpaca_ohlcv.py
-│   ├── ingest_polygon_options.py    # DECOMMISSIONED — replaced by ingest_alpaca_options.py
-│   ├── ingest_rss_news.py              # RSS + Reddit scraper
-│   ├── intraday_signal.py             # 5-min intraday tech re-score + threshold alerts
-│   ├── n8n_api.sh                     # n8n REST API helper (sources .env.n8n)
-│   ├── options_analysis.py            # Options greeks/IV analysis
-│   ├── regime_backtest.py            # Regime classification + dynamic weights
-│   ├── scan_setups.py                # ★ PRIMARY — 8-gate BUY signal scanner
-│   ├── snapshot_equity.py            # Daily Alpaca equity snapshot (drawdown denominator)
-│   ├── execute_trade.py              # Alpaca paper order submission; bracket orders (BRACKET) for non-option stock entries; reselect_option_for_risk_mode() for conservative/aggressive
-│   ├── exit_monitor.py              # TP/SL/trail-stop/time-stop decision tree (swing trails after TP2)
-│   ├── reconcile_orders.py          # BUY fill → trading.positions; orphan executing recovery
-│   ├── reconcile_exits.py          # SELL/TP1 partial fills → close position + cumulative P&L + status='exited' + Telegram exit-fill push notification
-│   ├── process_approved.py          # Drawdown halts + pre-flight checks before execution
-│   └── telegram_callback_listener.py # Telegram callback server for inline-approve/deny
+│       ├── ema_crossover_15m.json
+│       ├── liquidity_sweep.json
+│       └── orb_detector.json
+├── 03_alert/                   # Layer 3 — Telegram dispatch
+│   ├── scripts/
+│   │   └── alert_telegram.py         # Telegram dispatcher (4-button keyboard) + expirer + error surfacer ★
+│   └── n8n/
+│       └── alert_dispatch.json
+├── 04_approval/                # Layer 4 — Approval (rebuilding from archive)
+├── 05_execution/               # Layer 5 — Execution (rebuilding from archive)
+├── 06_exit/                    # Layer 6 — Exit management (rebuilding from archive)
+├── 07_reconcile/               # Layer 7 — Reconciliation (rebuilding from archive)
+├── shared/                     # Cross-layer utilities
+│   ├── constants.py             # DB_CONFIG, market hours, signal TTL, spread limits ★
+│   └── fetch_alpaca_snapshot.py  # Real-time stock price + best option; DELTA_BANDS ★
+├── admin/                      # Operational tooling
+│   └── scripts/
+│       ├── n8n_api.sh               # n8n REST API helper (sources .env.n8n)
+│       ├── backfill_runner.py       # n8n wrapper: queries pending symbols, runs backfill
+│       └── backfill_symbol.py       # Full ingestion chain for one symbol
+├── archive/                    # Decommissioned scripts + v1 pipeline (kept for reference)
+│   ├── v1-pipeline/             # Archived execution/alert/reconcile scripts
+│   ├── v1-dependents/           # Archived dependent scripts (e.g. snapshot_equity)
+│   ├── backtests/              # Backtest engine, regime backtest, liquidity backtests
+│   └── n8n-workflows/          # Archived n8n workflow JSONs
 └── obsidian/vault/             # Knowledge base
     ├── Home.md                 # Dashboard
     ├── Project Roadmap.md
@@ -239,19 +229,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Edit config/watchlist.yml, then sync to Alpaca + Postgres
-python scripts/setup_watchlist.py
+python 01_data/scripts/setup_watchlist.py
 
 # One-off manual backfills (n8n will run these on schedule too)
-python scripts/ingest_alpaca_ohlcv.py --all-timeframes
-python scripts/ingest_alpaca_options.py --all
-python scripts/backfill_historical_iv.py
-python scripts/compute_realized_vol.py
-python scripts/compute_iv_rank.py
-python scripts/compute_gex_dex.py
+python 01_data/scripts/ingest_alpaca_ohlcv.py --all-timeframes
+python 01_data/scripts/ingest_alpaca_options.py --all
+python 01_data/scripts/compute_realized_vol.py
+python 01_data/scripts/compute_iv_rank.py
+python 01_data/scripts/compute_gex_dex.py
 
 # Run the 8-gate BUY signal scanner (PRIMARY alert mechanism)
-python scripts/scan_setups.py             # scan + Telegram alert
-python scripts/scan_setups.py --dry-run   # dry-run: stdout only
+python 02_scanner/scripts/scan_setups.py             # scan + Telegram alert
+python 02_scanner/scripts/scan_setups.py --dry-run   # dry-run: stdout only
 
 # Connect to Postgres
 docker exec -it clawstreet-db psql -U clawstreet -d clawstreet
@@ -262,7 +251,7 @@ docker exec -it clawstreet-redis redis-cli -a <password>
 
 ## Continuous Ingestion (n8n)
 
-The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSON is checked in under `n8n/workflows/`. All cron schedules use **America/Los_Angeles (PDT)** timezone.
+The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:5678>, credentials in `.env.n8n`). Workflow JSONs are stored per-layer (e.g. `01_data/n8n/`, `02_scanner/n8n/`, `03_alert/n8n/`). All cron schedules use **America/Los_Angeles (PDT)** timezone.
 
 23 active workflows; the old Polygon ingestion JSONs (`ohlcv_daily`, `ohlcv_intraday`, `options_daily`) have been deleted from the repo — replaced by their Alpaca equivalents.
 
@@ -292,7 +281,7 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `trend_daily` | Mon–Fri 11:00 | Multi-timeframe trend detection + status |
 | `regime_weekly` | Sat 8:00 | Classify regime + optimize weights + compare |
 
-n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
+n8n runs scripts via `docker exec clawstreet-worker python /app/<layer>/scripts/<name>.py` (e.g. `/app/01_data/scripts/ingest_alpaca_ohlcv.py`, `/app/02_scanner/scripts/scan_setups.py`, `/app/03_alert/scripts/alert_telegram.py`), so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
 
 **★ Primary alert mechanism:** The `setup_scanner` workflow (`scan_setups.py`) evaluates ALL watchlist symbols against 8 buying gates (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R) every 15 minutes during market hours. It only sends a Telegram alert when ALL 8 gates pass — silence means no signal. EMA crossover detectors (daily + 15m) remain active as supplementary alerts.
 
@@ -313,7 +302,9 @@ Everything else is denied — n8n cannot `docker ps`, `stop`, `rm`, `run`, mount
 Once the n8n owner account is set up:
 
 ```bash
-docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows
+docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows/01_data
+docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows/02_scanner
+docker exec clawstreet-n8n n8n import:workflow --separate --input=/workflows/03_alert
 # Then activate each workflow in the UI (Settings → Workflows → toggle Active)
 ```
 

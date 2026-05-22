@@ -4,8 +4,9 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 ## Coding Conventions (MUST follow)
 
-- **Market hours:** NEVER hardcode 9:30, 16:00, 09:30, session times, or market-open/close strings. ALWAYS import from `scripts/constants.py` (which loads from `config/market_hours.yml`). Use `SESSION_OPEN`, `SESSION_CLOSE`, `SCANNER_ORB_START`, `INGEST_INTRADAY_START/END`, `is_market_day()`, `is_market_hours()`, `NYSE_HOLIDAYS`. The YAML is the single source of truth — n8n cron schedules should match the ingestion/scanner windows defined there.
-- **Watchlist:** ALWAYS query `market.assets WHERE active=TRUE` — never hardcode symbol lists. The YAML at `config/watchlist.yml` is the source of truth for what should be active; `setup_watchlist.py` syncs it to the DB.
+- **Market hours:** NEVER hardcode 9:30, 16:00, 09:30, session times, or market-open/close strings. ALWAYS import from `shared/constants.py` (which loads from `config/market_hours.yml`). Use `SESSION_OPEN`, `SESSION_CLOSE`, `SCANNER_ORB_START`, `INGEST_INTRADAY_START/END`, `is_market_day()`, `is_market_hours()`, `NYSE_HOLIDAYS`. The YAML is the single source of truth — n8n cron schedules should match the ingestion/scanner windows defined there.
+- **Watchlist:** ALWAYS query `market.assets WHERE active=TRUE` — never hardcode symbol lists. The YAML at `config/watchlist.yml` is the source of truth for what should be active; `01_data/scripts/setup_watchlist.py` syncs it to the DB.
+- **Layered imports:** scripts in `0X_layer/scripts/` import shared utilities (`constants`, `fetch_alpaca_snapshot`) from `shared/`. Each script does `sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))` then `from constants import DB_CONFIG, load_env`.
 
 ## Architecture
 
@@ -18,39 +19,76 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - **Cache/Queue:** Redis 7 (Docker on clawnet, port 6379)
 - **Knowledge Base:** Obsidian (Docker, port 3110) at `obsidian/vault/`
 - **Git:** Private repo `scrawnylifter/ClawStreetBot`
+- **Code Layout:** Layered top-level directories (`01_data`, `02_scanner`, `03_alert`, `04_approval`, `05_execution`, `06_exit`, `07_reconcile`), each owning its own `scripts/` and `n8n/` subdirectory. Cross-layer utilities live in `shared/`. Operational tooling lives in `admin/`. Decommissioned and v1-pipeline scripts live in `archive/`.
+
+## Pipeline Layers
+
+The bot is organised as a 7-layer pipeline. Each layer is a numbered top-level directory with its own `scripts/` and `n8n/` (and `db/` where relevant). Signal/order state flows strictly downstream.
+
+| # | Layer | Status | Contents | Responsibility |
+|---|-------|--------|----------|----------------|
+| 01 | **data** | ✅ live | `ingest_alpaca_*`, `compute_*`, `setup_watchlist` | Ingest OHLCV, options, greeks, IV, fundamentals; compute derived analytics (IV rank, RV, GEX/DEX, technicals, trend) |
+| 02 | **scanner** | ✅ live | `scan_setups`, `detect_ema_crossover`, `detect_ema_crossover_15m`, `detect_orb`, `detect_liquidity_sweep` | Pattern detection — write rows to `market.signal_alerts` with `status='new'` |
+| 03 | **alert** | ✅ live | `alert_telegram` | Telegram dispatch (4-button keyboard) + `expire_stale_new` + `notify_errors` + exit-fill push messages |
+|| 04 | **approval** | ✅ ported | `generate_signals`, `process_approved` | Composite signal scoring (6-factor); pre-flight checks (PDT, drawdown) → flip to `approved`/`denied` |
+|| 05 | **execution** | ✅ ported | `execute_trade`, `snapshot_equity` | Submit Alpaca paper orders (bracket for stock, mid-price limit for options); daily equity snapshots for drawdown |
+|| 06 | **exit** | ✅ ported | `exit_monitor` | TP/SL/trailing-stop/time-stop decision tree; emit SELLs |
+|| 07 | **reconcile** | ✅ ported | `reconcile_orders`, `reconcile_exits` | Poll Alpaca for BUY/SELL fills, update `trading.positions`, capture realized P&L |
+
+**Cross-layer:** `shared/` (constants, snapshot helper), `admin/` (backfill runner + n8n REST helper), `config/` (watchlist + market_hours YAMLs), `db/init/` + `n8n/migrations/` (schema), `obsidian/vault/` (knowledge base), `archive/` (decommissioned + v1 pipeline staged for v2 rebuild).
 
 ## Key Commands
 
-- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy, telegram-listener)
+Scripts live under layer directories — run them with their full layered path. Inside the worker container, the same paths are available under `/app/<layer>/scripts/` because docker-compose bind-mounts each layer to `/app/<layer>:ro`.
+
+**Infra:**
+- `docker compose up -d` — start all services (Postgres, Redis, Obsidian, worker, n8n, docker-proxy)
 - `docker exec -it clawstreet-db psql -U clawstreet -d clawstreet` — Postgres shell
 - `source .venv/bin/activate` — activate Python venv
-- `python scripts/setup_watchlist.py` — sync watchlist YAML → Alpaca + Postgres
-- `python scripts/backfill_symbol.py TSLA` — full ingestion chain for one symbol
-- `python scripts/explore_data.py` — explore Alpaca data
-- `python scripts/explore_options.py` — explore options chains
-- `python scripts/options_analysis.py` — options greeks/IV analysis
-- `python scripts/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01` — run backtest
-- `python scripts/generate_signals.py --all` — generate daily signals
-- `python scripts/intraday_signal.py` — 5-min intraday signal refresh (re-scores tech from 5m bars, dual-write to signal_alerts)
-- `python scripts/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing` — regime-conditional backtest
-- `python scripts/detect_ema_crossover.py --lookback 1` — detect daily EMA 9/21 crossovers (supplementary)
-- `python scripts/detect_ema_crossover_15m.py --lookback 1` — detect 15m EMA crossovers + real-time snapshot (supplementary)
-- `python scripts/scan_setups.py` — ★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
-- `python scripts/scan_setups.py --dry-run` — dry-run: stdout only, no Telegram alert
-- `python scripts/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
-- `python scripts/alert_telegram.py --strategy ema_crossover` — send Telegram alerts for pending signals
-- `python scripts/detect_liquidity_sweep.py` — ★ liquidity sweep scanner (5m + daily, close-beyond, Telegram)
-- `python scripts/detect_liquidity_sweep.py --dry-run` — dry-run: stdout only, no DB/Telegram
-- `python scripts/detect_orb.py` — ★ ORB scanner (opening range breakout on 5m bars, writes signal_alerts with strategy='orb')
-- `python scripts/detect_orb.py --dry-run` — dry-run: stdout only, no DB writes
-- `python scripts/backtest_liquidity_v3.py` — run liquidity sweep refinement backtest (A/B/C/D)
-- `python scripts/execute_trade.py --dry-run` — dry-run: print Alpaca order for approved signals (no submission)
-- `python scripts/execute_trade.py --confirm` — submit approved signals to Alpaca paper
-- `python scripts/reconcile_orders.py --dry-run` — check BUY fill state from Alpaca (dry-run)
-- `python scripts/reconcile_exits.py --dry-run` — check SELL fill state + realized P&L (dry-run)
-- `python scripts/exit_monitor.py --dry-run` — check TP/SL/trailing-stop/time-stop exit conditions (dry-run)
-- `python scripts/process_approved.py` — pre-flight checks (PDT, drawdown) + approve/deny signals
-- `python scripts/snapshot_equity.py` — snapshot Alpaca equity for drawdown denominator
+- `./admin/scripts/n8n_api.sh list` — n8n REST API helper (sources `.env.n8n`)
+
+**Data layer (01_data):**
+- `python admin/scripts/backfill_symbol.py TSLA` — full ingestion chain for one symbol (calls into `01_data/scripts/`)
+- `python 01_data/scripts/setup_watchlist.py` — sync watchlist YAML → Alpaca + Postgres
+- `python 01_data/scripts/ingest_alpaca_ohlcv.py --timeframe 1d` (also `15m`, `5m`)
+- `python 01_data/scripts/ingest_alpaca_options.py --all`
+- `python 01_data/scripts/ingest_alpaca_iv.py`
+- `python 01_data/scripts/ingest_yfinance_fundamentals.py --all`
+- `python 01_data/scripts/compute_iv_rank.py`
+- `python 01_data/scripts/compute_realized_vol.py`
+- `python 01_data/scripts/compute_gex_dex.py`
+- `python 01_data/scripts/compute_technical_indicators.py`
+- `python 01_data/scripts/compute_greeks_filter.py`
+- `python 01_data/scripts/compute_iv_outliers.py`
+- `python 01_data/scripts/compute_trend.py --backfill --days 400`
+
+**Scanner layer (02_scanner):**
+- `python 02_scanner/scripts/scan_setups.py` — ★ PRIMARY — 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R)
+- `python 02_scanner/scripts/scan_setups.py --dry-run` — stdout only, no Telegram alert
+- `python 02_scanner/scripts/detect_ema_crossover.py --lookback 1` — daily EMA 9/21 crossovers (supplementary)
+- `python 02_scanner/scripts/detect_ema_crossover_15m.py --lookback 1` — 15m EMA crossovers + real-time snapshot (supplementary)
+- `python 02_scanner/scripts/detect_liquidity_sweep.py` — ★ liquidity sweep scanner (5m + daily, close-beyond, Telegram)
+- `python 02_scanner/scripts/detect_liquidity_sweep.py --dry-run` — stdout only, no DB/Telegram
+- `python 02_scanner/scripts/detect_orb.py` — ★ ORB scanner (opening range breakout on 5m bars, `strategy='orb'`)
+- `python 02_scanner/scripts/detect_orb.py --dry-run` — stdout only, no DB writes
+- `python shared/fetch_alpaca_snapshot.py --symbol NVDA` — real-time stock price + best option
+
+**Alert layer (03_alert):**
+- `python 03_alert/scripts/alert_telegram.py --strategy ema_crossover` — dispatch Telegram alerts for pending signals
+
+**Archived (v1 pipeline + research — kept under `archive/`):**
+- `python archive/v1-pipeline/execute_trade.py --dry-run` / `--confirm` — Alpaca paper submission (to be ported into `05_execution/`)
+- `python archive/v1-pipeline/reconcile_orders.py --dry-run` — BUY fill state (to be ported into `07_reconcile/`)
+- `python archive/v1-pipeline/reconcile_exits.py --dry-run` — SELL fill state + realized P&L (to be ported into `07_reconcile/`)
+- `python archive/v1-pipeline/exit_monitor.py --dry-run` — TP/SL/trailing-stop/time-stop conditions (to be ported into `06_exit/`)
+- `python archive/v1-pipeline/process_approved.py` — pre-flight checks (PDT, drawdown) + approve/deny (to be ported into `04_approval/`)
+- `python archive/v1-dependents/snapshot_equity.py` — Alpaca equity snapshot for drawdown denominator
+- `python archive/v1-pipeline/generate_signals.py --all` — 6-factor composite signal scoring
+- `python archive/v1-pipeline/intraday_signal.py` — 5-min intraday signal refresh (dual-write to signal_alerts)
+- `python archive/backtests/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01`
+- `python archive/backtests/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing`
+- `python archive/backtests/backtest_liquidity_v3.py` — liquidity sweep refinement backtest (A/B/C/D)
+- `python archive/explorers/explore_data.py` / `explore_options.py` / `options_analysis.py`
 
 ## Credentials (gitignored)
 
@@ -66,15 +104,15 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 - **Alpaca (PRIMARY — free tier, IEX 15-min delayed)**
   - OHLCV bars: 1d, 15m, 5m via `StockHistoricalDataClient` (includes `trade_count` + `VWAP`)
   - Options chains: full chain snapshots with greeks (delta, gamma, theta, vega, IV) + bid/ask via `OptionHistoricalDataClient`
-  - Real-time snapshots: stock price + best filtered option at signal time via `fetch_alpaca_snapshot.py`
-  - Paper trading: `$100K equity, $200K buying power
+  - Real-time snapshots: stock price + best filtered option at signal time via `shared/fetch_alpaca_snapshot.py`
+  - Paper trading: $100K equity, $200K buying power
   - API keys in `.env.alpaca`
 - **Polygon.io (SECONDARY — $108/mo, fundamentals + backfill only)**
   - REST API: `POLYGON_API_KEY` in `.env.polygon`
   - Flat Files: S3-compatible at `https://files.massive.com`, bucket `flatfiles`, boto3 s3v4 auth
   - Fundamentals: quarterly financials (revenue, EPS, market cap) — `fundamentals_daily` workflow still active
   - Flat-file backfill: initial historical OHLCV + options data (now complemented by Alpaca)
-  - **DECOMMISSIONED for ingestion**: `ingest_polygon_ohlcv.py` and `ingest_polygon_options.py` replaced by Alpaca equivalents
+  - **DECOMMISSIONED for ingestion**: `archive/polygon-decommissioned/ingest_polygon_ohlcv.py` and `ingest_polygon_options.py` replaced by Alpaca equivalents in `01_data/scripts/`
   - See `04-API-References/Polygon.io API.md` for full API details
 
 ## Database Schema
@@ -106,9 +144,9 @@ Key tables (see `db/init/` for full DDL):
 - `trading.regime_weights` — per-regime composite scoring weights (static baseline + optimized)
 - `trading.regime_factor_analysis` — per-regime factor-to-forward-return correlations (5d/20d horizons)
 - `market.signal_alerts` — strategy-specific trade alerts with entry + exit plans + approval lifecycle (status: new/pending/approved/denied/executing/filled/exited/expired/error, CHECK constraint via migration 030, approval/chat columns, executed_at, composite_score, error_notified_at)
-  - Entry alert formatters in `scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`, `intraday_signal` → `format_intraday_signal_alert()`, `orb` → `format_orb_alert()`. Every header now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which mechanism fired the alert (PR #18).
+  - Entry alert formatters in `03_alert/scripts/alert_telegram.py`: `ema_crossover` → `format_ema_crossover_alert()`, `ema_crossover_15m` → `format_15m_crossover_alert()`, `setup_scanner` → `format_setup_scanner_alert()`, `liquidity_sweep` → `format_liquidity_sweep_alert()`, `intraday_signal` → `format_intraday_signal_alert()`, `orb` → `format_orb_alert()`. Every header now shows `Strategy: <name> | Timeframe: <tf>` so the user knows which mechanism fired the alert (PR #18).
   - Exit-fill notifications: `format_exit_notification()` + `send_exit_notification()` are fire-and-forget helpers wired into `reconcile_exits` at every close-commit site (full close, TP1 partial, partial-before-cancel, defensive partial). Posts to Telegram after each `conn.commit()`: 💰 wins (TP2 / trail_stop / TP1 partial), ⛔ losses (stop / premium_stop), 📤 mechanics (time_stop / expiry). Telegram failure is logged but never rolls back the DB close (PR #18).
-  - All scanners write to `signal_alerts` only; `alert_telegram.py` (alert_dispatch cron) is the SOLE dispatcher with the 4-button approval keyboard.
+  - All scanners write to `signal_alerts` only; `03_alert/scripts/alert_telegram.py` (alert_dispatch cron) is the SOLE dispatcher with the 4-button approval keyboard.
   - See [[Telegram Alert System]] in Obsidian for full pipeline diagram
 - `scraper.youtube_videos` — YouTube video transcripts with channel, duration, fetch status (7 channels ingested)
 - `trading.backtest_liquidity_runs` — liquidity sweep backtest run metadata
@@ -132,44 +170,50 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 7. There Will Always Be Another Opportunity — don't force bad trades
 8. Do Your Fucking Research — know what you're trading and why
 
-### Risk Management — Day Trading
-- **Risk per trade:** 5% of capital (more trades/session = lower per-trade risk)
-- **Risk/Reward:** 3:1 (same floor, no exceptions)
-- **Stop-loss:** ATR × 1.5 or opening range boundary
-- **Take-profit:** 20% first target, 40% second target, flatten before close
-- **Time stop:** Flatten before market close — no overnight risk
-- **30 DTE on contracts is insurance, not hold time** — you might hold a 45 DTE call for 30 minutes
-- **PDT:** Max 3 day trades per 5-business-day window (2 normal, 1 emergency only), 4th = ban
+### Mode Classification (`process_approved.py:infer_trade_mode`)
+- `aggressive` risk_mode → **day**
+- `conservative` risk_mode → **swing**
+- `ema_crossover_15m` / `orb` / timeframe `5m`/`15m` → **day**
+- `liquidity_sweep` with 5m/15m → **day**, else **swing**
+- `ema_crossover` / `setup_scanner` / `daily_signal` → **swing**
+- `dip_buy` / `accumulation` strategy or `risk_mode='long_term'` → **long_term**
 
-### Risk Management — Swing Trading
-- **Risk per trade:** 10% of capital
-- **Risk/Reward:** 3:1 (25% win rate breakeven)
-- **Stop-loss:** ATR × 2.0
-- **Take-profit:** 30% first target, 50% second target, trail remaining
-- **Drawdown halts:** 10% daily, 20% weekly, 30% monthly
+### Risk Per Trade (position sizing in `process_approved.py`)
+- **Day:** 5% of equity (`RISK_PCT['day'] = 0.05`)
+- **Swing:** 10% of equity (`RISK_PCT['swing'] = 0.10`)
+- **Long-term:** 5% per tranche, max 15% position (`RISK_PCT['long_term'] = 0.05`) — **not yet wired**
 
-### Risk Management — Long-Term Holding
-- **3-tranche conviction model** (5% risk per tranche, max 15% position)
-- **Drawdown tolerance:** 30-40%
-- **Stop method:** thesis-based ("is my reason for buying still true?"), not price-based
-- **Take-profit:** 50% first target, 100% second target, ride to 200%+
-- **"Buy the dip" ≠ "averaging down"** — deliberate scale-in vs. denial
+### Stop-Loss & Take-Profit — ATR-Based (single source of truth per strategy)
 
-### Options-Specific
-- Alpaca OCC format: `ROOTYYMMDD[CP]STRIKE×1000`
-- Polygon OCC format: `O:ROOTYYMMDD[CP]STRIKE×1000` (zero-padded to 8 digits)
-- No `feed=` param on Alpaca option requests (raises error)
-- Paper tier returns `open_interest=None` sometimes
+All stops and targets are ATR(14) multiples, NOT percentages. The ATR source varies by timeframe:
 
-### Bid-Ask Spread Filter (single source of truth: `scripts/constants.py`)
-- **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `scripts/constants.py`, imported everywhere else
-- **Definition:** `spread_pct = (ask - bid) / mid` — symmetric around the midpoint
-- **Why 15%:** Wider spreads make the round-trip cost alone large enough to wipe a 3:1 R:R setup. Anything tighter than 15% mid is treated as liquid enough to trade
-- **Three-layer enforcement** (a stale signal must survive all three to execute):
-  1. **Scanner-time** — `fetch_alpaca_snapshot.select_best_option` rejects contracts above the cap before they ever land in `market.signal_alerts`. `detect_ema_crossover.py` additionally re-queries Alpaca after its DB pick and nullifies `option_symbol` if the live spread is too wide (signal still fires, just stock-only)
-  2. **Persistence** — `market.signal_alerts.spread_pct` (migration 031) stores the value at signal time; `alert_telegram` red-flags (🚩) anything above the cap in the Telegram Quote line so the user sees the wide spread before they tap Approve
-  3. **Preflight** — `process_approved.py` re-checks the spread against the same `MAX_SPREAD_PCT` import. Catches stale signals that widened between scan and approval
-- **Mid-price policy:** All option limit prices submitted to Alpaca (`execute_trade.py`) use `(bid + ask) / 2` rounded to a penny — never the ask. Crossing the spread on every entry leaks edge proportional to `spread_pct/2`; the mid is the fair price the market makers are happy to fill near
+| Strategy | Timeframe | Stop | TP1 | TP2 | R:R | ATR Source |
+|---|---|---|---|---|---|---|
+| setup_scanner / daily_signal | daily | ATR×2.0 | ATR×6.0 | ATR×10.0 | 3:1+ | Daily close |
+| ema_crossover (daily) | daily | ATR×2.0 | ATR×6.0 | ATR×10.0 | 3:1+ | Daily close |
+| ema_crossover_15m | 15m | ATR×1.5 | ATR×4.5 | ATR×7.5 | 3:1+ | 15m bars |
+| orb (Opening Range Breakout) | 5m | ATR×1.5 | ATR×4.5 | ATR×7.5 | 3:1+ | 5m bars |
+| liquidity_sweep | 5m | swept level ± ATR×0.05 | R:R ×3.0 | R:R ×5.0 | 3:1+ min | 5m bars |
+
+- **TP1 exits 50% of position** (`qty // 2` in `exit_monitor.py`)
+- **TP2** → day/long_term: full close; swing: trail-activate (2× ATR from entry)
+- **Liquidity sweep** uses a different model: stop = swept level ± tiny ATR buffer, targets = risk-per-share × R:R multiplier
+
+### Option Premium Stop
+- Close option position if mid ≤ **50% of entry price** (OPTION_PREMIUM_STOP_FRACTION = 0.50)
+- Enforced in `exit_monitor.py` check #2 and `process_approved.py` sizing
+- Applies to all strategies and modes — no per-strategy differentiation
+
+### Time Stops
+- **Day trades:** Flatten by 12:45 PDT (15 min before close) in `exit_monitor.py`
+- **Swing/long-term:** No time stop (held for days/weeks)
+- **Swing stale timeout:** Full close if open > 7 days and underlying hasn't moved > 0.5×ATR from entry
+- **Long-term stale timeout:** Full close if open > 30 days and underlying hasn't moved > 0.5×ATR from entry
+
+### DTE Rules
+- **Entry:** Minimum 30 DTE — enforced in all scanners, preflight, and option selection (`MIN_DTE = 30`)
+- **Exit:** Close if DTE ≤ 1 (`MIN_DTE_HOLDABLE = 1` in `exit_monitor.py`) — lets you hold until near-expiry
+- No intermediate "exit before DTE drops below entry-plan" check
 
 ### PDT Rule (Account < $25K) — ✅ ENFORCED IN `process_approved.py`
 - **3 day trades max in a rolling 5-business-day window**
@@ -181,20 +225,70 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - PDT lock resets when oldest trade in window ages past 5 business days
 
 ### Drawdown Halts — ✅ ENFORCED IN `process_approved.py`
-- **10% daily loss** → halt all new trades
-- **20% weekly loss** → halt all new trades
-- **30% monthly loss** → halt all new trades
+- **30% daily loss** → halt all new trades
+- **40% weekly loss** → halt all new trades
+- **50% monthly loss** → halt all new trades
+- Widened from 10/20/30% to fit options-trading volatility (50% per-contract premium stops) and paper-account experimentation
+- Baseline = latest `market.equity_snapshots` value (NOT the origin $100K)
+- Binary enforcement only (no graded yellow/red tiers) — see [[Risk Management Framework]] for the full 3-tier design (not yet implemented)
 
-### Greeks Strategy (see `02-Strategies/Greeks Strategy.md`)
-- **IV Rank < 25%** → option buying zone (cheap premium)
-- **IV Rank 25-50%** → directional plays, standard strikes
-- **IV Rank 50-75%** → cautious, consider spreads
-- **IV Rank > 75%** → NO naked buying (premium too expensive)
-- **Delta range:** 0.50–0.70 (swing), 0.70–0.80 (day), 0.60–0.80 (long-term)
-- **Reject |delta| < 0.50** (lottery ticket) or **> 0.90** (just buy shares)
-- **Theta budget:** day < 5%/premium, swing < 3%, long-term < 1%
-- **Gamma risk:** high near expiry (Law 5 backs this up), moderate for swing, low for LT
-- **Vanna:** monitor around IV regime changes and earnings — delta shifts when IV shifts
+### Unified Greeks Strategy (`shared/constants.py` — single source of truth)
+
+All greeks constants live in `shared/constants.py` — scanner, preflight, and execution all import from there so they can't drift.
+
+**Mode-keyed delta bands** (`MODE_DELTA_BANDS` + `MODE_DELTA_TARGETS`):
+- **Day:** 0.65–0.85, target 0.75 (share-like, tight timeframe — you want the contract to track the underlying closely)
+- **Swing:** 0.50–0.70, target 0.60 (moderate leverage — paying for extrinsic is OK when you have days-to-weeks)
+- **Long_term:** 0.65–0.85, target 0.75 (share-replacement — minimal theta bleed, behaves like synthetic shares with a built-in stop)
+- **Hard floor/ceiling:** |Δ| < 0.50 = lottery ticket (always reject), |Δ| > 0.90 = just buy shares (always reject)
+- **Risk_mode shift** in `select_best_option()`: conservative shifts target -0.05, aggressive shifts +0.05
+
+**Theta budget** (`THETA_BUDGETS` = `|θ|/mid` per mode):
+- **Day:** < 5% (high budget — held minutes-to-hours, theta barely compounds)
+- **Swing:** < 3% (moderate — held days, theta starts mattering)
+- **Long_term:** < 1% (tightest — held weeks-to-months, theta compounds aggressively)
+- Scanner: soft scoring penalty + hard reject at 2× budget
+- Preflight: hard gate at budget
+- Execution: re-verify after re-snapshot
+
+**IV regime recheck** (`classify_regime()` in `shared/constants.py`):
+- `buy_premium` (iv_rank < 25): ideal for buying options
+- `directional` (25 ≤ iv_rank < 50): OK for directional plays
+- `spreads_cautious` (50 ≤ iv_rank < 75): WARN — premium getting expensive, consider spreads
+- `sell_premium` (iv_rank ≥ 75): FAIL — naked long premium contraindicated, IV crush risk
+
+**Additional preflight IV checks:**
+- IV drift WARN: if |signal_iv_rank - current_iv_rank| > 15 since signal was created
+- IV outlier FAIL: if `market.iv_outliers` has direction='high' for today (3σ intraday spike guard)
+
+**Execution-time greeks refresh:**
+- `reselect_option_for_risk_mode()` now ALWAYS re-snapshots greeks (even for standard risk_mode — was previously a no-op)
+- Re-verifies delta within MODE_DELTA_BANDS and theta within THETA_BUDGETS
+- Returns None (skip execution) if re-verification fails
+
+See [[Greeks Strategy]] in Obsidian for the full design rationale.
+
+### Bid-Ask Spread Filter (single source of truth: `shared/constants.py`)
+- **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `shared/constants.py`, imported everywhere else
+- **Definition:** `spread_pct = (ask - bid) / mid` — symmetric around the midpoint
+- **Why 15%:** Wider spreads make the round-trip cost alone large enough to wipe a 3:1 R:R setup. Anything tighter than 15% mid is treated as liquid enough to trade
+- **Three-layer enforcement** (a stale signal must survive all three to execute):
+  1. **Scanner-time** — `shared/fetch_alpaca_snapshot.select_best_option` rejects contracts above the cap before they ever land in `market.signal_alerts`. `02_scanner/scripts/detect_ema_crossover.py` additionally re-queries Alpaca after its DB pick and nullifies `option_symbol` if the live spread is too wide (signal still fires, just stock-only)
+  2. **Persistence** — `market.signal_alerts.spread_pct` (migration 031) stores the value at signal time; `03_alert/scripts/alert_telegram.py` red-flags (🚩) anything above the cap in the Telegram Quote line so the user sees the wide spread before they tap Approve
+  3. **Preflight** — `04_approval/scripts/process_approved.py` re-checks the spread against the same `MAX_SPREAD_PCT` import. Catches stale signals that widened between scan and approval
+- **NOT re-verified at execution time** — execution uses mid-price limit, so stale-wide spreads simply won't fill (natural protection)
+- **Mid-price policy:** All option limit prices submitted to Alpaca (`execute_trade.py`) use `(bid + ask) / 2` rounded to a penny — never the ask. Crossing the spread on every entry leaks edge proportional to `spread_pct/2`; the mid is the fair price the market makers are happy to fill near
+
+### Exit Decision Tree (`06_exit/scripts/exit_monitor.py`)
+First match wins:
+1. **Stop breach** — underlying hits stop_price → full close
+2. **Premium stop** — option mid ≤ 50% of entry → full close (options only)
+3. **Trail stop** — if trail_stop_price set (after TP2 in swing) → close on breach / ratchet tighter
+4. **TP2** — day/long_term: full close; swing: trail-activate (2× ATR from entry)
+5. **TP1** — 50% partial close (`qty // 2`), one-shot (sticky `tp1_hit_at`)
+6. **Stale position** — swing > 7 days or long_term > 30 days with underlying within 0.5×ATR of entry → full close
+7. **Time stop** — day-trade ≥ 12:45 PDT → full close
+8. **DTE ≤ 1** — full close (Law 5)
 
 ## 🔐 MANDATORY: Secrets & Credentials
 
@@ -202,8 +296,8 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 
 ### Rules
 1. **All credentials live in `.env.*` files** — `.env.db`, `.env.polygon`, `.env.alpaca`, `.env.n8n` (gitignored)
-2. **Scripts source `.env.*` automatically** — use the `load_env()` pattern (see any `scripts/compute_*.py`)
-3. **Shell helpers source `.env.*` automatically** — use `scripts/n8n_api.sh` for all n8n REST API calls (never raw curl with hardcoded keys)
+2. **Scripts source `.env.*` automatically** — use the `load_env()` pattern (see any `01_data/scripts/compute_*.py`, or the helper exported by `shared/constants.py`)
+3. **Shell helpers source `.env.*` automatically** — use `admin/scripts/n8n_api.sh` for all n8n REST API calls (never raw curl with hardcoded keys)
 4. **Docker compose uses `env_file:` directives** — never put secrets in `environment:` blocks
 5. **`.env.*.example` files** are committed with placeholder values; real keys are gitignored
 6. **If a key is invalidated** (e.g., after n8n restart) — regenerate in the service UI, update `.env.*`, restart
@@ -216,7 +310,7 @@ psql -U clawstreet -d clawstreet -h localhost -p 5432 -w ...
 
 ### ✅ RIGHT
 ```bash
-./scripts/n8n_api.sh list          # sources key from .env.n8n
+./admin/scripts/n8n_api.sh list    # sources key from .env.n8n
 source .env.db && psql ...         # or use load_env() in Python
 ```
 
@@ -232,6 +326,26 @@ source .env.db && psql ...         # or use load_env() in Python
 - Use `polygon-api-client` SDK for Polygon.io calls
 - **See 🔐 MANDATORY section above** — the "never hardcoded" line is backed by the full skill: `.claude/skills/secrets-management.md`
 
+## Docker / runtime path mapping
+
+`docker-compose.yml` bind-mounts each layer read-only into the worker container at the same path. n8n cron jobs invoke scripts via `docker exec clawstreet-worker python /app/<layer>/scripts/<name>.py`:
+
+| Host path | Container path |
+|-----------|----------------|
+| `./01_data` | `/app/01_data` |
+| `./02_scanner` | `/app/02_scanner` |
+| `./03_alert` | `/app/03_alert` |
+| `./04_approval` | `/app/04_approval` |
+| `./05_execution` | `/app/05_execution` |
+| `./06_exit` | `/app/06_exit` |
+| `./07_reconcile` | `/app/07_reconcile` |
+| `./shared` | `/app/shared` |
+| `./admin` | `/app/admin` |
+| `./config` | `/app/config` |
+| `./db/init` | `/app/db/init` |
+
+`PYTHONPATH=/app` is set on the worker; scripts that need `shared/` insert `parents[2] / "shared"` into `sys.path` so they work both inside the container and from the local venv.
+
 ## Project Structure
 
 ```
@@ -243,7 +357,8 @@ ClawStreetBot/
 ├── .venv/                  ← gitignored Python venv
 ├── config/
 │   ├── rss_feeds.yml           ← RSS feeds + Reddit subs for scraper
-│   └── watchlist.yml           ← YAML source-of-truth for tracked symbols
+│   ├── watchlist.yml           ← YAML source-of-truth for tracked symbols
+│   └── market_hours.yml        ← single source of truth for session/cron windows
 ├── db/init/                      ← lex order = Docker init run order
 │   ├── 001_init_databases.sql
 │   ├── 002_create_tables.sql
@@ -266,84 +381,108 @@ ClawStreetBot/
 │   ├── 023_risk_mode.sql            ← risk_mode column on signal_alerts (4-button keyboard)
 │   ├── 024_position_tp1_partial.sql ← TP1 50% partial close columns (tp1_sell_order_id, tp1_filled_*)
 │   ├── 025_equity_snapshots.sql     ← daily equity snapshots for drawdown denominator
-│   └── 026_signal_alerts_unique.sql ← unique constraint on signal_alerts (dedup)
+│   ├── 026_signal_alerts_unique.sql ← unique constraint on signal_alerts (dedup)
 │   ├── 027_positions_alpaca_order_id.sql ← alpaca_order_id on trading.positions + partial UNIQUE index
 │   ├── 028_error_notified.sql            ← error_notified_at on signal_alerts (error surfacing tracker)
 │   ├── 029_position_trail_stop.sql        ← trail_stop_price on trading.positions (trailing stop after TP2)
 │   └── 030_status_check_constraints.sql  ← CHECK constraints on signal_alerts.status and trading.positions.status (enum hardening)
+├── n8n/migrations/            ← out-of-band schema patches applied via psql (e.g., 031_spread_pct_column.sql)
 ├── docker/
 │   ├── worker/Dockerfile       ← Python 3.11 worker (n8n execs into this)
 │   └── n8n/Dockerfile          ← n8n + wollomatic socket-proxy for secure exec
-├── n8n/
-│   └── workflows/              ← Source-of-truth JSON for n8n workflows
-│       ├── watchlist_sync.json         ← every 5 min
-│       ├── backfill_pending.json       ← every 5 min (backfill_runner.py per pending symbol)
-│       ├── alpaca_ohlcv_daily.json     ← Mon-Fri 15:00 PDT (1d bars w/ trade_count, VWAP)
-│       ├── alpaca_ohlcv_intraday.json ← Mon-Fri hourly :05 (7-13 PDT) (15m + 5m bars)
-│       ├── alpaca_options_daily.json   ← Mon-Fri 14:55 PDT (options + greeks + bid/ask)
-│       ├── derived_daily.json          ← Mon-Fri 15:30 PDT (7 nodes)
-│       ├── fundamentals_daily.json     ← Mon-Fri 16:00 PDT
-│       ├── rss_news_scanner.json       ← Mon-Fri every 30m 6-13 PDT
-│       ├── signals_daily.json          ← Mon-Fri 16:30 PDT (includes daily backtest)
-│       ├── intraday_signal_5m.json     ← Mon-Fri every 5 min 6-12 PDT
-│       ├── ema_crossover_detector.json ← Mon-Fri 6:00 PDT pre-market (daily EMA 9/21 detect + alert, supplementary)
-│       ├── ema_crossover_15m.json      ← Mon-Fri every 15min 6-12 PDT (15m cross + snapshot, supplementary)
-│       ├── setup_scanner.json           ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY — 8-gate BUY signal scanner)
-│       ├── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT (liquidity sweep scanner)
-│       ├── orb_detector.json               ← ★ Mon-Fri every 5min 6-13 PDT (ORB scanner: opening range breakout on 5m bars)
-│       ├── alert_dispatch.json          ← ★ Mon-Fri every 1min 6-13 PDT (alert_telegram.py — dispatches unsent rows)
-│       ├── execute_trade.json            ← Mon-Fri every 1min 6-13 PDT (approved → Alpaca paper submit)
-│       ├── reconcile_orders.json         ← Mon-Fri every 1min 6-14 PDT (extra hour past close to catch late fills) (Alpaca fill state → trading.positions)
-│       ├── reconcile_exits.json          ← Mon-Fri every 1min 6-14 PDT (extra hour past close) (SELL fill → closed + realized_pnl)
-│       ├── exit_monitor.json             ← Mon-Fri every 5min 6-13 PDT (TP/SL/time-stop exit decision)
-│       ├── equity_snapshot_daily.json    ← Mon-Fri 14:30 PDT (snapshot equity for drawdown denominator)
-│       ├── trend_daily.json            ← Mon-Fri 11:00 PDT (trend detection + status)
-│       └── regime_weekly.json          ← Sat 8:00 PDT (classify + optimize + compare)
-├── scripts/
-│   ├── setup_watchlist.py      ← Sync config/watchlist.yml → Alpaca + Postgres
-│   ├── backfill_symbol.py      ← Full ingestion chain for one symbol
-│   ├── backfill_runner.py      ← n8n wrapper: queries pending symbols, runs backfill_symbol.py
-│   ├── explore_data.py
-│   ├── explore_options.py
-│   ├── options_analysis.py
-│   ├── ingest_alpaca_ohlcv.py        ← ★ Alpaca OHLCV ingestion (1d/15m/5m) with trade_count + VWAP
-│   ├── ingest_alpaca_options.py       ← ★ Alpaca options chains + greeks + bid/ask
-│   ├── fetch_alpaca_snapshot.py        ← ★ Real-time stock + best option snapshot at signal time; DELTA_BANDS dict (conservative 0.55–0.65, standard 0.50–0.70, aggressive 0.40–0.80); reselect_option_for_risk_mode() re-queries Alpaca and persists new contract
-│   ├── ingest_polygon_ohlcv.py        ← DECOMMISSIONED (replaced by ingest_alpaca_ohlcv.py)
-│   ├── ingest_polygon_options.py      ← DECOMMISSIONED (replaced by ingest_alpaca_options.py)
-│   ├── ingest_polygon_fundamentals.py ← Phase 2: Fundamentals ingestion (still active)
-│   ├── ingest_rss_news.py              ← Phase 2: RSS + Reddit scraper
-│   ├── compute_iv_rank.py             ← Phase 2: IV rank calculation
-│   ├── compute_realized_vol.py        ← Phase 2: Realized volatility (20d/5d + IV-RV spread)
-│   ├── compute_gex_dex.py             ← Phase 2: GEX/DEX computation (strike/expiry + overview)
-│   ├── compute_technical_indicators.py ← Phase 2: EMA/RSI/MACD/ATR/VWAP/Bollinger
-│   ├── compute_greeks_filter.py        ← Phase 2: IV regime + delta/theta-budget gating per contract
-│   ├── compute_iv_outliers.py          ← Phase 2: 3σ z-score IV outlier flags
-│   ├── n8n_api.sh                      ← n8n REST API helper (sources .env.n8n)
-│   ├── generate_signals.py            ← Phase 2: Composite signal scoring (6-factor, 0-100)
-│   ├── intraday_signal.py             ← 5-min intraday tech re-score + threshold alerts (dual-write: trading.signals + market.signal_alerts)
-│   ├── detect_ema_crossover.py        ← Phase 5A: Daily EMA 9/21 crossover + ADX>25 detector (supplementary)
-│   ├── detect_ema_crossover_15m.py    ← Phase 5A: 15m EMA crossover + real-time Alpaca snapshot (supplementary)
-│   ├── scan_setups.py                  ← ★ PRIMARY: 8-gate BUY signal scanner (trend, ADX, RSI, IV rank, IV-RV, premium, DTE, R:R + volume_ratio, trend context, GEX)
-│   ├── alert_telegram.py              ← Phase 5A+5C+5D+5E: Telegram dispatcher (entry alerts with 4-button approval keyboard + 'Strategy:' header line); expire_stale_new() + notify_errors() on every cron tick; per-row commit in notify_errors prevents rollback on Telegram outage; format_exit_notification() + send_exit_notification() helpers for exit-fill push messages
-│   ├── telegram_callback_listener.py  ← Phase 5B: Long-poll listener for Telegram callback queries (approve/deny)
-│   ├── compute_trend.py              ← Phase 4: Multi-timeframe trend detection (micro/inter/primary)
-│   ├── backfill_signals.py           ← Phase 4: Historical signal backfill across 501 days
-│   ├── backfill_historical_iv.py      ← Phase 2: Historical IV backfill for IV rank calculation
-│   ├── backtest.py                    ← Phase 3: Backtesting engine
-│   ├── regime_backtest.py            ← Phase 4: Regime classification + dynamic weights + compare
-│   ├── backtest_liquidity.py         ← Phase 5B: Liquidity sweep v1 backtest (FVG + external, superseded by v3)
-│   ├── backtest_liquidity_v2.py      ← Phase 5B: Liquidity sweep v2 backtest (external only, superseded by v3)
-│   ├── backtest_liquidity_v3.py      ← Phase 5B: Liquidity sweep v3 — refinement test framework (close-beyond = PF 1.56)
-│   ├── diagnose_liquidity_backtest.py← Phase 5B: v1 diagnostics (same-bar dups, after-hours, FVG noise)
-│   └── detect_liquidity_sweep.py     ← ★ Phase 5B: LIVE liquidity sweep scanner (5m + daily, close-beyond, Telegram alerts)
-│   ├── detect_orb.py                 ← ★ Phase 5F: ORB (Opening Range Breakout) scanner — 5m bars, strategy='orb', ATR-based intraday stops, writes signal_alerts
-│   ├── execute_trade.py              ← Phase 5B+5C: Alpaca paper order submission; bracket orders (order_class=BRACKET) for non-option stock entries with stop/tp2; reselect_option_for_risk_mode() for conservative/aggressive; cancel_open_orders_for_symbol before exit_monitor closes; sets executed_at=NOW() BEFORE Alpaca submit to prevent orphan rows; dry-run by default, --confirm to submit
-│   ├── reconcile_orders.py           ← Phase 5B+5C+5D: Polls Alpaca for BUY fill state → trading.positions; CANCEL branch writes position with status='cancelled' + partial-fill qty; recover_orphan_executing() catches NULL alpaca_order_id AND NULL executed_at
-│   ├── reconcile_exits.py            ← Phase 5B+5D+5E: Polls Alpaca for SELL fill state → closed + realized_pnl; FOR UPDATE OF p SKIP LOCKED + one-row-at-a-time fetch (concurrency safe); recover_orphan_exit_sells() scans Alpaca for orphan SELL orders; partial_close_sell() for partial fills; fires Telegram exit notification after every close commit
-│   ├── exit_monitor.py              ← Phase 5B+5C+5D: TP/SL/trailing-stop/time-stop monitor; fails position with status='error' on missing signal row (no silent default-to-bullish); TRAIL_ACTIVATE + TRAIL_UPDATE for swing after TP2, SELECT FOR UPDATE SKIP LOCKED, seen_ids livelock guard
-│   ├── process_approved.py          ← Phase 5B+5D: Pre-flight checks — PDT counter, drawdown halts (missing equity snapshot = FAIL, not WARN), risk_mode → position sizing
-│   ├── snapshot_equity.py           ← Phase 5B: Alpaca equity snapshot for drawdown denominator
+│
+├── 01_data/                    ← LAYER 1: Data ingestion + derived analytics
+│   ├── scripts/
+│   │   ├── setup_watchlist.py            ← Sync config/watchlist.yml → Alpaca + Postgres
+│   │   ├── ingest_alpaca_ohlcv.py        ← ★ OHLCV (1d/15m/5m) with trade_count + VWAP
+│   │   ├── ingest_alpaca_options.py      ← ★ Options chains + greeks + bid/ask
+│   │   ├── ingest_alpaca_iv.py           ← Implied volatility snapshots
+│   │   ├── ingest_yfinance_fundamentals.py ← Fundamentals (yfinance, replaced Polygon)
+│   │   ├── compute_iv_rank.py            ← IV rank calculation
+│   │   ├── compute_realized_vol.py       ← Realized volatility (20d/5d + IV-RV spread)
+│   │   ├── compute_gex_dex.py            ← GEX/DEX computation (strike/expiry + overview)
+│   │   ├── compute_technical_indicators.py ← EMA/RSI/MACD/ATR/VWAP/Bollinger
+│   │   ├── compute_greeks_filter.py      ← IV regime + delta/theta-budget gating per contract
+│   │   ├── compute_iv_outliers.py        ← 3σ z-score IV outlier flags
+│   │   └── compute_trend.py              ← Multi-timeframe trend (micro/inter/primary)
+│   └── n8n/
+│       ├── watchlist_sync.json           ← every 5 min
+│       ├── backfill_pending.json         ← every 5 min (admin/scripts/backfill_runner.py)
+│       ├── alpaca_ohlcv_daily.json       ← Mon-Fri 15:00 PDT (1d bars)
+│       ├── alpaca_ohlcv_intraday.json    ← Mon-Fri hourly :05 (7-13 PDT) (15m + 5m)
+│       ├── alpaca_options_daily.json     ← Mon-Fri 14:55 PDT
+│       ├── derived_daily.json            ← Mon-Fri 15:30 PDT (7 nodes)
+│       ├── fundamentals_weekly.json      ← weekly fundamentals refresh
+│       └── trend_daily.json              ← Mon-Fri 11:00 PDT
+│
+├── 02_scanner/                 ← LAYER 2: Pattern detection (write signal_alerts.status='new')
+│   ├── scripts/
+│   │   ├── scan_setups.py                ← ★ PRIMARY: 8-gate BUY signal scanner
+│   │   ├── detect_ema_crossover.py       ← Daily EMA 9/21 + ADX>25 (supplementary)
+│   │   ├── detect_ema_crossover_15m.py   ← 15m EMA cross + real-time Alpaca snapshot
+│   │   ├── detect_orb.py                 ← ★ ORB (Opening Range Breakout) scanner — strategy='orb'
+│   │   └── detect_liquidity_sweep.py     ← ★ LIVE liquidity sweep scanner (5m + daily, close-beyond)
+│   └── n8n/
+│       ├── setup_scanner.json            ← ★ Mon-Fri every 15min 6-12 PDT (PRIMARY)
+│       ├── ema_crossover_detector.json   ← Mon-Fri 6:00 PDT pre-market (supplementary)
+│       ├── ema_crossover_15m.json        ← Mon-Fri every 15min 6-12 PDT (supplementary)
+│       ├── orb_detector.json             ← ★ Mon-Fri every 5min 6-13 PDT (ORB)
+│       └── liquidity_sweep.json          ← ★ Mon-Fri every 5min 6-12 PDT
+│
+├── 03_alert/                   ← LAYER 3: Telegram dispatch + exit-fill push messages
+│   ├── scripts/
+│   │   └── alert_telegram.py             ← SOLE Telegram dispatcher; expire_stale_new + notify_errors
+│   └── n8n/
+│       └── alert_dispatch.json           ← ★ Mon-Fri every 1min 6-13 PDT
+│
+├── 04_approval/                ← LAYER 4: Approval + pre-flight
+│   ├── scripts/
+│   │   ├── generate_signals.py       ← 6-factor composite signal scoring (0-100)
+│   │   └── process_approved.py       ← Drawdown halts + PDT + pre-flight → approve/deny
+│   └── n8n/
+│       ├── signals_daily.json        ← Mon-Fri 16:30 PDT
+│       └── process_approved.json     ← Mon-Fri every 1min 6-13 PDT
+│
+├── 05_execution/               ← LAYER 5: Alpaca paper submission
+│   ├── scripts/
+│   │   ├── execute_trade.py          ← Alpaca order submit; bracket for stock, mid-price for options
+│   │   └── snapshot_equity.py        ← Daily equity snapshot (drawdown denominator)
+│   └── n8n/
+│       ├── execute_trade.json        ← Mon-Fri every 1min 6-13 PDT
+│       └── equity_snapshot_daily.json ← Mon-Fri 14:30 PDT
+│
+├── 06_exit/                    ← LAYER 6: Exit decision tree
+│   ├── scripts/
+│   │   └── exit_monitor.py           ← TP/SL/trail-stop/time-stop; trail after TP2 for swing
+│   └── n8n/
+│       └── exit_monitor.json         ← Mon-Fri every 5min 6-13 PDT
+│
+├── 07_reconcile/               ← LAYER 7: Fill reconciliation
+│   ├── scripts/
+│   │   ├── reconcile_orders.py       ← BUY fill → trading.positions
+│   │   └── reconcile_exits.py       ← SELL fill → close + realized P&L + exit push notification
+│   └── n8n/
+│       ├── reconcile_orders.json     ← Mon-Fri every 1min 6-14 PDT
+│       └── reconcile_exits.json      ← Mon-Fri every 1min 6-14 PDT
+│
+├── shared/                     ← Cross-layer Python utilities (imported by 02_scanner, 03_alert, etc.)
+│   ├── constants.py                      ← Market hours, session times, load_env(), is_market_*(), MODE_DELTA_BANDS, THETA_BUDGETS, classify_regime()
+│   └── fetch_alpaca_snapshot.py          ← ★ Real-time stock + best option snapshot; mode-keyed delta selection; theta scoring
+│
+├── admin/                      ← Operational tooling (not part of the live pipeline)
+│   ├── scripts/
+│   │   ├── backfill_symbol.py            ← Full ingestion chain for one symbol (calls 01_data/scripts/*)
+│   │   ├── backfill_runner.py            ← n8n wrapper: query pending symbols + run backfill_symbol.py per symbol
+│   │   └── n8n_api.sh                    ← n8n REST API helper (sources .env.n8n)
+│
+├── archive/                    ← Decommissioned + v1-pipeline staged for v2 rebuild
+│   ├── v1-pipeline/                      ← intraday_signal, alert_telegram (old), execute_trade, exit_monitor, process_approved, reconcile_orders, reconcile_exits, telegram_callback_listener, generate_signals
+│   ├── v1-dependents/                    ← snapshot_equity, backfill_signals (+ equity_snapshot_daily.json)
+│   ├── polygon-decommissioned/           ← ingest_polygon_ohlcv, ingest_polygon_options, ingest_polygon_fundamentals, backfill_historical_iv
+│   ├── explorers/                        ← explore_data, explore_options, options_analysis, ingest_rss_news
+│   ├── backtests/                        ← backtest, backtest_liquidity*, diagnose_liquidity_backtest, regime_backtest
+│   └── n8n-workflows/                    ← old workflow JSONs paired with archived scripts
+│
 └── obsidian/vault/         ← knowledge base (30 notes across 8 folders)
     ├── Home.md
     ├── Project Roadmap.md
@@ -359,7 +498,7 @@ ClawStreetBot/
 
 ## Current Phase
 
-All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execution loop) shipped. Phase 5F (ORB scanner) shipped.**
+All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execution loop) shipped in v1, now ported to v2 layered structure. Phase 5F (ORB scanner) shipped. Layers 01-07 all populated with scripts + n8n workflows.**
 
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected
@@ -370,56 +509,57 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [x] Backtesting architecture documented (data pipeline, schema, analysis)
 - [x] Postgres MCP server configured for Claude Code
 - [x] Polygon.io credentials verified (REST API + Flat Files S3)
-- [x] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres)
+- [x] Polygon.io ingestion scripts (OHLCV, greeks, fundamentals → Postgres) — now archived
 - [x] Alpaca data migration — OHLCV + options ingestion moved from Polygon to Alpaca (free tier)
-- [x] Alpaca OHLCV ingestion (`ingest_alpaca_ohlcv.py`) — 1d/15m/5m with trade_count + VWAP
-- [x] Alpaca options ingestion (`ingest_alpaca_options.py`) — chains + greeks + bid/ask
-- [x] Real-time snapshot enrichment (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
-- [x] 15m EMA crossover detector (`detect_ema_crossover_15m.py`) — intraday signals with live option data
-- [x] n8n workflows migrated — alpaca_ohlcv_daily, alpaca_ohlcv_intraday, alpaca_options_daily (active); old Polygon ingestion JSONs deleted from repo
+- [x] Alpaca OHLCV ingestion (`01_data/scripts/ingest_alpaca_ohlcv.py`) — 1d/15m/5m with trade_count + VWAP
+- [x] Alpaca options ingestion (`01_data/scripts/ingest_alpaca_options.py`) — chains + greeks + bid/ask
+- [x] Real-time snapshot enrichment (`shared/fetch_alpaca_snapshot.py`) — stock price + best option at signal time
+- [x] 15m EMA crossover detector (`02_scanner/scripts/detect_ema_crossover_15m.py`) — intraday signals with live option data
+- [x] n8n workflows migrated — `01_data/n8n/alpaca_ohlcv_daily`, `alpaca_ohlcv_intraday`, `alpaca_options_daily` (active); old Polygon ingestion JSONs in `archive/`
 - [x] DB migrations — trade_count/vwap on ohlcv, bid/ask on greeks
 - [x] IV rank / realized vol / GEX-DEX computed
 - [x] Technical indicators (EMA, RSI, MACD, ATR, VWAP, Bollinger)
 - [x] Greeks filtering engine (IV regime, delta, theta-budget per contract)
 - [x] IV outlier detection (3σ z-score)
-- [x] Fundamentals ingestion (Polygon quarterly financials, 98 periods)
-- [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts)
-- [x] Composite signal scoring engine (6-factor, 0-100)
-- [x] n8n scheduler — **23 active workflows** (ingestion, compute, signal detection, alert dispatch, execution, reconciliation, exit monitoring, equity snapshots); decommissioned Polygon JSONs deleted; all 23 currently active, 0 inactive
-- [x] n8n_api.sh helper + NODES_EXCLUDE=[] fix for ExecuteCommand
+- [x] Fundamentals ingestion (98 periods)
+- [x] RSS/News + Reddit scraper pipeline (69 articles, 75 posts) — script archived
+- [x] Composite signal scoring engine (6-factor, 0-100) — currently archived under `v1-pipeline`
+- [x] n8n scheduler — layered workflows in `01_data/n8n`, `02_scanner/n8n`, `03_alert/n8n`; archived v1 workflows in `archive/n8n-workflows/`
+- [x] `admin/scripts/n8n_api.sh` helper + NODES_EXCLUDE=[] fix for ExecuteCommand
 - [x] Docker proxy hardened (allowHEAD + allowGET for exec/{id}/json)
 - [x] All cron schedules converted from ET to PDT (America/Los_Angeles)
 - [x] Secrets management skill (NEVER hardcode API keys)
 - [x] Watchlist lifecycle (YAML source-of-truth, soft-deactivate, backfill chain)
-- [x] Backtesting engine (day/swing/long_term with user trading rules, ATR-based SL/TP, partial exits, PDT tracking)
-- [x] 5-minute intraday signal refresh (re-scores tech from 5m bars, threshold alerts)
+- [x] Backtesting engine (day/swing/long_term with user trading rules, ATR-based SL/TP, partial exits, PDT tracking) — archived
+- [x] 5-minute intraday signal refresh (re-scores tech from 5m bars, threshold alerts) — archived
 - [x] Market regime classifier (bull/bear/transition via SPY SMA + VIX + breadth, 501 days)
 - [x] Regime-conditional factor analysis (per-regime factor-to-return correlations)
 - [x] Dynamic weight optimizer (regime-specific scoring weights)
 - [x] Multi-timeframe trend detection (micro/intermediate/primary via EMA+ADX+price structure)
 - [x] Historical signal backfill (7,908 signals across 501 days)
 - [x] Trend-aware intraday adjustments (signal + aligned trend = boost, counter-trend = penalty)
+- [x] **Layered refactor** — flat `scripts/` directory split into `01_data/`, `02_scanner/`, `03_alert/`, `shared/`, `admin/`; n8n workflows colocated with their layer; docker-compose mounts per-layer
 
 ### Phase 5A: Signal Detection ✅ (complete)
-- [x] EMA crossover detector (`detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes `market.signal_alerts`
+- [x] EMA crossover detector (`02_scanner/scripts/detect_ema_crossover.py`) — 9/21 cross + ADX>25, writes `market.signal_alerts`
 - [x] Signal alerts table (`015_signal_alerts.sql`) — full trade plan storage (entry, stops, TP, trend context, greeks, invalidation)
-- [x] Telegram alert sender (`alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
-- [x] Backfill runner (`backfill_runner.py`) — n8n wrapper replacing inline shell in backfill_pending workflow
+- [x] Telegram alert sender (`03_alert/scripts/alert_telegram.py`) — strategy-specific trade alerts with bid/ask/mid from Alpaca snapshot
+- [x] Backfill runner (`admin/scripts/backfill_runner.py`) — n8n wrapper replacing inline shell in backfill_pending workflow
 - [x] **Alpaca data migration** — OHLCV + options moved from Polygon ($108/mo) to Alpaca (free)
-- [x] **15m EMA crossover detector** (`detect_ema_crossover_15m.py`) — intraday signals + real-time option enrichment
-- [x] **Real-time snapshot** (`fetch_alpaca_snapshot.py`) — stock price + best option at signal time
+- [x] **15m EMA crossover detector** (`02_scanner/scripts/detect_ema_crossover_15m.py`) — intraday signals + real-time option enrichment
+- [x] **Real-time snapshot** (`shared/fetch_alpaca_snapshot.py`) — stock price + best option at signal time
 - [x] **DB migrations** — `017_ohlcv_alpaca_columns.sql` (trade_count, vwap), `018_alpaca_options_columns.sql` (bid, ask)
-- [x] **★ Setup scanner** (`scan_setups.py`) — 8-gate BUY signal scanner; PRIMARY alert mechanism (EMA detectors are now supplementary)
+- [x] **★ Setup scanner** (`02_scanner/scripts/scan_setups.py`) — 8-gate BUY signal scanner; PRIMARY alert mechanism (EMA detectors are now supplementary)
 - [x] **★ n8n workflow `setup_scanner`** — runs every 15min during market hours (Mon–Fri 6–12 PDT); silence = no signal
-- [x] **★ Liquidity sweep scanner** (`detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
-- [x] **★ Liquidity sweep backtest** (`backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = THE key filter
-- [x] **ORB breakout detector** (`detect_orb.py`) — opening range on first 15m bar, breakout on 5m close-beyond, external-level filter, ATR-based intraday stops (strategy='orb', writes signal_alerts)
+- [x] **★ Liquidity sweep scanner** (`02_scanner/scripts/detect_liquidity_sweep.py`) — 5m + daily, close-beyond confirmation (PF 1.56), Telegram alerts
+- [x] **★ Liquidity sweep backtest** (`archive/backtests/backtest_liquidity_v3.py`) — 6-month, 16 symbols; close-beyond = THE key filter
+- [x] **ORB breakout detector** (`02_scanner/scripts/detect_orb.py`) — opening range on first 15m bar, breakout on 5m close-beyond, external-level filter, ATR-based intraday stops (strategy='orb', writes signal_alerts)
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — 5% pullback + thesis check + 3-tranche plan
 - [ ] Options chain filter (`filter_options.py`) — DTE≥30, delta range, theta budget
 
-### Phase 5B: Exit Monitors & Alert Delivery ✅ (shipped)
+### Phase 5B: Exit Monitors & Alert Delivery ✅ (shipped in v1; layers 04–07 staged in `archive/v1-pipeline/` pending v2 port)
 - [x] Pre-flight checks (`process_approved.py`) — Laws, PDT (projected, business-day-aware), drawdown halts (period-start denominator + unrealized via Alpaca equity)
-- [x] Telegram alert dispatch (`alert_telegram.py` + `alert_dispatch` n8n cron) — 4-button approval keyboard (Approve / Conservative / Aggressive / Deny)
+- [x] Telegram alert dispatch (`03_alert/scripts/alert_telegram.py` + `alert_dispatch` n8n cron) — 4-button approval keyboard (Approve / Conservative / Aggressive / Deny)
 - [x] Telegram callback listener (`telegram_callback_listener.py`) — long-poll daemon, writes `risk_mode`
 - [x] Alpaca paper execution (`execute_trade.py`) — `client_order_id`-deduped submits, risk_mode-aware sizing; sets `executed_at=NOW()` before Alpaca submit to prevent orphan rows
 - [x] BUY-fill reconciliation (`reconcile_orders.py`) — `FOR UPDATE SKIP LOCKED`, per-row commit, partial UNIQUE indexes on `alpaca_order_id` / `position_id`; CANCEL branch writes `position` with `status='cancelled'` + partial-fill qty; `recover_orphan_executing()` catches both NULL `alpaca_order_id` and NULL `executed_at`
@@ -428,7 +568,7 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [x] SELL-fill reconciliation (`reconcile_exits.py`) — closes position, writes `realized_pnl`, flips signal_alerts to `status='exited'`; `FOR UPDATE OF p SKIP LOCKED` + one-row-at-a-time fetch (concurrency safe); `recover_orphan_sells()` scans Alpaca for orphan SELLs; `partial_close_sell()` for partial fills
 - [x] Daily equity snapshots (`snapshot_equity.py` + `equity_snapshot_daily` n8n cron) — drawdown halt denominator; missing snapshot = FAIL in `process_approved.py` (not WARN)
 - [x] DB migrations: 020 alert lifecycle, 021 position exit columns, 022 composite_score, 023 risk_mode, 024 tp1 partial, 025 equity_snapshots, 026 signal_alerts unique, 027 positions alpaca_order_id, 028 error_notified, 029 position trail_stop_price, 030 status check constraints
-- [x] n8n workflows: `alert_dispatch`, `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily`
+- [x] n8n workflows: `alert_dispatch` (now in `03_alert/n8n/`); `execute_trade`, `reconcile_orders`, `reconcile_exits`, `exit_monitor`, `equity_snapshot_daily` (currently in `archive/n8n-workflows/`, to move into 04–07 on rebuild)
 
 #### PR #14 — Third-Pass Audit Fixes
 - **CRITICAL** — `exit_monitor` livelock: `fetch_open_position_locked` re-selected the same HOLD row every iteration; fixed with `seen_ids` list passed as `p.id <> ALL(%s)` exclusion
@@ -460,9 +600,9 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - **C7 — `notify_errors` batch-commit rolled back on Telegram outage** — exception mid-loop rolled back all progress, re-notifying already-surfaced errors on retry; fixed with per-row commit in `alert_telegram.py`
 
 ### Phase 5C: Backlog (deferred)
-- [x] ~~**ORB breakout detector** (`detect_orb.py`)~~ → **Done in PRs #20-22** — opening range on first 15m bar, 5m close-beyond breakout, external-level filter, ATR-based intraday stops; `orb_detector.json` n8n workflow every 5min 6-13 PDT; `format_orb_alert()` in alert_telegram.py; DB env-var fallback fix; full-session scan window (not last 3 bars)
+- [x] ~~**ORB breakout detector** (`02_scanner/scripts/detect_orb.py`)~~ → **Done in PRs #20-22** — opening range on first 15m bar, 5m close-beyond breakout, external-level filter, ATR-based intraday stops; `orb_detector.json` n8n workflow every 5min 6-13 PDT; `format_orb_alert()` in alert_telegram.py; DB env-var fallback fix; full-session scan window (not last 3 bars)
 - [ ] Buy the 5% Dip detector (`detect_dip.py`) — pullback + thesis check + 3-tranche scale-in
-- [x] ~~Per-risk-mode option selection — currently the scanner binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)~~ → **Done in PR #19** (DELTA_BANDS in fetch_alpaca_snapshot.py + reselect_option_for_risk_mode() in execute_trade.py)
+- [x] ~~Per-risk-mode option selection — currently the scanner binds a 0.50-0.70 delta contract at scan time, before the user picks Conservative/Aggressive (audit M1)~~ → **Done in PR #19** (DELTA_BANDS in `shared/fetch_alpaca_snapshot.py` + reselect_option_for_risk_mode() in execute_trade.py)
 - [x] ~~Bracket orders for stock entries on Alpaca — current entries are naked, exits rely 100% on `exit_monitor` uptime (audit H7)~~ → **Done in PR #19** (order_class=BRACKET for non-option stock entries with stop_loss + take_profit; cancel_open_orders_for_symbol before exit_monitor closes)
 - [x] ~~Trailing stop after TP2 for swing mode — currently TP2 full-closes~~ → **Done in PR #16** (TRAIL_ACTIVATE + TRAIL_UPDATE + migration 029)
 - [ ] Risk alerts (`alert_risk.py`) — drawdown halt, PDT warning, position breach push notifications
@@ -476,14 +616,14 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 
 #### PR #19 — Status-Check Constraints, Risk-Mode Delta Bands, Bracket Orders (M1 + H7)
 - **CHECK constraints on status enums** — migration `030_status_check_constraints.sql` adds `signal_alerts_status_check` (9 valid values) and re-states `positions_status_check` (open/closed/cancelled). Typos like `'exeucting'` or `'fllied'` now fail at INSERT/UPDATE instead of silently corrupting the lifecycle state machine. Pre-flight repair included (rejected→denied, closed→exited).
-- **Per-risk-mode delta bands (M1)** — `DELTA_BANDS` dict in `fetch_alpaca_snapshot.py` maps conservative (0.55–0.65, aim 0.60), standard (0.50–0.70, aim 0.60), aggressive (0.40–0.80, aim 0.50). `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca for the best contract in the user-chosen band and overwrites the signal's option fields on `market.signal_alerts`. Standard is no-op (scanner already picked in that band).
+- **Per-risk-mode delta bands (M1)** — `DELTA_BANDS` dict in `shared/fetch_alpaca_snapshot.py` maps conservative (0.55–0.65, aim 0.60), standard (0.50–0.70, aim 0.60), aggressive (0.40–0.80, aim 0.50). `reselect_option_for_risk_mode()` in `execute_trade.py` re-queries Alpaca for the best contract in the user-chosen band and overwrites the signal's option fields on `market.signal_alerts`. Standard is no-op (scanner already picked in that band).
 - **Bracket orders for stock entries (H7)** — `execute_trade.py` now submits `order_class=BRACKET` (market BUY + stop-loss leg at stop_price + take-profit leg at tp2_price) for non-option bullish entries. `exit_monitor.cancel_open_orders_for_symbol()` cancels bracket legs before exit_monitor issues its own close. Options and bearish stock entries still use plain market orders.
 - **Cron drift fix** — `reconcile_orders` and `reconcile_exits` run 6–14 PDT (not 6–13), giving an extra hour past close for late fills.
 
 ### Phase 5F: ORB Scanner ✅ (PRs #20–22)
-- [x] **ORB breakout detector** (`detect_orb.py`) — scans SPY 15m bars for Opening Range (first 15m candle high/low after 9:30 ET), then detects 5m close-beyond breakouts after 9:45 ET; external-level filter skips setups within 0.5% of prior day's high/low; ATR-based intraday stops (ATR×1.5 stop, ATR×4.5 TP1, ATR×7.5 TP2)
-- [x] **`orb_detector.json` n8n workflow** — every 5min, 6–13 PDT, Mon–Fri; triggers `detect_orb.py` which writes to `market.signal_alerts` with `strategy='orb'`
-- [x] **`format_orb_alert()`** in `alert_telegram.py` — `alert_dispatch.json` picks up `strategy='orb'` rows via SQL and dispatches Telegram alerts with 4-button approval keyboard
+- [x] **ORB breakout detector** (`02_scanner/scripts/detect_orb.py`) — scans SPY 15m bars for Opening Range (first 15m candle high/low after 9:30 ET), then detects 5m close-beyond breakouts after 9:45 ET; external-level filter skips setups within 0.5% of prior day's high/low; ATR-based intraday stops (ATR×1.5 stop, ATR×4.5 TP1, ATR×7.5 TP2)
+- [x] **`02_scanner/n8n/orb_detector.json` n8n workflow** — every 5min, 6–13 PDT, Mon–Fri; triggers `detect_orb.py` which writes to `market.signal_alerts` with `strategy='orb'`
+- [x] **`format_orb_alert()`** in `03_alert/scripts/alert_telegram.py` — `alert_dispatch.json` picks up `strategy='orb'` rows via SQL and dispatches Telegram alerts with 4-button approval keyboard
 - [x] **`execute_trade.py` handles `strategy='orb'`** — ATR-based intraday stops (1.5× ATR stop, 4.5× ATR TP1, 7.5× ATR TP2); day-trade mode (flatten before close)
 - [x] **`exit_monitor.py` manages ORB exits** — same as other intraday strategies (stop, TP1 partial, TP2/trail, time-stop)
 - [x] **DB env-var fallback** (PR #21) — `detect_orb.py` sources `.env.db` for `POSTGRES_DB` with fallback to `"clawstreet"` (matching all other scripts)
@@ -491,6 +631,7 @@ All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execu
 - [x] **SPY 15m bars backfilled** — 2,667 bars (~120 trading days) for Opening Range calculation
 
 ### Remaining Items (non-Phase 5)
+- [ ] Rebuild layers 04–07 (approval, execution, exit, reconcile) from `archive/v1-pipeline/` into their numbered directories
 - [ ] Position sizing calculator (backtest has it, no standalone tool)
 - [ ] Monitoring/dashboards (no visibility beyond raw DB queries)
 - [ ] Regime optimizer needs more diverse data (underperforms static with full history — not a code fix)

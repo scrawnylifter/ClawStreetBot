@@ -69,7 +69,15 @@ services:
       - PYTHONPATH=/app
       - TZ=America/Los_Angeles
     volumes:
-      - ./scripts:/app/scripts:ro
+      - ./01_data:/app/01_data:ro
+      - ./02_scanner:/app/02_scanner:ro
+      - ./03_alert:/app/03_alert:ro
+      - ./04_approval:/app/04_approval:ro
+      - ./05_execution:/app/05_execution:ro
+      - ./06_exit:/app/06_exit:ro
+      - ./07_reconcile:/app/07_reconcile:ro
+      - ./shared:/app/shared:ro
+      - ./admin:/app/admin:ro
       - ./config:/app/config:ro
       - ./db/init:/app/db/init:ro
       - ./.env.db:/app/.env.db:ro
@@ -90,7 +98,7 @@ services:
   # telegram-listener:
   #   image: clawstreetbot/worker:latest
   #   container_name: clawstreet-telegram-listener
-  #   command: ["python", "-u", "/app/scripts/telegram_callback_listener.py"]
+  #   command: ["python", "-u", "/app/04_approval/scripts/telegram_callback_listener.py"]
   #   env_file:
   #     - .env.db
   #     - .env.telegram
@@ -99,7 +107,8 @@ services:
   #     - PYTHONPATH=/app
   #     - TZ=America/Los_Angeles
   #   volumes:
-  #     - ./scripts:/app/scripts:ro
+  #     - ./04_approval:/app/04_approval:ro
+  #     - ./shared:/app/shared:ro
   #     - ./.env.db:/app/.env.db:ro
   #     - ./.env.telegram:/app/.env.telegram:ro
   #     - ./state:/app/state
@@ -165,6 +174,7 @@ services:
       - N8N_PROTOCOL=http
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_GRANT_TOKEN_TTL=120
       - N8N_SECURE_COOKIE=false
       # Disable insights module — its compaction service contends with cron for the SQLite
       # write lock, causing "Missed execution deadline" skips on minute-level crons.
@@ -175,6 +185,8 @@ services:
       - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
       # Raise SQLite connection pool so cron/triggers don't starve behind background jobs.
       - DB_SQLITE_POOL_SIZE=10
+      # Extend SQLite busy timeout (default 5s) so pruning/cron don't timeout on lock contention.
+      - DB_SQLITE_BUSY_TIMEOUT=15000
       # Re-enable Execute Command and Local File Trigger nodes (disabled by default in n8n v2.x).
       # Setting NODES_EXCLUDE to an empty array overrides the breaking-change rule.
       - NODES_EXCLUDE=[]
@@ -184,7 +196,13 @@ services:
       - "${N8N_HOST_PORT:-5678}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./n8n/workflows:/workflows:ro
+      - ./01_data/n8n:/workflows/01_data:ro
+      - ./02_scanner/n8n:/workflows/02_scanner:ro
+      - ./03_alert/n8n:/workflows/03_alert:ro
+      - ./04_approval/n8n:/workflows/04_approval:ro
+      - ./05_execution/n8n:/workflows/05_execution:ro
+      - ./06_exit/n8n:/workflows/06_exit:ro
+      - ./07_reconcile/n8n:/workflows/07_reconcile:ro
     depends_on:
       - worker
       - docker-proxy

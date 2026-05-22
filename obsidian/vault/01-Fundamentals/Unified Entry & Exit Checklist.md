@@ -1,6 +1,6 @@
 ---
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-22
 tags: [fundamentals, entry, exit, checklist, strategy-synthesis]
 sources:
   - "[[EMA Crossover]]"
@@ -29,8 +29,8 @@ These are non-negotiable. A trade must pass every Tier 1 gate. If any fails, the
 | E1 | **Trend alignment** — EMA9 > EMA21 (bullish) or EMA9 < EMA21 (bearish), gap > 0.5% | [[EMA Crossover]] | Proven (whipsaw filter) | 🔴 Required |
 | E2 | **Trend strength** — ADX > 20 (daily) for setups, ADX > 25 for pure EMA crosses | [[EMA Crossover]] | Proven (only 5.6% of crosses pass ADX>25 — most are noise without it) | 🔴 Required |
 | E3 | **Close-beyond confirmation** — next bar closes past the swept level | [[Liquidity — 5m Day Trading]] | Proven (PF 1.24 → 1.56, +0.20R) | 🔴 Required |
-| E4 | **R:R ≥ 3:1** — ATR-based stops and targets (Day: ATR×1.5/4.5/7.5, Swing: ATR×2/6/10) | [[Risk Management]] | Proven (mathematical edge) | 🔴 Required |
-| E5 | **DTE ≥ 30** — no short-dated options, no 0DTE | Laws of Trading #5 | Proven (theta decay kills) | 🔴 Required |
+| E4 | **R:R ≥ 3:1** — ATR-based stops and targets (Day: ATR×1.5/4.5/7.5, Swing: ATR×2/6/10, Sweep: level±ATR×0.05 / R:R×3/5) | [[Risk Management]] | Proven (mathematical edge) | 🔴 Required |
+| E5 | **DTE ≥ 30** — no short-dated options, no 0DTE; exit at DTE ≤ 1 | Laws of Trading #5, [[Greeks Strategy]] | Proven (theta decay kills) | 🔴 Required |
 | E6 | **IV rank < 40** — premium in cheap zone | [[Greeks Strategy]] | Proven (high IV = overpaying for options) | 🔴 Required |
 | E7 | **IV-RV spread ≤ 0.05** — not paying more than realized vol warrants | [[Greeks Strategy]] | Proven (spread > 0.05 = overpriced premium) | 🔴 Required |
 | E8 | **Budget fit** — option mid price ≤ risk budget per trade | [[Risk Management]] | Proven (Law 3: max 20% capital per position) | 🔴 Required |
@@ -66,12 +66,12 @@ Exits are where most traders lose. Every strategy agrees: **you need exit rules 
 
 | # | Criterion | Source Strategy | Verdict | Weight |
 |---|-----------|----------------|---------|--------|
-| X1 | **Stop-loss: ATR-based** — Day ATR×1.5, Swing ATR×2.0 from entry | [[Risk Management]] | Proven | 🔴 Required |
-| X2 | **TP1: ATR-based** — Day ATR×4.5 (3:1 R:R), Swing ATR×6.0 (3:1 R:R) | [[Risk Management]] | Proven | 🔴 Required |
-| X3 | **TP2: ATR-based** — Day ATR×7.5 (5:1 R:R), Swing ATR×10.0 (5:1 R:R) | [[Risk Management]] | Proven | 🔴 Required |
-| X4 | **TP1 exit = sell 1/3** — guaranteed profit, not a full exit | [[Risk Management]], [[Liquidity — 5m Day Trading]] | Proven (Law 4: realize gains) | 🔴 Required |
-| X5 | **Time stop (day trades)** — flatten before close, no overnight risk | [[Day Trading]] | Proven | 🔴 Required |
-| X6 | **Thesis invalidation stop** — for long-term holds, exit when the reason you bought is no longer true | [[Long-Term Holding]] | Proven | 🔴 Required |
+| X1 | **Stop-loss: ATR-based** — Day ATR×1.5, Swing ATR×2.0 from entry; Sweep: swept level ± ATR×0.05 | [[Risk Management]] | Proven | 🔴 Required |
+| X2 | **TP1: ATR-based** — Day ATR×4.5 (3:1 R:R), Swing ATR×6.0 (3:1 R:R), Sweep R:R×3.0 | [[Risk Management]] | Proven | 🔴 Required |
+| X3 | **TP2: ATR-based** — Day ATR×7.5 (5:1 R:R), Swing ATR×10.0 (5:1 R:R), Sweep R:R×5.0 | [[Risk Management]] | Proven | 🔴 Required |
+| X4 | **TP1 exit = sell 50%** — guaranteed profit; qty//2 in code, NOT 1/3 | [[Risk Management]], [[Liquidity — 5m Day Trading]] | Proven (Law 4: realize gains) | 🔴 Required |
+| X5 | **Time stop (day trades)** — flatten at 12:45 PDT, no overnight risk | [[Day Trading]] | Proven | 🔴 Required |
+| X6 | **Premium stop (options)** — close if option mid ≤ 50% of entry price, all modes | [[Risk Management]] | Proven | 🔴 Required |
 
 ### Tier 2 — Early Exit Signals (tighten or exit before stop hits)
 

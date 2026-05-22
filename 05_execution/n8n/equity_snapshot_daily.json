@@ -1,0 +1,52 @@
+{
+  "name": "equity_snapshot_daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 14 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a9d3c7e8-0b1f-2e4a-5f6b-7c8d9e0f1a2b",
+      "name": "Mon-Fri 14:30 PDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/05_execution/scripts/snapshot_equity.py"
+      },
+      "id": "b0e4d8f9-1c2a-3f5b-6a7c-8d9e0f1a2b3c",
+      "name": "snapshot equity",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Mon-Fri 14:30 PDT": {
+      "main": [
+        [
+          {
+            "node": "snapshot equity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": false
+}

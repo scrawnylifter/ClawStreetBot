@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-16
+updated: 2026-05-22
 tags: [strategy, day-trading, orb, mOC]
 status: draft
 ---
@@ -11,7 +11,6 @@ status: draft
 - [x] Draft — not tested
 - [ ] Paper — live on Alpaca Paper for ≥30 days
 - [ ] Validated — proven positive expected value
-
 ## Category
 [[Day Trading]] — hold minutes to hours (same-day or next-day exit)
 
@@ -48,23 +47,28 @@ From [[Trade Entry Criteria]]:
 3. No immediate reversal
 
 ## Stop-Loss (defined before entry — Law 2)
-- **Bullish ORB stop:** Below opening range low or 1.5 ATR below entry
-- **Bearish ORB stop:** Above opening range high or 1.5 ATR above entry
-- **ATR multiplier for sizing:** 1.5× → see [[Position Sizing#ATR-Based]]
+- **Bullish ORB stop:** Below opening range low or ATR × 1.5 below entry
+- **Bearish ORB stop:** Above opening range high or ATR × 1.5 above entry
+- **ATR multiplier for sizing:** 1.5× → see [[Position Sizing#Method 2: ATR-Based]]
 - **No exceptions** — if it reverses back into the range, you're out
 
-## Risk Parameters
+## Risk Parameters (As Implemented)
 → All R:R, position sizing, take-profit, and drawdown limits are defined in [[Risk Management]] and [[Position Sizing#Day Trading]]
 - This strategy uses the **Day Trading** risk profile
 - R:R minimum: **3:1** (see [[Position Sizing]])
+- Stop: **ATR × 1.5** (see `detect_orb.py` RULES `stop_mult=1.5`)
+- TP1: **ATR × 4.5** (3:1 R:R), sell **50%** — NOT 1/3
+- TP2: **ATR × 7.5** (5:1 R:R), **full close** (day mode flattens, no trailing)
 - Position sizing: **5% risk / ATR × 1.5** stop method (see [[Position Sizing#Day Trading]])
-- Take-profit tiers: **20% / 40% / flatten before close** (see [[Loss Limits#Tiered Exit — Day Trading]])
-- **Time stop:** Flatten all positions before market close — no overnight gap risk
+- **Time stop:** **12:45 PDT** flatten all positions — no overnight gap risk
+- **Premium stop:** 50% of option entry price (all modes, no differentiation)
+- **Delta band:** Scanner uses 0.50–0.70; post-approval: standard 0.50–0.70, aggressive 0.40–0.80
 
 ## DTE Requirement (options only — Law 5)
 - **Minimum DTE:** 30 (insurance for timing, not hold time)
+- **Exit DTE:** ≤ 1 (code enforces `MIN_DTE_HOLDABLE = 1`)
 - **Preferred:** 45-60 DTE — gives cushion, but you're typically out same-day
-- **Strike selection:** Slightly ITM (delta 0.55-0.65) for faster move on breakout
+- **Strike selection:** Slightly ITM (delta 0.50-0.70 scanner band; post-approval conservative: 0.55-0.65)
 
 ## Research Checklist (Law 8)
 - [ ] Thesis documented (e.g., "APLD breaking out of 3-day consolidation on volume")
@@ -81,10 +85,10 @@ From [[Trade Entry Criteria]]:
 - ATR × 1.5 below entry (long) / above entry (short) — **always in place**, never removed
 - Price reverses back inside opening range → immediate exit (false breakout)
 
-### Take-Profit (tiered — from [[Risk Management]])
-- **TP1:** ATR × 4.5 (3:1 R:R) → sell 1/3
-- **TP2:** ATR × 7.5 (5:1 R:R) → sell 1/3
-- **Trail remaining 1/3 through shelf levels** (see Shelf Trailing below)
+### Take-Profit (tiered — as implemented in code)
+- **TP1:** ATR × 4.5 (3:1 R:R) → sell **50%** of position (qty//2), NOT 1/3
+- **TP2:** ATR × 7.5 (5:1 R:R) → **full close** (day mode flattens, no trailing)
+- **Time stop:** 12:45 PDT — flatten everything, no exceptions
 
 ### Shelf Trailing (for the final 1/3)
 After TP2 exits the first 2/3, trail the remaining position through **shelf levels** — prior swing points or consolidation zones where price retests to continue the trend.

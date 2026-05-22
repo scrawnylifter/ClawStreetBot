@@ -40,11 +40,15 @@ Before entering any position, the stop-loss price must be defined. No stop = no 
 
 | Method | Best For | How |
 |--------|----------|-----|
-| ATR stop | Swing trades | Entry price - (ATR × multiplier) |
+| ATR stop (day/intraday) | Day trades, ORB, liquidity sweep (intraday) | Entry price - (ATR × 1.5) |
+| ATR stop (swing) | Swing trades, EMA crossover | Entry price - (ATR × 2.0) |
+| Swept level stop | Liquidity sweep | Swept level ± (ATR × 0.05) buffer |
 | Technical level | All trades | Below support, below previous day low, below key moving average |
-| Fixed percentage | Long-term holds | 8-12% below entry (wide for conviction positions) |
-| Premium stop | Long options | If premium drops 40-50%, the thesis is wrong |
-| Time stop | All trades | If trade hasn't moved in expected direction within X days, exit |
+| Fixed percentage | Long-term holds (aspirational) | 8-12% below entry (wide for conviction positions) |
+| Premium stop | All options | If premium drops to 50% of entry, thesis is wrong |
+| Time stop | Day trades | Flatten at 12:45 PDT — no overnight gap risk |
+| Time stop | Swing trades | ⚠️ Not implemented — no stale-swing timeout in code |
+| DTE stop | All options | Exit when DTE ≤ 1 (Law 5 enforcement) |
 
 ### Rule 2: Stop Types and When to Use Them
 
@@ -91,34 +95,39 @@ Bracket Order:
 
 Drawdown limits are **portfolio-wide** circuit breakers. They stop ALL new trades, not just one.
 
-### Daily Drawdown Limits
+### As Implemented (Code-Verified)
 
-| Level | Drawdown | Action |
-|-------|----------|--------|
-| 🟢 Green | < 5% | Normal trading |
-| 🟡 Yellow | 5% - 8% | Reduce position sizes by 50% |
-| 🔴 Red | 8% - 10% | No new positions, manage existing only |
-| ⛔ Halt | > 10% | All trading stopped until next day |
+The live system uses **binary halt thresholds** — there are no graded yellow/red tiers. If a threshold is breached, all trading halts; otherwise it doesn't.
 
-### Weekly Drawdown Limits
+|| Threshold | Action |
+|-----------|--------|
+| Daily drawdown ≥ 30% | ⛔ Halt — all trading stopped until next day |
+| Weekly drawdown ≥ 40% | ⛔ Halt — all trading stopped for the rest of the week |
+| Monthly drawdown ≥ 50% | ⛔ Halt — full stop, manual reset required |
 
-| Level | Drawdown | Action |
-|-------|----------|--------|
-| 🟢 Green | < 8% | Normal trading |
-| 🟡 Yellow | 8% - 15% | Reduce all position sizes by 50% |
-| 🔴 Red | 15% - 20% | No new positions, existing stops tightened |
-| ⛔ Halt | > 20% | All trading stopped for the rest of the week |
+**Code reference:** `04_approval/scripts/process_approved.py` lines 96-98:
+```python
+DRAWDOWN_DAILY_PCT   = Decimal("0.30")   # 30% daily → halt
+DRAWDOWN_WEEKLY_PCT  = Decimal("0.40")   # 40% weekly → halt
+DRAWDOWN_MONTHLY_PCT = Decimal("0.50")   # 50% monthly → halt
+```
 
-### Monthly Drawdown Limits
+The thresholds are wider than typical retail (10/20/30) because options premium can swing 50%+ per contract — the old thresholds would halt on every normal losing day.
 
-| Level | Drawdown | Action |
-|-------|----------|--------|
-| 🟢 Green | < 15% | Normal trading |
-| 🟡 Yellow | 15% - 20% | Position sizes halved, no new strategies |
-| 🔴 Red | 20% - 25% | No new positions, liquidate worst performers |
-| ⛔ Halt | > 30% | Full stop. Review and reset. |
+### Aspirational: Graded Tiers (Not Yet Implemented)
 
-> ⚠️ These are **initial targets** — subject to backtesting and adjustment. Paper trading in Phase 2 will validate or revise these numbers.
+> ⚠️ The graded system below is **not implemented in code**. It exists as a design goal for when the account grows large enough that 30%-daily halts feel too loose. Currently the code only does binary halt/don't-halt.
+
+**Proposed (future):**
+
+|| Level | Drawdown | Action ||
+||-------|----------|--------|
+|| 🟢 Green | < 5% | Normal trading ||
+|| 🟡 Yellow | 5% - 8% | Reduce position sizes by 50% ||
+|| 🔴 Red | 8% - 10% | No new positions, manage existing only ||
+|| ⛔ Halt | > 10% | All trading stopped until next day ||
+
+(And similar graded tiers for weekly/monthly.)
 
 ---
 
@@ -126,47 +135,70 @@ Drawdown limits are **portfolio-wide** circuit breakers. They stop ALL new trade
 
 [[Laws of Trading#Law 4: Realize Gains|Law 4]] says never be afraid to take profits. Implementation:
 
-### Tiered Exit Strategy — Day Trading
+### Tiered Exit Strategy — Day Trading (As Implemented)
+
+Code uses **ATR multipliers**, not percentage targets.
 
 | Tier | Target | Action | Position Portion |
-|------|--------|--------|-----------------|
-| TP1 | +20% | Sell 1/3 of position | Quick scalp — lock in fast |
-| TP2 | +40% | Sell 1/3 of position | Strong move — realize profit |
-| TP3 | Let it ride | Trail stop on remaining | Let winners run, flatten before close |
+|------|--------|--------|-------------------|
+| Stop | ATR × 1.5 from entry | Hard stop — exit immediately | 100% |
+| TP1 | ATR × 4.5 (3:1 R:R) | Sell **50%** of position (qty//2) | 50% |
+| TP2 | ATR × 7.5 (5:1 R:R) | **Full close** (day mode flattens, no trailing) | Remaining 50% |
+| Time stop | 12:45 PDT | Flatten everything | 100% |
 
-> Day trades move fast — tighter TP targets than swing. If you're up 40% in 30 minutes on an ORB, take the money.
+**Code reference:**
+- Scanner ATR multipliers: `02_scanner/scripts/detect_orb.py` RULES `stop_mult=1.5, tp1_mult=4.5, tp2_mult=7.5`
+- Scanner (setup/EMA): `02_scanner/scripts/scan_setups.py` `ATR_STOP_MULT=2.0, ATR_TP1_MULT=6.0, ATR_TP2_MULT=10.0`
+- TP1 exits 50%: `06_exit/scripts/exit_monitor.py` line 681: `partial_qty = qty_remaining // 2`
+- Day time stop: `06_exit/scripts/exit_monitor.py` line 81: `TIME_STOP_LOCAL = time(12, 45)` (America/Los_Angeles)
 
-### Tiered Exit Strategy — Swing Trading
-
-| Tier | Target | Action | Position Portion |
-|------|--------|--------|-----------------|
-| TP1 | +30% | Sell 1/3 of position | Lock in solid gain |
-| TP2 | +50% | Sell 1/3 of position | Realize major profit |
-| TP3 | Let it ride | Trail stop on remaining | Let winners run to 100%+ |
-
-### Tiered Exit Strategy — Long-Term Holding
+### Tiered Exit Strategy — Swing Trading (As Implemented)
 
 | Tier | Target | Action | Position Portion |
-|------|--------|--------|-----------------|
-| TP1 | +50% | Sell 1/3 of position | Lock in major gain |
-| TP2 | +100% | Sell 1/3 of position | Doubled your money |
-| TP3 | Let it ride | Trail stop on remaining | Ride to 200%+ |
+|------|--------|--------|-------------------|
+| Stop | ATR × 2.0 from entry | Hard stop — exit immediately | 100% |
+| TP1 | ATR × 6.0 (3:1 R:R) | Sell **50%** of position (qty//2) | 50% |
+| TP2 | ATR × 10.0 (5:1 R:R) | **Activate trailing stop** at 2× ATR | Remaining 50% trails |
+| Trailing stop | 2× ATR from price | Trail moves with price; close on break | Remainder |
 
-**Why different structures:**
-- **Swing trades** are quick — take profit at 30%/50% where you're comfortable
-- **Long-term holds** need bigger targets to justify the time risk — 50%/100% minimum (but R:R is measured differently; see [[Risk Management#Long-Term Holding]] and [[Position Sizing#Long-Term Holding]])
+**Code reference:**
+- Swing TP2 → trail-activate: `06_exit/scripts/exit_monitor.py` line 300-310
+- Trail distance = 2× ATR(14): `06_exit/scripts/exit_monitor.py` lines 183-202
+
+### Tiered Exit Strategy — Liquidity Sweep (As Implemented)
+
+| Tier | Target | Action | Position Portion |
+|------|--------|--------|-------------------|
+| Stop | Swept level ± ATR × 0.05 (buffer) | Hard stop just beyond swept level | 100% |
+| TP1 | Risk × 3.0 (R:R 3:1) | Sell 50% (tp1_size=0.50) | 50% |
+| TP2 | Risk × 5.0 (R:R 5:1) | Activate trail (swing) or full close (day) | Remaining 50% |
+
+**Code reference:** `02_scanner/scripts/detect_liquidity_sweep.py` lines 49-56 and line 261.
+
+### Tiered Exit Strategy — Long-Term Holding (Aspirational Only)
+
+> ⚠️ **Not implemented in code.** `infer_trade_mode()` never returns `long_term` — no scanner produces long-term signals. The parameters below are design targets only.
+
+| Tier | Target | Action | Position Portion |
+|------|--------|--------|-------------------|
+| Stop | Thesis invalidation (not a price level) | Manual exit | 100% |
+| TP1 | +50% | Sell 1/3 of position | Aspirational |
+| TP2 | +100% | Sell 1/3 of position | Aspirational |
+| TP3 | Let it ride | Trail stop on remaining | Aspirational |
 
 ### Options-Specific Exits
 
-Options decay differently — take-profit targets adjust:
+Options decay differently — take-profit targets adjust per strategy (see "As Implemented" tables above). The one universal options exit is the **premium stop**:
 
-| Gain | Action |
-|------|--------|
-| +50% | Sell half (recover premium + profit) |
-| +100% | Sell another quarter |
-| Remaining | Trail with 25% premium stop or hold to target date |
+| Condition | Action |
+|-----------|--------|
+| Option premium drops to 50% of entry price | **Full close** — thesis is wrong |
 
-> ⚠️ Options theta accelerates in the last 30 days. Per [[Laws of Trading#Law 5: No Short-Dated Options|Law 5]], we don't hold options under 30 DTE, but time decay still accelerates as we approach expiry.
+This is hardcoded at 50% for all modes (day/swing/long-term). No differentiation by strategy.
+
+**Code reference:** `06_exit/scripts/exit_monitor.py` line 84: `OPTION_PREMIUM_STOP_FRACTION = Decimal("0.50")`
+
+> ⚠️ Options theta accelerates in the last 30 days. Per [[Laws of Trading#Law 5: No Short-Dated Options|Law 5]], we don't hold options under 30 DTE, but time decay still accelerates as we approach expiry. Code enforces exit at DTE ≤ 1 (`MIN_DTE_HOLDABLE = 1`).
 
 ---
 
@@ -176,21 +208,25 @@ Options decay differently — take-profit targets adjust:
 
 ```
 Every 5 minutes:
-┌─────────────────────────────────────────┐
-│  Fetch current portfolio value from Alpaca│
-│  Calculate: P&L = current - start_of_day │
-│  Drawdown % = P&L / start_of_day equity  │
-├─────────────────────────────────────────┤
-│  if daily_drawdown > 10%:                 │
-│    → HALT: cancel pending orders          │
-│    → Alert user via Telegram             │
-│    → Log halt event to Postgres          │
-│  elif daily_drawdown > 8%:             │
-│    → REDUCE: no new positions             │
-│  elif daily_drawdown > 5%:             │
-│    → CAUTION: reduce sizes by 50%        │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Fetch current portfolio value from Alpaca                       │
+│  Calculate: P&L = current - start_of_day                         │
+│  Drawdown % = P&L / start_of_day equity                         │
+├─────────────────────────────────────────────────────────────────┤
+│  if daily_drawdown ≥ 30%:                                       │
+│    → HALT: cancel pending orders, no new trades                  │
+│    → Alert user via Telegram                                     │
+│    → Log halt event to Postgres                                   │
+│  elif daily_drawdown ≥ 40% weekly:                               │
+│    → HALT: no new trades for remainder of week                   │
+│  elif daily_drawdown ≥ 50% monthly:                              │
+│    → HALT: full system stop, manual reset required               │
+│  else:                                                            │
+│    → Normal trading                                               │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+> ⚠️ Code implements **binary halt only** — there are no graded caution/reduce tiers. See "As Implemented" drawdown section above for details.
 
 ### Cool-Down Periods
 
@@ -198,9 +234,9 @@ After a circuit breaker triggers:
 
 | Trigger | Cool-Down | Requirements to Resume |
 |---------|-----------|------------------------|
-| Daily 10% | Next trading day | Review losing trades, verify system |
-| Weekly 20% | Next trading week | Full journal review, strategy check |
-| Monthly 30% | Until manual reset | Must document analysis before re-enabling |
+| Daily 30% | Next trading day | Bot auto-resumes next session |
+| Weekly 40% | Next trading week | Manual review recommended |
+| Monthly 50% | Until manual reset | Must document analysis before re-enabling |
 
 ---
 
@@ -228,24 +264,29 @@ This feeds back into [[Laws of Trading#Law 6: Know the Difference Between Luck a
 
 ## Sizing Parameters Summary
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| Default stop method | ATR × 2.0 (swing) / 8-12% fixed (long-term) | Strategy-dependent |
-| Long-term hold stop | 8-12% fixed | Only for conviction positions |
-| Premium stop (options) | 40-50% premium loss | Thesis invalidation |
-| Daily drawdown halt | 10% | Hard stop, next day |
-| Weekly drawdown halt | 20% | Hard stop, next week |
-| Monthly drawdown halt | 30% | Full system review required |
-| TP1 day | +20% | Sell 1/3 |
-| TP2 day | +40% | Sell 1/3 |
-| TP3 day | Let it ride | Flatten before close |
-| TP1 swing | +30% | Sell 1/3 |
-| TP2 swing | +50% | Sell 1/3 |
-| TP3 swing | Let it ride | Trail stop remaining |
-| TP1 long-term | +50% | Sell 1/3 |
-| TP2 long-term | +100% | Sell 1/3 |
-| TP3 long-term | Let it ride | Trail stop remaining |
-| TP1 (options) | +50% | Sell half |
+| Parameter | As Implemented | Notes |
+|-----------|----------------|-------|
+| Day stop method | ATR × 1.5 | `detect_orb.py` RULES, liquidity sweep intraday |
+| Swing stop method | ATR × 2.0 | `scan_setups.py` ATR_STOP_MULT |
+| Liquidity sweep stop | Swept level ± ATR × 0.05 | `detect_liquidity_sweep.py` line 261 |
+| Long-term hold stop | 8-12% fixed (aspirational) | No scanner produces long_term mode |
+| Premium stop (options) | 50% of entry price, all modes | `exit_monitor.py` OPTION_PREMIUM_STOP_FRACTION |
+| Day time stop | 12:45 PDT (America/Los_Angeles) | `exit_monitor.py` TIME_STOP_LOCAL |
+| Swing time stop | ⚠️ Not implemented | No stale-swing timeout in code |
+| DTE entry minimum | 30 DTE | `process_approved.py` MIN_DTE |
+| DTE exit threshold | DTE ≤ 1 | `exit_monitor.py` MIN_DTE_HOLDABLE |
+| Daily drawdown halt | 30% | Binary halt, no graded tiers |
+| Weekly drawdown halt | 40% | Binary halt, no graded tiers |
+| Monthly drawdown halt | 50% | Binary halt, no graded tiers |
+| TP1 day | ATR × 4.5 (3:1 R:R) | Sell 50% (qty//2), NOT 1/3 |
+| TP2 day | ATR × 7.5 (5:1 R:R) | Full close (day mode — no trailing) |
+| TP1 swing | ATR × 6.0 (3:1 R:R) | Sell 50% (qty//2) |
+| TP2 swing | ATR × 10.0 (5:1 R:R) | Activate trail at 2× ATR (NOT full close) |
+| TP1 liquidity sweep | Risk × 3.0 R:R | Sell 50% |
+| TP2 liquidity sweep | Risk × 5.0 R:R | Trail (swing) or full close (day) |
+| TP1 (options) | Per strategy ATR target | Sell 50% |
+| Delta band (scanner) | 0.50–0.70 all strategies | `scan_setups.py` DELTA_MIN/DELTA_MAX |
+| Delta band (post-approval) | standard 0.50–0.70, conservative 0.55–0.65, aggressive 0.40–0.80 | `fetch_alpaca_snapshot.py` DELTA_BANDS |
 
 ---
 

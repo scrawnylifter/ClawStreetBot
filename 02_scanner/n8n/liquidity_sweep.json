@@ -1,0 +1,52 @@
+{
+  "name": "liquidity_sweep",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 6-12 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every 5min market hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/detect_liquidity_sweep.py"
+      },
+      "id": "run",
+      "name": "detect liquidity sweep",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Every 5min market hours": {
+      "main": [
+        [
+          {
+            "node": "detect liquidity sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": true
+}

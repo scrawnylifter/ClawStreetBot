@@ -1,0 +1,52 @@
+{
+  "name": "execute_trade",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "* 6-13 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "e7b1a5c6-8f9d-0c2e-3d4a-5b6c7d8e9f0a",
+      "name": "Every minute market hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/05_execution/scripts/execute_trade.py --confirm"
+      },
+      "id": "f8c2b6d7-9a0e-1d3f-4e5a-6b7c8d9e0f1a",
+      "name": "submit approved orders",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Every minute market hours": {
+      "main": [
+        [
+          {
+            "node": "submit approved orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 120,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": false
+}
