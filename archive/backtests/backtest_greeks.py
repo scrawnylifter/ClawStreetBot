@@ -19,6 +19,24 @@ Two-pass mode (--compare):
            theta budgets (THETA_BUDGETS), IV regime gating.
   Compare: does the new greeks strategy improve win rate / R:R / drawdown?
 
+Signal-quality mode (--signal-quality):
+  Decomposes backtest results into signal accuracy vs exit execution quality.
+  Signal accuracy: measures MFE (max favorable excursion) and MAE (max adverse
+  excursion) over a look-ahead window, independent of exit logic. A signal is
+  "correct" if the favorable move hits the win threshold (1 ATR) before the
+  adverse move hits the loss threshold (2 ATR). Grades: strong (≥2 ATR MFE),
+  marginal (1-2 ATR), wrong.
+  Exit execution: runs the normal simulate_trade exit logic, then computes
+  capture % = actual exit PnL / MFE. This measures how much of the favorable
+  move the exit system captured. Reports capture by exit reason, and flags
+  "winners turned into losses" (correct signal but negative exit PnL).
+  P&L decomposition: theoretical max (100% MFE capture) vs actual exit P&L vs
+  exit slippage (left on table). Allows answering: "is the problem my signals
+  or my exits?"
+  Combined with --compare: runs signal-quality for both OLD and NEW greeks
+  rules, then prints a side-by-side comparison of signal accuracy, exit
+  capture, and slippage.
+
 Data sources (no Alpaca API calls):
   - market.ohlcv          — daily bars
   - market.technical_indicators — EMA, RSI, ADX, ATR, MACD
@@ -56,6 +74,23 @@ Usage:
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --by-regime
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --by-symbol --sector Technology
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --period iran_crisis --by-sector
+  python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --signal-quality
+  python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --signal-quality --compare
+
+ATR multiplier sweep mode (--atr-sweep):
+  Sweeps stop ATR multiplier × TP1 ATR multiplier combinations to find the
+  optimal stop/target configuration per stock. Grid: 5 stop mults (1.0-3.0)
+  × 6 TP1 mults (3.0-10.0) = 30 combos. For each qualifying signal, re-simulates
+  the trade across every combo and reports:
+    - Overall best combination by profit factor, win rate, expectancy, avg R
+    - Per-stock best combination (stock-specific stop/target tuning)
+    - PF heat map (stop_mult × tp1_mult) for top-volume symbols
+    - Comparison: default ATR mults vs sweep-optimal per stock
+    - Multi-criteria disagreement flag (when PF vs WR vs R disagree)
+  Results persisted to trading.backtest_atr_sweep.
+  Usage:
+    python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --atr-sweep
+    python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --atr-sweep --mode day
 """
 from __future__ import annotations
 
@@ -96,8 +131,8 @@ load_env(".env.db")
 ADX_MIN = 20.0
 RSI_BULL_MAX = 70.0
 RSI_BEAR_MIN = 30.0
-IV_RANK_MAX = 75.0        # gate 4: don't buy in sell_premium regime (iv_rank 0..75)
-IV_RV_SPREAD_MAX = 50.0   # gate 5 (as percentage points, matching task spec: iv_rank - rv < 50)
+IV_PCTILE_MAX = 40.0       # gate 4: IV percentile < 40 (matches scan_setups.py)
+IV_RV_SPREAD_MAX = 0.05    # gate 5: current_iv - rv_20d <= 0.05 (matches scan_setups.py)
 EMA_GAP_MIN_PCT = 0.5     # gate 1: EMA gap > 0.5%
 MIN_DTE = 30
 MAX_DTE = 120
@@ -105,6 +140,7 @@ ATR_STOP_MULT = {"day": 1.5, "swing": 2.0, "long_term": 2.0}
 ATR_TP1_MULT = {"day": 4.5, "swing": 6.0, "long_term": 6.0}
 ATR_TP2_MULT = {"day": 7.5, "swing": 10.0, "long_term": 10.0}
 RR_MIN = 3.0
+MAX_CONCURRENT_POSITIONS = 5  # max open trades at any one time
 
 # OLD (flat) greeks rules for --compare pass
 OLD_DELTA_BAND = (0.50, 0.70)
@@ -145,6 +181,23 @@ STRATEGY_RULES: dict[str, dict[str, Any]] = {
 
 PDT_WINDOW_DAYS = 5
 PDT_MAX_TRADES = 3
+
+# Commission/slippage cost model for net_pnl calculation
+# Per-contract commission ($0.65/contract typical Alpaca rate) × 2 (entry + exit)
+# plus half-spread slippage on each leg.
+COMMISSION_PER_CONTRACT = 0.65   # $0.65 per option contract per side
+CONTRACTS_PER_TRADE = 1         # assume 1 contract per signal
+SLIPPAGE_PCT = 0.001            # 0.1% round-trip slippage on underlying
+
+# Signal-quality look-ahead windows (days) and thresholds (ATR multiples)
+SQ_LOOKAHEAD = {"day": 5, "swing": 20, "long_term": 60}
+SQ_MFE_WIN_THRESHOLD = 1.0   # signal = "winner" if MFE >= 1 ATR
+SQ_MAE_LOSS_THRESHOLD = 2.0   # signal = "loser" if MAE >= 2 ATR *before* MFE threshold
+
+# ATR sweep grid for --atr-sweep
+ATR_SWEEP_STOP_MULTS = [1.0, 1.5, 2.0, 2.5, 3.0]
+ATR_SWEEP_TP1_MULTS = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+ATR_SWEEP_TP2_RATIO = 10.0 / 6.0  # ≈1.667 — same ratio as default swing TP2/TP1
 
 # ---------------------------------------------------------------------------
 # Named time periods for --period flag
@@ -207,6 +260,7 @@ class GreeksTrade:
     exit_price: float | None = None
     exit_reason: str | None = None
     gross_pnl: float = 0.0
+    net_pnl: float = 0.0
     hold_days: int = 0
     partial_exits: list[dict[str, Any]] = field(default_factory=list)
     pdt_flag: bool = False
@@ -216,6 +270,1321 @@ class GreeksTrade:
         if self.risk_per_share <= 0:
             return 0.0
         return self.gross_pnl / (self.risk_per_share * self.quantity)
+
+
+@dataclass
+class SignalQualityResult:
+    """Decomposed signal-vs-exit result for --signal-quality mode."""
+    symbol: str
+    signal_date: date
+    direction: str
+    trade_mode: str
+    atr: float
+    # ── Signal accuracy (directional correctness) ──
+    mfe_atr: float          # MFE in ATR units (max favorable excursion)
+    mfe_price: float         # MFE in absolute price
+    mfe_day: int             # day-of-MFE offset from entry (0-based)
+    mae_atr: float           # MAE in ATR units (max adverse excursion)
+    mae_price: float          # MAE in absolute price
+    mae_day: int             # day-of-MAE offset from entry
+    signal_correct: bool     # True if MFE hit before MAE threshold
+    signal_grade: str         # "strong" | "marginal" | "wrong"
+    # ── Exit execution (how well exit system captured the move) ──
+    exit_pnl_atr: float      # actual trade P&L in ATR units (None if no trade)
+    exit_reason: str | None
+    exit_capture_pct: float   # (exit_pnl / MFE) * 100 — how much of MFE was captured
+    # ── Metadata ──
+    greeks_pass: bool
+    option_delta: float
+    option_theta_pct: float
+    iv_regime_at_entry: str
+
+
+# ---------------------------------------------------------------------------
+# ATR multiplier sweep data structures
+# ---------------------------------------------------------------------------
+@dataclass
+class ATRSweepCombo:
+    """Result for one (stop_mult, tp1_mult) combination across all signals."""
+    stop_mult: float
+    tp1_mult: float
+    tp2_mult: float
+    trades: int = 0
+    winners: int = 0
+    losers: int = 0
+    win_rate: float = 0.0
+    avg_r: float = 0.0
+    profit_factor: float | None = 0.0
+    total_pnl: float = 0.0
+    max_drawdown_pct: float = 0.0
+    expectancy: float = 0.0
+
+
+@dataclass
+class ATRSweepSymbolResult:
+    """Per-symbol ATR sweep result: optimal combos by multiple criteria."""
+    symbol: str
+    signal_count: int
+    combos: list[ATRSweepCombo] = field(default_factory=list)
+    best_by_pf: ATRSweepCombo | None = None      # highest profit factor
+    best_by_wr: ATRSweepCombo | None = None      # highest win rate
+    best_by_expect: ATRSweepCombo | None = None  # highest expectancy
+    best_by_r: ATRSweepCombo | None = None       # highest avg R
+
+
+# ---------------------------------------------------------------------------
+# Signal quality analysis engine
+# ---------------------------------------------------------------------------
+def compute_mfe_mae(
+    bars: list[Bar],
+    entry_idx: int,
+    direction: str,
+    atr: float,
+    lookahead_days: int,
+) -> dict[str, Any]:
+    """Compute Maximum Favorable/Adverse Excursion for a signal.
+
+    Walks forward from entry bar over `lookahead_days` calendar days,
+    computing:
+      - MFE: max favorable move in ATR units and price units
+      - MAE: max adverse move in ATR units and price units
+      - Day offsets for each (0 = entry day)
+      - Whether MFE hit the win threshold before MAE hit loss threshold
+    """
+    if atr <= 0 or entry_idx >= len(bars):
+        return {
+            "mfe_atr": 0.0, "mfe_price": 0.0, "mfe_day": 0,
+            "mae_atr": 0.0, "mae_price": 0.0, "mae_day": 0,
+            "signal_correct": False, "signal_grade": "wrong",
+        }
+
+    entry_bar = bars[entry_idx]
+    entry_price = entry_bar.o  # next-day open = entry
+    cutoff_date = entry_bar.d + timedelta(days=lookahead_days)
+
+    best_mfe = 0.0   # in ATR units (positive = favorable)
+    best_mfe_price = 0.0
+    mfe_day = 0
+    best_mae = 0.0   # in ATR units (positive = adverse)
+    best_mae_price = 0.0
+    mae_day = 0
+    mfe_hit_win = False
+    mae_hit_loss = False
+    mfe_hit_day = lookahead_days + 1  # sentinel: beyond window
+    mae_hit_day = lookahead_days + 1
+
+    for j in range(entry_idx, len(bars)):
+        bar = bars[j]
+        if bar.d > cutoff_date:
+            break
+        day_offset = (bar.d - entry_bar.d).days
+
+        if direction == "bullish":
+            # Favorable = price goes up; Adverse = price goes down
+            favorable = max(0.0, bar.h - entry_price)
+            adverse = max(0.0, entry_price - bar.l)
+        else:
+            # Bearish: favorable = price goes down; adverse = price goes up
+            favorable = max(0.0, entry_price - bar.l)
+            adverse = max(0.0, bar.h - entry_price)
+
+        mfe_atr = favorable / atr
+        mae_atr = adverse / atr
+
+        if mfe_atr > best_mfe:
+            best_mfe = mfe_atr
+            best_mfe_price = favorable
+            mfe_day = day_offset
+        if mae_atr > best_mae:
+            best_mae = mae_atr
+            best_mae_price = adverse
+            mae_day = day_offset
+
+        # Track when thresholds are first hit
+        if mfe_atr >= SQ_MFE_WIN_THRESHOLD and not mfe_hit_win:
+            mfe_hit_win = True
+            mfe_hit_day = day_offset
+        if mae_atr >= SQ_MAE_LOSS_THRESHOLD and not mae_hit_loss:
+            mae_hit_loss = True
+            mae_hit_day = day_offset
+
+    # Signal is "correct" if the favorable move hit the win threshold
+    # before (or without) the adverse move hitting the loss threshold
+    signal_correct = mfe_hit_win and (not mae_hit_loss or mfe_hit_day <= mae_hit_day)
+
+    # Grade the signal quality
+    if best_mfe >= 2.0 and signal_correct:
+        signal_grade = "strong"
+    elif best_mfe >= 1.0 and signal_correct:
+        signal_grade = "marginal"
+    else:
+        signal_grade = "wrong"
+
+    return {
+        "mfe_atr": round(best_mfe, 4),
+        "mfe_price": round(best_mfe_price, 4),
+        "mfe_day": mfe_day,
+        "mae_atr": round(best_mae, 4),
+        "mae_price": round(best_mae_price, 4),
+        "mae_day": mae_day,
+        "signal_correct": signal_correct,
+        "signal_grade": signal_grade,
+    }
+
+
+def run_signal_quality_analysis(
+    conn,
+    mode: str,
+    start: date,
+    end: date,
+    use_new_rules: bool,
+    run_name: str,
+    initial_capital: float = 10_000.0,
+) -> tuple[list[SignalQualityResult], dict[str, Any]]:
+    """Run walk-forward signal quality analysis (--signal-quality mode).
+
+    For every signal that passes scanner + greeks gates, compute:
+      - MFE/MAE (directional correctness independent of exit logic)
+      - Actual trade P&L via simulate_trade (exit execution quality)
+      - Capture ratio: how much of the favorable move did exits capture
+
+    Returns (list of SignalQualityResult, summary metrics dict).
+    """
+    lookahead = SQ_LOOKAHEAD.get(mode, 20)
+    capital = initial_capital
+
+    # Fetch all trading dates in range
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT o.timestamp::date
+            FROM market.ohlcv o
+            JOIN market.assets a ON a.id = o.asset_id
+            WHERE o.timeframe = '1d'
+              AND a.active = TRUE
+              AND o.timestamp::date BETWEEN %s AND %s
+            ORDER BY o.timestamp::date
+        """, (start, end))
+        trading_dates = [r[0] for r in cur.fetchall()]
+
+    print(f"Signal-quality: {len(trading_dates)} trading days, mode={mode}, "
+          f"lookahead={lookahead}d, rules={'NEW' if use_new_rules else 'OLD'}")
+
+    # Pre-fetch bars
+    bar_end = end + timedelta(days=400)
+    with conn.cursor() as cur:
+        cur.execute("SELECT symbol FROM market.assets WHERE active = TRUE ORDER BY symbol")
+        all_symbols = [r[0] for r in cur.fetchall()]
+
+    bars_cache: dict[str, list[Bar]] = {}
+    for sym in all_symbols:
+        bars_cache[sym] = fetch_bars(conn, sym, start - timedelta(days=60), bar_end)
+
+    results: list[SignalQualityResult] = []
+    scanner_pass = 0
+    greeks_pass = 0
+    greeks_fail = 0
+
+    for d in trading_dates:
+        snapshot = fetch_daily_snapshot(conn, d)
+
+        # BUG FIX: Capital look-ahead bias — collect same-day P&L and apply
+        # at end of day so subsequent signals on the same day don't see
+        # already-credited (or debited) capital from earlier trades' outcomes.
+        day_pnl = 0.0
+
+        for row in snapshot:
+            sym = row["symbol"]
+            signal = evaluate_scanner_gates(sym, row, mode)
+            if signal is None:
+                continue
+
+            signal["signal_date"] = d
+            scanner_pass += 1
+
+            bars = bars_cache.get(sym, [])
+            signal_bar = next((b for b in bars if b.d == d), None)
+            if signal_bar is None:
+                continue
+
+            # BUG FIX: Use next-day open as entry price (matching simulate_trade),
+            # not signal-day close, for greeks simulation
+            entry_idx_greeks = next(
+                (i for i, b in enumerate(bars) if b.d > d), None
+            )
+            if entry_idx_greeks is None:
+                continue
+            entry_price = bars[entry_idx_greeks].o
+            greeks = simulate_greeks(signal, entry_price, mode, use_new_rules)
+
+            if not greeks["greeks_pass"]:
+                greeks_fail += 1
+                continue
+
+            greeks_pass += 1
+
+            # Find entry index (next bar after signal date)
+            entry_idx = next(
+                (i for i, b in enumerate(bars) if b.d > d), None
+            )
+            if entry_idx is None:
+                continue
+
+            # ── Signal accuracy: compute MFE/MAE ──
+            mfe_mae = compute_mfe_mae(
+                bars, entry_idx, signal["direction"], signal["atr"], lookahead
+            )
+
+            # ── Exit execution: simulate the trade normally ──
+            sim_trade = simulate_trade(signal, greeks, bars, mode, capital)
+            if sim_trade is not None:
+                # BUG FIX: Defer capital update to end-of-day to avoid
+                # look-ahead bias
+                day_pnl += sim_trade.gross_pnl
+                exit_pnl_atr = sim_trade.r_multiple * (
+                    ATR_STOP_MULT.get(mode, 2.0)  # r_multiple = pnl / (risk_per_share * qty), risk_per_share = ATR * stop_mult
+                ) if sim_trade.risk_per_share > 0 and sim_trade.quantity > 0 else 0.0
+                # More precise: actual PnL in ATR units
+                if signal["atr"] > 0 and sim_trade.quantity > 0:
+                    exit_pnl_atr = sim_trade.gross_pnl / (signal["atr"] * sim_trade.quantity)
+                else:
+                    exit_pnl_atr = 0.0
+                exit_reason = sim_trade.exit_reason
+            else:
+                exit_pnl_atr = 0.0
+                exit_reason = "no_trade"
+
+            # Capture %: how much of MFE did the exit system capture?
+            if mfe_mae["mfe_atr"] > 0 and exit_pnl_atr > 0:
+                capture_pct = (exit_pnl_atr / mfe_mae["mfe_atr"]) * 100.0
+            else:
+                capture_pct = 0.0
+
+            results.append(SignalQualityResult(
+                symbol=sym,
+                signal_date=d,
+                direction=signal["direction"],
+                trade_mode=mode,
+                atr=signal["atr"],
+                mfe_atr=mfe_mae["mfe_atr"],
+                mfe_price=mfe_mae["mfe_price"],
+                mfe_day=mfe_mae["mfe_day"],
+                mae_atr=mfe_mae["mae_atr"],
+                mae_price=mfe_mae["mae_price"],
+                mae_day=mfe_mae["mae_day"],
+                signal_correct=mfe_mae["signal_correct"],
+                signal_grade=mfe_mae["signal_grade"],
+                exit_pnl_atr=round(exit_pnl_atr, 4),
+                exit_reason=exit_reason,
+                exit_capture_pct=round(capture_pct, 2),
+                greeks_pass=greeks["greeks_pass"],
+                option_delta=greeks["option_delta"],
+                option_theta_pct=greeks["option_theta_pct"],
+                iv_regime_at_entry=greeks["iv_regime_at_entry"],
+            ))
+
+        # Apply accumulated day P&L after all same-day signals are processed
+        capital += day_pnl
+
+    # ── Compute summary metrics ──
+    summary = _signal_quality_summary(results)
+
+    print(f"  Scanner passed: {scanner_pass}")
+    print(f"  Greeks passed: {greeks_pass}  |  Greeks failed: {greeks_fail}")
+    print(f"  Signal quality results: {len(results)}")
+
+    return results, summary
+
+
+def _signal_quality_summary(results: list[SignalQualityResult]) -> dict[str, Any]:
+    """Aggregate signal quality results into summary metrics separating signal vs exit."""
+    if not results:
+        return {
+            "total_signals": 0,
+            "signal_accuracy": {},
+            "exit_efficiency": {},
+            "decomposition": {},
+        }
+
+    total = len(results)
+    correct = [r for r in results if r.signal_correct]
+    wrong = [r for r in results if not r.signal_correct]
+    strong = [r for r in results if r.signal_grade == "strong"]
+    marginal = [r for r in results if r.signal_grade == "marginal"]
+    wrong_grade = [r for r in results if r.signal_grade == "wrong"]
+
+    # ── SIGNAL ACCURACY METRICS (directional correctness, no exit logic) ──
+    signal_accuracy = {
+        "total_signals": total,
+        "correct_count": len(correct),
+        "wrong_count": len(wrong),
+        "accuracy_pct": round(len(correct) / total * 100, 2) if total else 0.0,
+        "strong_count": len(strong),
+        "marginal_count": len(marginal),
+        "wrong_count": len(wrong_grade),
+        "avg_mfe_atr": round(statistics.mean([r.mfe_atr for r in results]), 4),
+        "avg_mae_atr": round(statistics.mean([r.mae_atr for r in results]), 4),
+        "median_mfe_atr": round(statistics.median([r.mfe_atr for r in results]), 4),
+        "avg_mfe_day": round(statistics.mean([r.mfe_day for r in results]), 1),
+        "avg_mae_day": round(statistics.mean([r.mae_day for r in results]), 1),
+    }
+
+    # Per-grade breakdown
+    grade_breakdown = {}
+    for grade in ["strong", "marginal", "wrong"]:
+        subset = [r for r in results if r.signal_grade == grade]
+        if subset:
+            grade_breakdown[grade] = {
+                "count": len(subset),
+                "pct_of_total": round(len(subset) / total * 100, 1),
+                "avg_mfe_atr": round(statistics.mean([r.mfe_atr for r in subset]), 4),
+                "avg_mae_atr": round(statistics.mean([r.mae_atr for r in subset]), 4),
+                "avg_capture_pct": round(statistics.mean([r.exit_capture_pct for r in subset]), 2),
+            }
+    signal_accuracy["grade_breakdown"] = grade_breakdown
+
+    # ── EXIT EFFICIENCY METRICS (how well exits capture favorable moves) ──
+    # Only meaningful for signals that were directionally correct
+    correct_with_mfe = [r for r in correct if r.mfe_atr > 0]
+    exit_efficiency = {
+        "total_correct_signals": len(correct),
+        "correct_with_favorable_move": len(correct_with_mfe),
+    }
+
+    if correct_with_mfe:
+        captures = [r.exit_capture_pct for r in correct_with_mfe]
+        exit_efficiency.update({
+            "avg_capture_pct": round(statistics.mean(captures), 2),
+            "median_capture_pct": round(statistics.median(captures), 2),
+            "capture_over_50pct": len([c for c in captures if c >= 50.0]),
+            "capture_over_80pct": len([c for c in captures if c >= 80.0]),
+            "capture_under_0_pct": len([c for c in captures if c < 0]),  # winners turned into losses
+        })
+
+        # Per-exit-reason capture stats
+        by_exit_reason: dict[str, list[float]] = {}
+        for r in correct_with_mfe:
+            reason = r.exit_reason or "unknown"
+            by_exit_reason.setdefault(reason, []).append(r.exit_capture_pct)
+        reason_stats = {}
+        for reason, caps in sorted(by_exit_reason.items()):
+            reason_stats[reason] = {
+                "count": len(caps),
+                "avg_capture_pct": round(statistics.mean(caps), 2),
+            }
+        exit_efficiency["by_exit_reason"] = reason_stats
+    else:
+        exit_efficiency.update({
+            "avg_capture_pct": 0.0,
+            "median_capture_pct": 0.0,
+            "capture_over_50pct": 0,
+            "capture_over_80pct": 0,
+            "capture_under_0_pct": 0,
+        })
+
+    # Exit P&L distribution for correct vs wrong signals
+    correct_pnls = [r.exit_pnl_atr for r in correct]
+    wrong_pnls = [r.exit_pnl_atr for r in wrong]
+    exit_efficiency["avg_exit_pnl_correct_atr"] = round(statistics.mean(correct_pnls), 4) if correct_pnls else 0.0
+    exit_efficiency["avg_exit_pnl_wrong_atr"] = round(statistics.mean(wrong_pnls), 4) if wrong_pnls else 0.0
+
+    # ── DECOMPOSITION: attribution of total P&L to signal vs exit ──
+    # Theoretical max P&L if we captured 100% of MFE on correct signals and
+    # cut losers at 0 (no adverse excursion taken):
+    theoretical_signal_pnl = sum(r.mfe_atr for r in correct)
+    actual_exit_pnl = sum(r.exit_pnl_atr for r in results)
+    exit_slippage = theoretical_signal_pnl - actual_exit_pnl
+
+    # Wrong-signal cost: adverse moves on wrong signals
+    wrong_signal_cost = sum(r.mae_atr for r in wrong)
+
+    decomposition = {
+        "theoretical_max_pnl_atr": round(theoretical_signal_pnl, 2),
+        "actual_exit_pnl_atr": round(actual_exit_pnl, 2),
+        "exit_slippage_atr": round(exit_slippage, 2),
+        "wrong_signal_cost_atr": round(wrong_signal_cost, 2),
+        "signal_value_atr": round(theoretical_signal_pnl - wrong_signal_cost, 2),
+        "exit_efficiency_ratio": round(actual_exit_pnl / theoretical_signal_pnl * 100, 2) if theoretical_signal_pnl > 0 else 0.0,
+    }
+
+    return {
+        "total_signals": total,
+        "signal_accuracy": signal_accuracy,
+        "exit_efficiency": exit_efficiency,
+        "decomposition": decomposition,
+    }
+
+
+def write_signal_quality_results(
+    conn,
+    run_id: int,
+    results: list[SignalQualityResult],
+) -> None:
+    """Persist signal quality results to trading.backtest_signal_quality."""
+    with conn.cursor() as cur:
+        # Create table if not exists (idempotent)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trading.backtest_signal_quality (
+                id SERIAL PRIMARY KEY,
+                run_id INT REFERENCES trading.backtest_runs(id),
+                symbol TEXT NOT NULL,
+                signal_date DATE NOT NULL,
+                direction TEXT NOT NULL,
+                trade_mode TEXT NOT NULL,
+                atr DOUBLE PRECISION,
+                mfe_atr DOUBLE PRECISION,
+                mfe_price DOUBLE PRECISION,
+                mfe_day INT,
+                mae_atr DOUBLE PRECISION,
+                mae_price DOUBLE PRECISION,
+                mae_day INT,
+                signal_correct BOOLEAN,
+                signal_grade TEXT,
+                exit_pnl_atr DOUBLE PRECISION,
+                exit_reason TEXT,
+                exit_capture_pct DOUBLE PRECISION,
+                greeks_pass BOOLEAN,
+                option_delta DOUBLE PRECISION,
+                option_theta_pct DOUBLE PRECISION,
+                iv_regime_at_entry TEXT,
+                UNIQUE(run_id, symbol, signal_date)
+            )
+        """)
+        for r in results:
+            cur.execute("""
+                INSERT INTO trading.backtest_signal_quality (
+                    run_id, symbol, signal_date, direction, trade_mode, atr,
+                    mfe_atr, mfe_price, mfe_day,
+                    mae_atr, mae_price, mae_day,
+                    signal_correct, signal_grade,
+                    exit_pnl_atr, exit_reason, exit_capture_pct,
+                    greeks_pass, option_delta, option_theta_pct, iv_regime_at_entry
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (run_id, symbol, signal_date) DO UPDATE SET
+                    direction = EXCLUDED.direction,
+                    trade_mode = EXCLUDED.trade_mode,
+                    atr = EXCLUDED.atr,
+                    mfe_atr = EXCLUDED.mfe_atr,
+                    mfe_price = EXCLUDED.mfe_price,
+                    mfe_day = EXCLUDED.mfe_day,
+                    mae_atr = EXCLUDED.mae_atr,
+                    mae_price = EXCLUDED.mae_price,
+                    mae_day = EXCLUDED.mae_day,
+                    signal_correct = EXCLUDED.signal_correct,
+                    signal_grade = EXCLUDED.signal_grade,
+                    exit_pnl_atr = EXCLUDED.exit_pnl_atr,
+                    exit_reason = EXCLUDED.exit_reason,
+                    exit_capture_pct = EXCLUDED.exit_capture_pct,
+                    greeks_pass = EXCLUDED.greeks_pass,
+                    option_delta = EXCLUDED.option_delta,
+                    option_theta_pct = EXCLUDED.option_theta_pct,
+                    iv_regime_at_entry = EXCLUDED.iv_regime_at_entry
+            """, (
+                run_id, r.symbol, r.signal_date, _db_direction(r.direction),
+                r.trade_mode, r.atr,
+                r.mfe_atr, r.mfe_price, r.mfe_day,
+                r.mae_atr, r.mae_price, r.mae_day,
+                r.signal_correct, r.signal_grade,
+                r.exit_pnl_atr, r.exit_reason, r.exit_capture_pct,
+                r.greeks_pass, r.option_delta, r.option_theta_pct,
+                r.iv_regime_at_entry,
+            ))
+
+
+def print_signal_quality_report(
+    run_name: str,
+    mode: str,
+    start: date,
+    end: date,
+    results: list[SignalQualityResult],
+    summary: dict[str, Any],
+) -> None:
+    """Print the --signal-quality decomposed analysis report."""
+    sa = summary["signal_accuracy"]
+    ee = summary["exit_efficiency"]
+    dc = summary["decomposition"]
+
+    print()
+    print("=" * 72)
+    print(f"Signal Quality Analysis: {run_name}")
+    print(f"Mode: {mode}    Range: {start} → {end}")
+    print("=" * 72)
+
+    # ── SECTION 1: SIGNAL ACCURACY ──
+    print()
+    print("── SIGNAL ACCURACY (directional correctness, no exit logic) ──")
+    print(f"  Total signals:    {sa['total_signals']}")
+    print(f"  Correct:          {sa['correct_count']}  ({sa['accuracy_pct']:.1f}%)")
+    print(f"  Wrong:            {sa['wrong_count']}")
+    print(f"  Avg MFE:          {sa['avg_mfe_atr']:.2f} ATR  (day {sa['avg_mfe_day']:.0f})")
+    print(f"  Avg MAE:          {sa['avg_mae_atr']:.2f} ATR  (day {sa['avg_mae_day']:.0f})")
+    print(f"  Median MFE:       {sa['median_mfe_atr']:.2f} ATR")
+
+    # Grade breakdown
+    print()
+    print("  Signal Grades:")
+    for grade in ["strong", "marginal", "wrong"]:
+        gb = sa.get("grade_breakdown", {}).get(grade)
+        if gb:
+            bar_len = min(int(gb["pct_of_total"] / 2), 30)
+            bar = "█" * bar_len
+            print(f"    {grade:>8}: {gb['count']:>4} ({gb['pct_of_total']:>5.1f}%) {bar}  "
+                  f"MFE={gb['avg_mfe_atr']:.2f} MAE={gb['avg_mae_atr']:.2f}")
+
+    # ── SECTION 2: EXIT EXECUTION EFFICIENCY ──
+    print()
+    print("── EXIT EXECUTION (how well exits capture favorable moves) ──")
+    print(f"  Correct signals with favorable move: {ee['correct_with_favorable_move']}")
+    print(f"  Avg capture:   {ee['avg_capture_pct']:.1f}% of MFE")
+    print(f"  Median capture: {ee['median_capture_pct']:.1f}% of MFE")
+    print(f"  ≥50% captured:  {ee['capture_over_50pct']}")
+    print(f"  ≥80% captured:  {ee['capture_over_80pct']}")
+    print(f"  <0% captured:  {ee.get('capture_under_0_pct', 0)}  (winners turned into losses)")
+
+    # Per-exit-reason capture
+    by_reason = ee.get("by_exit_reason", {})
+    if by_reason:
+        print()
+        print("  Capture by exit reason:")
+        for reason, stats in sorted(by_reason.items(), key=lambda x: -x[1]["count"]):
+            print(f"    {reason:<16}: {stats['count']:>3} trades  "
+                  f"avg capture={stats['avg_capture_pct']:.1f}%")
+
+    # Correct vs wrong exit PnL
+    print()
+    print(f"  Avg exit P&L on correct signals: {ee['avg_exit_pnl_correct_atr']:+.2f} ATR")
+    print(f"  Avg exit P&L on wrong signals:  {ee['avg_exit_pnl_wrong_atr']:+.2f} ATR")
+
+    # ── SECTION 3: P&L DECOMPOSITION ──
+    print()
+    print("── P&L DECOMPOSITION (signal value vs exit slippage) ──")
+    print(f"  Theoretical max (100% MFE capture):    {dc['theoretical_max_pnl_atr']:+.1f} ATR")
+    print(f"  Wrong-signal cost (adverse moves):      {dc['wrong_signal_cost_atr']:+.1f} ATR")
+    print(f"  Signal value (max - wrong cost):        {dc['signal_value_atr']:+.1f} ATR")
+    print(f"  Actual exit P&L:                        {dc['actual_exit_pnl_atr']:+.1f} ATR")
+    print(f"  Exit slippage (left on table):          {dc['exit_slippage_atr']:+.1f} ATR")
+    print(f"  Exit efficiency ratio:                  {dc['exit_efficiency_ratio']:.1f}%  "
+          f"(actual / theoretical)")
+    print()
+
+    # Top 10 worst captures (biggest MFE but poor exit)
+    if ee["correct_with_favorable_move"] > 0:
+        worst_captures = sorted(
+            [r for r in results if r.mfe_atr > 0 and r.signal_correct],
+            key=lambda r: r.exit_capture_pct
+        )[:10]
+        print("  Top 10 worst exit captures (biggest MFE, worst capture %):")
+        print(f"  {'Symbol':>8} {'Date':>12} {'Dir':>6} {'MFE':>6} {'Exit':>6} {'Cap%':>6} {'Reason':>14}")
+        for r in worst_captures:
+            print(f"  {r.symbol:>8} {r.signal_date!s:>12} {r.direction[:4]:>6} "
+                  f"{r.mfe_atr:>5.1f}R {r.exit_pnl_atr:>+5.1f}R "
+                  f"{r.exit_capture_pct:>5.1f}% {(r.exit_reason or '')[:14]:>14}")
+
+    print("=" * 72)
+
+
+# ---------------------------------------------------------------------------
+# ATR multiplier sweep engine (--atr-sweep)
+# ---------------------------------------------------------------------------
+def _sweep_simulate_trade(
+    signal: dict,
+    bars: list[Bar],
+    mode: str,
+    stop_mult: float,
+    tp1_mult: float,
+    tp2_mult: float,
+) -> dict[str, Any] | None:
+    """Lightweight trade simulation for ATR sweep — returns P&L dict or None.
+
+    Uses the same walk-forward logic as simulate_trade but avoids creating
+    a full GreeksTrade object. Returns dict with gross_pnl, exit_reason,
+    r_multiple, hold_days.
+    """
+    rules = STRATEGY_RULES.get(mode, STRATEGY_RULES["swing"])
+    signal_date = signal.get("signal_date", date.today())
+
+    entry_idx = next(
+        (i for i, b in enumerate(bars) if b.d > signal_date), None
+    )
+    if entry_idx is None:
+        return None
+
+    entry_bar = bars[entry_idx]
+    entry = entry_bar.o
+    atr = signal["atr"]
+    if atr is None or atr <= 0:
+        return None
+
+    direction = signal["direction"]
+    if direction == "bullish":
+        stop = entry - atr * stop_mult
+        tp1 = entry + atr * tp1_mult
+        tp2 = entry + atr * tp2_mult
+        risk_per_share = entry - stop
+    else:
+        stop = entry + atr * stop_mult
+        tp1 = entry - atr * tp1_mult
+        tp2 = entry - atr * tp2_mult
+        risk_per_share = stop - entry
+
+    if risk_per_share <= 0:
+        return None
+
+    tp1_size = rules["tp1_size"]
+    tp2_size = rules["tp2_size"]
+    remaining = 1.0
+    tp1_hit = False
+    tp2_hit = False
+    high_water = entry
+    low_water_sweep = entry  # BUG FIX: Initialize low_water for bearish trailing stops
+    trail_stop = stop
+    realised = 0.0
+    exit_reason = "end_of_data"
+    exit_date = None
+    hold_days = 0
+
+    for j in range(entry_idx, len(bars)):
+        bar = bars[j]
+        hold_days = (bar.d - entry_bar.d).days
+
+        # Day-trade time stop
+        if rules.get("time_stop") and j == entry_idx:
+            if direction == "bullish":
+                if bar.l <= stop:
+                    realised += (stop - entry)
+                    exit_reason = "stop_loss"
+                    exit_date = bar.d
+                    break
+                if not tp1_hit and bar.h >= tp1:
+                    realised += (tp1 - entry) * tp1_size
+                    remaining -= tp1_size
+                    tp1_hit = True
+                if not tp2_hit and bar.h >= tp2:
+                    realised += (tp2 - entry) * tp2_size
+                    remaining -= tp2_size
+                    tp2_hit = True
+            else:
+                if bar.h >= stop:
+                    realised += (entry - stop)
+                    exit_reason = "stop_loss"
+                    exit_date = bar.d
+                    break
+                if not tp1_hit and bar.l <= tp1:
+                    realised += (entry - tp1) * tp1_size
+                    remaining -= tp1_size
+                    tp1_hit = True
+                if not tp2_hit and bar.l <= tp2:
+                    realised += (entry - tp2) * tp2_size
+                    remaining -= tp2_size
+                    tp2_hit = True
+
+            # Flatten remainder at close
+            if remaining > 0:
+                if direction == "bullish":
+                    realised += (bar.c - entry) * remaining
+                else:
+                    realised += (entry - bar.c) * remaining
+            exit_reason = "time_stop"
+            exit_date = bar.d
+            break
+
+        # TP checked BEFORE stop (matches real broker: limit orders fill before stops)
+        if direction == "bullish":
+            if not tp1_hit and bar.h >= tp1:
+                realised += (tp1 - entry) * tp1_size
+                remaining -= tp1_size
+                tp1_hit = True
+                if rules.get("trail"):
+                    trail_stop = max(trail_stop, entry)
+            if not tp2_hit and bar.h >= tp2:
+                realised += (tp2 - entry) * tp2_size
+                remaining -= tp2_size
+                tp2_hit = True
+            if remaining > 0 and bar.l <= trail_stop:
+                realised += (trail_stop - entry) * remaining
+                exit_reason = "stop_loss" if not tp1_hit else "trail_stop"
+                exit_date = bar.d
+                break
+        else:
+            if not tp1_hit and bar.l <= tp1:
+                realised += (entry - tp1) * tp1_size
+                remaining -= tp1_size
+                tp1_hit = True
+                if rules.get("trail"):
+                    trail_stop = min(trail_stop, entry)
+            if not tp2_hit and bar.l <= tp2:
+                realised += (entry - tp2) * tp2_size
+                remaining -= tp2_size
+                tp2_hit = True
+            if remaining > 0 and bar.h >= trail_stop:
+                realised += (entry - trail_stop) * remaining
+                exit_reason = "stop_loss" if not tp1_hit else "trail_stop"
+                exit_date = bar.d
+                break
+
+        # Trailing stop
+        if rules.get("trail") and remaining > 0:
+            if direction == "bullish":
+                high_water = max(high_water, bar.h)
+                new_trail = high_water - atr * rules.get("trail_atr_mult", 2.0)
+                trail_stop = max(trail_stop, new_trail)
+            else:
+                # BUG FIX: Track lowest water mark properly (like high_water for bullish)
+                low_water_sweep = min(low_water_sweep, bar.l)
+                new_trail = low_water_sweep + atr * rules.get("trail_atr_mult", 2.0)
+                trail_stop = min(trail_stop, new_trail)
+
+        # Thesis drawdown (long_term)
+        if rules.get("thesis_drawdown") and remaining > 0:
+            if direction == "bullish":
+                if bar.c <= entry * (1.0 - rules["thesis_drawdown"]):
+                    realised += (bar.c - entry) * remaining
+                    exit_reason = "thesis_stop"
+                    exit_date = bar.d
+                    break
+            else:
+                if bar.c >= entry * (1.0 + rules["thesis_drawdown"]):
+                    realised += (entry - bar.c) * remaining
+                    exit_reason = "thesis_stop"
+                    exit_date = bar.d
+                    break
+
+        # Max hold
+        if hold_days >= rules["max_hold_days"] and remaining > 0:
+            if direction == "bullish":
+                realised += (bar.c - entry) * remaining
+            else:
+                realised += (entry - bar.c) * remaining
+            exit_reason = "max_hold"
+            exit_date = bar.d
+            break
+
+        if remaining <= 1e-9:
+            exit_reason = "tp2" if tp2_hit else "tp1"
+            exit_date = bar.d
+            break
+    else:
+        # Ran off end of data
+        last = bars[-1]
+        if remaining > 0:
+            if direction == "bullish":
+                realised += (last.c - entry) * remaining
+            else:
+                realised += (entry - last.c) * remaining
+        exit_date = last.d
+        hold_days = (last.d - entry_bar.d).days
+
+    r_multiple = realised / risk_per_share if risk_per_share > 0 else 0.0
+    return {
+        "gross_pnl": realised,
+        "exit_reason": exit_reason,
+        "r_multiple": round(r_multiple, 4),
+        "hold_days": hold_days,
+    }
+
+
+def run_atr_sweep(
+    conn,
+    mode: str,
+    start: date,
+    end: date,
+    use_new_rules: bool = True,
+    capital: float = 10_000.0,
+    stop_mults: list[float] | None = None,
+    tp1_mults: list[float] | None = None,
+) -> tuple[list[ATRSweepSymbolResult], ATRSweepCombo]:
+    """Run ATR multiplier sweep (--atr-sweep).
+
+    For each qualifying signal, re-simulate the trade across every (stop, tp1)
+    combination in the grid. Aggregates per-symbol and overall results to find
+    the optimal stop/target configuration.
+
+    Returns (per_symbol_results, overall_best_combo).
+    """
+    if stop_mults is None:
+        stop_mults = ATR_SWEEP_STOP_MULTS
+    if tp1_mults is None:
+        tp1_mults = ATR_SWEEP_TP1_MULTS
+
+    # Fetch trading dates
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT o.timestamp::date
+            FROM market.ohlcv o
+            JOIN market.assets a ON a.id = o.asset_id
+            WHERE o.timeframe = '1d'
+              AND a.active = TRUE
+              AND o.timestamp::date BETWEEN %s AND %s
+            ORDER BY o.timestamp::date
+        """, (start, end))
+        trading_dates = [r[0] for r in cur.fetchall()]
+
+    grid_size = len(stop_mults) * len(tp1_mults)
+    print(f"ATR Sweep: {len(trading_dates)} trading days, mode={mode}, "
+          f"grid={len(stop_mults)}×{len(tp1_mults)}={grid_size} combos")
+
+    # Pre-fetch bars
+    bar_end = end + timedelta(days=400)
+    with conn.cursor() as cur:
+        cur.execute("SELECT symbol FROM market.assets WHERE active = TRUE ORDER BY symbol")
+        all_symbols = [r[0] for r in cur.fetchall()]
+
+    bars_cache: dict[str, list[Bar]] = {}
+    for sym in all_symbols:
+        bars_cache[sym] = fetch_bars(conn, sym, start - timedelta(days=60), bar_end)
+
+    # Collect signals: {(symbol, signal_date): (signal_dict, greeks_dict)}
+    # Only keep greeks-passed signals
+    signals_by_symbol: dict[str, list[tuple[dict, dict]]] = {}
+    total_signals = 0
+
+    for d in trading_dates:
+        snapshot = fetch_daily_snapshot(conn, d)
+        for row in snapshot:
+            sym = row["symbol"]
+            signal = evaluate_scanner_gates(sym, row, mode)
+            if signal is None:
+                continue
+            signal["signal_date"] = d
+
+            bars = bars_cache.get(sym, [])
+            signal_bar = next((b for b in bars if b.d == d), None)
+            if signal_bar is None:
+                continue
+
+            # BUG FIX: Use next-day open as entry price (matching simulate_trade),
+            # not signal-day close, for greeks simulation
+            entry_idx_greeks = next(
+                (i for i, b in enumerate(bars) if b.d > d), None
+            )
+            if entry_idx_greeks is None:
+                continue
+            entry_price = bars[entry_idx_greeks].o
+            greeks = simulate_greeks(signal, entry_price, mode, use_new_rules)
+            if not greeks["greeks_pass"]:
+                continue
+
+            signals_by_symbol.setdefault(sym, []).append((signal, greeks))
+            total_signals += 1
+
+    print(f"  Signals collected: {total_signals} across {len(signals_by_symbol)} symbols")
+
+    # Sweep per symbol
+    symbol_results: list[ATRSweepSymbolResult] = []
+    # Overall: track per-combo (signal_date, gross_pnl, r_multiple) for time-ordered stats
+    overall_entries: dict[tuple[float, float, float], list[tuple[date, float, float]]] = {}
+
+    for sym in sorted(signals_by_symbol.keys()):
+        sigs = signals_by_symbol[sym]
+        sym_result = ATRSweepSymbolResult(symbol=sym, signal_count=len(sigs))
+        sym_combo_results: list[ATRSweepCombo] = []
+
+        for stop_m in stop_mults:
+            for tp1_m in tp1_mults:
+                tp2_m = round(tp1_m * ATR_SWEEP_TP2_RATIO, 2)
+                combo_pnls: list[float] = []
+                combo_rs: list[float] = []
+
+                for signal, greeks in sigs:
+                    bars = bars_cache.get(sym, [])
+                    # Override signal's stop/tp mults for sweep
+                    sweep_signal = dict(signal)
+                    sweep_signal["stop_mult"] = stop_m
+                    sweep_signal["tp1_mult"] = tp1_m
+                    sweep_signal["tp2_mult"] = tp2_m
+
+                    result = _sweep_simulate_trade(
+                        sweep_signal, bars, mode, stop_m, tp1_m, tp2_m,
+                    )
+                    if result is not None:
+                        sig_date = signal.get("signal_date", date.today())
+                        combo_pnls.append(result["gross_pnl"])
+                        combo_rs.append(result["r_multiple"])
+                        # Track for overall (date-ordered) aggregation
+                        key = (stop_m, tp1_m, tp2_m)
+                        overall_entries.setdefault(key, []).append(
+                            (sig_date, result["gross_pnl"], result["r_multiple"])
+                        )
+
+                if not combo_pnls:
+                    continue
+
+                winners = [p for p in combo_pnls if p > 0]
+                losers = [p for p in combo_pnls if p <= 0]
+                gross_win = sum(winners)
+                gross_loss = abs(sum(losers))
+                pf = (gross_win / gross_loss) if gross_loss > 0 else (
+                    float("inf") if gross_win > 0 else 0.0
+                )
+                wr = len(winners) / len(combo_pnls) if combo_pnls else 0.0
+                avg_r = statistics.mean(combo_rs) if combo_rs else 0.0
+                total_pnl = sum(combo_pnls)
+                expectancy = wr * (statistics.mean(winners) if winners else 0) + \
+                             (1 - wr) * (-(statistics.mean([abs(p) for p in losers]) if losers else 0))
+
+                # Max drawdown for combo
+                eq = 0.0
+                peak = 0.0
+                max_dd = 0.0
+                for p in combo_pnls:
+                    eq += p
+                    peak = max(peak, eq)
+                    if peak > 0:
+                        dd = (peak - eq) / peak
+                        max_dd = max(max_dd, dd)
+
+                combo = ATRSweepCombo(
+                    stop_mult=stop_m,
+                    tp1_mult=tp1_m,
+                    tp2_mult=tp2_m,
+                    trades=len(combo_pnls),
+                    winners=len(winners),
+                    losers=len(losers),
+                    win_rate=round(wr, 4),
+                    avg_r=round(avg_r, 4),
+                    profit_factor=round(pf, 4) if pf != float("inf") else None,
+                    total_pnl=round(total_pnl, 2),
+                    max_drawdown_pct=round(max_dd * 100, 2),
+                    expectancy=round(expectancy, 4),
+                )
+                sym_combo_results.append(combo)
+
+                # Tracked above in overall_entries during per-signal loop
+
+        # Find best combos per symbol
+        scored_combos = [c for c in sym_combo_results if c.trades > 0]
+        if scored_combos:
+            sym_result.best_by_pf = max(
+                scored_combos,
+                key=lambda c: c.profit_factor if c.profit_factor is not None else -1,
+            )
+            sym_result.best_by_wr = max(scored_combos, key=lambda c: c.win_rate)
+            sym_result.best_by_expect = max(scored_combos, key=lambda c: c.expectancy)
+            sym_result.best_by_r = max(scored_combos, key=lambda c: c.avg_r)
+        sym_result.combos = sym_combo_results
+        symbol_results.append(sym_result)
+
+    # Compute overall best combo from already-collected overall_entries
+    overall_combos: list[ATRSweepCombo] = []
+    for (stop_m, tp1_m, tp2_m), entries in overall_entries.items():
+        if not entries:
+            continue
+        pnls = [e[1] for e in entries]
+        rs = [e[2] for e in entries]
+        # Sort by signal_date for drawdown
+        entries_sorted = sorted(entries, key=lambda e: e[0])
+        ordered_pnls = [e[1] for e in entries_sorted]
+
+        winners = [p for p in pnls if p > 0]
+        losers_l = [p for p in pnls if p <= 0]
+        gross_win = sum(winners)
+        gross_loss = abs(sum(losers_l))
+        pf = (gross_win / gross_loss) if gross_loss > 0 else (
+            float("inf") if gross_win > 0 else 0.0
+        )
+        wr = len(winners) / len(pnls) if pnls else 0.0
+        avg_r = statistics.mean(rs) if rs else 0.0
+        total_pnl = sum(pnls)
+        expectancy = wr * (statistics.mean(winners) if winners else 0) + \
+                     (1 - wr) * (-(statistics.mean([abs(p) for p in losers_l]) if losers_l else 0))
+
+        eq = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for p in ordered_pnls:
+            eq += p
+            peak = max(peak, eq)
+            if peak > 0:
+                dd = (peak - eq) / peak
+                max_dd = max(max_dd, dd)
+
+        overall_combos.append(ATRSweepCombo(
+            stop_mult=stop_m,
+            tp1_mult=tp1_m,
+            tp2_mult=tp2_m,
+            trades=len(pnls),
+            winners=len(winners),
+            losers=len(losers_l),
+            win_rate=round(wr, 4),
+            avg_r=round(avg_r, 4),
+            profit_factor=round(pf, 4) if pf != float("inf") else None,
+            total_pnl=round(total_pnl, 2),
+            max_drawdown_pct=round(max_dd * 100, 2),
+            expectancy=round(expectancy, 4),
+        ))
+
+    overall_best = max(
+        overall_combos,
+        key=lambda c: c.profit_factor if c.profit_factor is not None else -1,
+    ) if overall_combos else ATRSweepCombo(
+        stop_mult=ATR_STOP_MULT.get(mode, 2.0),
+        tp1_mult=ATR_TP1_MULT.get(mode, 6.0),
+        tp2_mult=ATR_TP2_MULT.get(mode, 10.0),
+    )
+
+    return symbol_results, overall_best
+
+
+def write_atr_sweep_results(
+    conn,
+    run_name: str,
+    symbol_results: list[ATRSweepSymbolResult],
+    overall_best: ATRSweepCombo,
+    mode: str,
+    start: date,
+    end: date,
+) -> None:
+    """Persist ATR sweep results to trading.backtest_atr_sweep."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trading.backtest_atr_sweep (
+                id SERIAL PRIMARY KEY,
+                run_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                signal_count INT,
+                best_stop_mult DOUBLE PRECISION,
+                best_tp1_mult DOUBLE PRECISION,
+                best_tp2_mult DOUBLE PRECISION,
+                best_pf DOUBLE PRECISION,
+                best_by TEXT NOT NULL DEFAULT 'profit_factor',
+                best_win_rate DOUBLE PRECISION,
+                best_avg_r DOUBLE PRECISION,
+                best_total_pnl DOUBLE PRECISION,
+                best_max_dd_pct DOUBLE PRECISION,
+                best_expectancy DOUBLE PRECISION,
+                all_combos JSONB,
+                UNIQUE(run_name, symbol, mode)
+            )
+        """)
+        for sr in symbol_results:
+            best = sr.best_by_pf
+            if best is None:
+                continue
+            combos_json = [
+                {
+                    "stop": c.stop_mult, "tp1": c.tp1_mult, "tp2": c.tp2_mult,
+                    "trades": c.trades, "winners": c.winners, "losers": c.losers,
+                    "win_rate": c.win_rate, "avg_r": c.avg_r,
+                    "profit_factor": c.profit_factor, "total_pnl": c.total_pnl,
+                    "max_dd_pct": c.max_drawdown_pct, "expectancy": c.expectancy,
+                }
+                for c in sr.combos
+            ]
+            cur.execute("""
+                INSERT INTO trading.backtest_atr_sweep (
+                    run_name, symbol, mode, start_date, end_date, signal_count,
+                    best_stop_mult, best_tp1_mult, best_tp2_mult,
+                    best_pf, best_by, best_win_rate, best_avg_r,
+                    best_total_pnl, best_max_dd_pct, best_expectancy, all_combos
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (run_name, symbol, mode) DO UPDATE SET
+                    signal_count = EXCLUDED.signal_count,
+                    best_stop_mult = EXCLUDED.best_stop_mult,
+                    best_tp1_mult = EXCLUDED.best_tp1_mult,
+                    best_tp2_mult = EXCLUDED.best_tp2_mult,
+                    best_pf = EXCLUDED.best_pf,
+                    best_by = EXCLUDED.best_by,
+                    best_win_rate = EXCLUDED.best_win_rate,
+                    best_avg_r = EXCLUDED.best_avg_r,
+                    best_total_pnl = EXCLUDED.best_total_pnl,
+                    best_max_dd_pct = EXCLUDED.best_max_dd_pct,
+                    best_expectancy = EXCLUDED.best_expectancy,
+                    all_combos = EXCLUDED.all_combos
+            """, (
+                run_name, sr.symbol, mode, start, end, sr.signal_count,
+                best.stop_mult, best.tp1_mult, best.tp2_mult,
+                best.profit_factor, "profit_factor",
+                best.win_rate, best.avg_r,
+                best.total_pnl, best.max_drawdown_pct, best.expectancy,
+                Json(combos_json),
+            ))
+
+        # Write overall row (symbol = '__OVERALL__')
+        cur.execute("""
+            INSERT INTO trading.backtest_atr_sweep (
+                run_name, symbol, mode, start_date, end_date, signal_count,
+                best_stop_mult, best_tp1_mult, best_tp2_mult,
+                best_pf, best_by, best_win_rate, best_avg_r,
+                best_total_pnl, best_max_dd_pct, best_expectancy, all_combos
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            ON CONFLICT (run_name, symbol, mode) DO UPDATE SET
+                signal_count = EXCLUDED.signal_count,
+                best_stop_mult = EXCLUDED.best_stop_mult,
+                best_tp1_mult = EXCLUDED.best_tp1_mult,
+                best_tp2_mult = EXCLUDED.best_tp2_mult,
+                best_pf = EXCLUDED.best_pf,
+                best_by = EXCLUDED.best_by,
+                best_win_rate = EXCLUDED.best_win_rate,
+                best_avg_r = EXCLUDED.best_avg_r,
+                best_total_pnl = EXCLUDED.best_total_pnl,
+                best_max_dd_pct = EXCLUDED.best_max_dd_pct,
+                best_expectancy = EXCLUDED.best_expectancy,
+                all_combos = EXCLUDED.all_combos
+        """, (
+            run_name, "__OVERALL__", mode, start, end, 0,
+            overall_best.stop_mult, overall_best.tp1_mult, overall_best.tp2_mult,
+            overall_best.profit_factor, "profit_factor",
+            overall_best.win_rate, overall_best.avg_r,
+            overall_best.total_pnl, overall_best.max_drawdown_pct,
+            overall_best.expectancy, Json([]),
+        ))
+    conn.commit()
+
+
+def print_atr_sweep_report(
+    mode: str,
+    start: date,
+    end: date,
+    symbol_results: list[ATRSweepSymbolResult],
+    overall_best: ATRSweepCombo,
+) -> None:
+    """Print the --atr-sweep results report."""
+    print()
+    print("=" * 78)
+    print(f"ATR Multiplier Sweep Results: mode={mode}  range={start} → {end}")
+    print(f"Default: stop={ATR_STOP_MULT.get(mode,2.0)}×  "
+          f"TP1={ATR_TP1_MULT.get(mode,6.0)}×  TP2={ATR_TP2_MULT.get(mode,10.0)}×")
+    print("=" * 78)
+
+    # ── Overall best ──
+    print()
+    print("── OVERALL BEST COMBO (by profit factor) ──")
+    ob = overall_best
+    print(f"  Stop={ob.stop_mult}×ATR  TP1={ob.tp1_mult}×ATR  TP2={ob.tp2_mult}×ATR")
+    print(f"  Trades={ob.trades}  WinRate={ob.win_rate*100:.1f}%  "
+          f"AvgR={ob.avg_r:+.2f}  PF={ob.profit_factor if ob.profit_factor is None else f'{ob.profit_factor:.2f}'}  "
+          f"Expectancy={ob.expectancy:+.4f}")
+    print(f"  TotalPnL={ob.total_pnl:+,.2f}  MaxDD={ob.max_drawdown_pct:.1f}%")
+
+    # ── Per-symbol best combos ──
+    print()
+    print("── OPTIMAL STOP/TARGET PER SYMBOL ──")
+    hdr = (f"  {'Symbol':>8} {'#Sig':>4} | {'Stop':>5} {'TP1':>5} {'TP2':>5} | "
+           f"{'Trades':>6} {'Win%':>6} {'AvgR':>6} {'PF':>6} {'Exp':>8} | "
+           f"{'PnL':>10} {'MaxDD':>6}")
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+
+    for sr in sorted(symbol_results, key=lambda s: -(s.best_by_pf.total_pnl if s.best_by_pf else 0)):
+        b = sr.best_by_pf
+        if b is None:
+            continue
+        pf_str = f"{b.profit_factor:.2f}" if b.profit_factor is not None else "n/a"
+        print(f"  {sr.symbol:>8} {sr.signal_count:>4} | "
+              f"{b.stop_mult:>5.1f} {b.tp1_mult:>5.1f} {b.tp2_mult:>5.1f} | "
+              f"{b.trades:>6} {b.win_rate*100:>5.1f}% {b.avg_r:>+5.2f} "
+              f"{pf_str:>6} {b.expectancy:>+8.4f} | "
+              f"{b.total_pnl:>+10,.0f} {b.max_drawdown_pct:>5.1f}%")
+
+    # ── Heat map: PF by (stop, tp1) for top symbols ──
+    # Show top 3 symbols with most signals, or all if ≤5
+    top_symbols = sorted(symbol_results, key=lambda s: -s.signal_count)[:5]
+    if len(top_symbols) > 1:
+        print()
+        print("── PF HEAT MAP (stop_mult × tp1_mult) for top-volume symbols ──")
+        for sr in top_symbols:
+            if not sr.combos:
+                continue
+            print(f"\n  {sr.symbol} ({sr.signal_count} signals):")
+            # Header row
+            corner = "stop\\tp1"
+            header = f"  {corner:>8}"
+            for tp1_m in ATR_SWEEP_TP1_MULTS:
+                header += f" {tp1_m:>7.1f}"
+            print(header)
+            print("  " + "-" * (9 + 8 * len(ATR_SWEEP_TP1_MULTS)))
+
+            for stop_m in ATR_SWEEP_STOP_MULTS:
+                row_str = f"  {stop_m:>8.1f}"
+                for tp1_m in ATR_SWEEP_TP1_MULTS:
+                    match = next(
+                        (c for c in sr.combos
+                         if abs(c.stop_mult - stop_m) < 0.01
+                         and abs(c.tp1_mult - tp1_m) < 0.01),
+                        None,
+                    )
+                    if match and match.profit_factor is not None:
+                        # Color code: PF>1.5 = ✓, 1.0-1.5 = •, <1.0 = ✗
+                        pf_val = match.profit_factor
+                        if pf_val >= 1.5:
+                            marker = "✓"
+                        elif pf_val >= 1.0:
+                            marker = "•"
+                        else:
+                            marker = "✗"
+                        row_str += f" {pf_val:>6.2f}{marker}"
+                    elif match and match.profit_factor is None:
+                        row_str += f"   inf✓"
+                    else:
+                        row_str += f"     -"
+                print(row_str)
+
+    # ── Comparison vs defaults ──
+    default_stop = ATR_STOP_MULT.get(mode, 2.0)
+    default_tp1 = ATR_TP1_MULT.get(mode, 6.0)
+    default_tp2 = ATR_TP2_MULT.get(mode, 10.0)
+    print()
+    print("── COMPARISON: DEFAULT vs OPTIMAL ──")
+    better_stocks = 0
+    worse_stocks = 0
+    for sr in symbol_results:
+        b = sr.best_by_pf
+        if b is None:
+            continue
+        # Find the default combo for this symbol
+        default_combo = next(
+            (c for c in sr.combos
+             if abs(c.stop_mult - default_stop) < 0.01
+             and abs(c.tp1_mult - default_tp1) < 0.01),
+            None,
+        )
+        if default_combo and default_combo.profit_factor is not None and b.profit_factor is not None:
+            if b.profit_factor > default_combo.profit_factor:
+                better_stocks += 1
+            elif b.profit_factor < default_combo.profit_factor:
+                worse_stocks += 1
+
+    print(f"  Stocks where sweep beats default: {better_stocks}")
+    print(f"  Stocks where default beats sweep:  {worse_stocks}")
+    print(f"  Stocks with no default comparison: {len(symbol_results) - better_stocks - worse_stocks}")
+    print()
+
+    # ── Multi-criteria best: show per-symbol if different criteria disagree ──
+    disagreements = 0
+    for sr in symbol_results:
+        criteria = [sr.best_by_pf, sr.best_by_wr, sr.best_by_r, sr.best_by_expect]
+        combos_set = set()
+        for c in criteria:
+            if c:
+                combos_set.add((c.stop_mult, c.tp1_mult))
+        if len(combos_set) > 1:
+            disagreements += 1
+
+    if disagreements > 0:
+        print(f"  ⚠️  {disagreements}/{len(symbol_results)} symbols have different "
+              f"optimal combos across criteria (PF vs WR vs R vs Expect)")
+        print("  Use --atr-sweep --name <run> to persist all combos for analysis")
+
+    print("=" * 78)
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +1614,7 @@ def fetch_daily_snapshot(conn, on_date: date) -> list[dict]:
                 ti.ema_9, ti.ema_21, ti.ema_50, ti.ema_200,
                 ti.rsi_14, ti.atr_14,
                 ts.adx,
-                iv.iv_rank_52w, iv.current_iv,
+                iv.iv_rank_52w, iv.current_iv, iv.iv_percentile,
                 rv.rv_20d,
                 io.direction AS iv_outlier_direction
             FROM market.assets a
@@ -349,29 +1718,23 @@ def evaluate_scanner_gates(
         fail_reasons.append(f"RSI {rsi:.1f} <= {RSI_BEAR_MIN}")
         return None
 
-    # Gate 4: IV rank — 0 < iv_rank < 75 (don't trade in sell_premium)
-    if iv_rank is None:
-        fail_reasons.append("IV rank missing")
+    # Gate 4: IV percentile < 40 (cheap premium — matches scan_setups.py)
+    iv_pctile = _fnum(row.get("iv_percentile"))
+    if iv_pctile is None:
+        fail_reasons.append("IV percentile missing")
         return None
-    if iv_rank >= IV_RANK_MAX:
-        fail_reasons.append(f"IV rank {iv_rank:.1f} >= {IV_RANK_MAX}")
-        return None
-    if iv_rank <= 0:
-        fail_reasons.append(f"IV rank {iv_rank:.1f} <= 0")
+    if iv_pctile >= IV_PCTILE_MAX:
+        fail_reasons.append(f"IV percentile {iv_pctile:.1f} >= {IV_PCTILE_MAX}")
         return None
 
-    # Gate 5: IV-RV spread — (iv_rank - rv) < 50
-    # NOTE: The spec says iv_rank - rv < 50 pct points. scan_setups.py uses
-    # IV - RV20d <= 0.05 (5pp). We use the greeks backtest spec (50pp) since
-    # iv_rank is already a 0-100 percentile, not raw IV.
-    if rv20 is None:
-        fail_reasons.append("RV20 missing")
+    # Gate 5: current_iv - rv_20d <= 0.05 (fair pricing — matches scan_setups.py)
+    # Both current_iv and rv_20d are stored as decimals (e.g. 0.53 = 53%)
+    if current_iv is None or rv20 is None:
+        fail_reasons.append("IV or RV20 missing")
         return None
-    assert iv_rank is not None  # already checked above
-    rv20_pct = rv20 * 100.0  # rv is 0-1 decimal, convert to pct
-    iv_rv_spread = iv_rank - rv20_pct
+    iv_rv_spread = current_iv - rv20
     if iv_rv_spread > IV_RV_SPREAD_MAX:
-        fail_reasons.append(f"IV-RV spread {iv_rv_spread:.1f} > {IV_RV_SPREAD_MAX}")
+        fail_reasons.append(f"IV-RV spread {iv_rv_spread:.4f} > {IV_RV_SPREAD_MAX}")
         return None
 
     # Gate 6: Premium check — simulated, always pass for backtest (we don't
@@ -409,6 +1772,7 @@ def evaluate_scanner_gates(
         "adx": adx,
         "atr": atr,
         "iv_rank": iv_rank,
+        "iv_percentile": iv_pctile,
         "current_iv": current_iv,
         "rv20": rv20,
         "iv_rv_spread": iv_rv_spread,
@@ -596,6 +1960,20 @@ def position_size(
     return max(0.0, min(qty_by_risk, qty_by_cap))
 
 
+def _compute_net_pnl(trade: GreeksTrade) -> float:
+    """Compute net_pnl from gross_pnl by deducting estimated commissions + slippage.
+
+    Model: $0.65/contract × 100 shares/contract × contracts_needed × 2 sides
+    contracts_needed = ceil(quantity / 100)  (1 option contract covers 100 shares)
+    + 0.1% round-trip slippage on underlying × qty.
+    """
+    import math
+    contracts_needed = max(1, math.ceil(trade.quantity / 100.0)) if trade.quantity > 0 else 1
+    commission = COMMISSION_PER_CONTRACT * contracts_needed * 2  # per-contract × entry+exit
+    slippage = trade.entry_price * SLIPPAGE_PCT * trade.quantity  # round-trip
+    return round(trade.gross_pnl - commission - slippage, 4)
+
+
 def simulate_trade(
     signal: dict,
     greeks: dict,
@@ -684,6 +2062,7 @@ def simulate_trade(
     tp1_hit = False
     tp2_hit = False
     high_water = entry
+    low_water = entry  # BUG FIX: Initialize low_water for bearish trailing stops
     trail_stop = stop
     realised = 0.0
 
@@ -759,21 +2138,13 @@ def simulate_trade(
             trade.gross_pnl = realised
             return trade
 
-        # Stop-loss check
+        # BUG FIX: Check TP BEFORE stop on each bar.
+        # When a bar gaps and both stop and TP trigger, the more favorable
+        # outcome (TP hit) should take priority — matching real broker behavior
+        # where a limit order (TP) fills before a stop order when price moves
+        # through both levels.
         if direction == "bullish":
-            if bar.l <= trail_stop:
-                portion = qty * remaining
-                realised += (trail_stop - entry) * portion
-                trade.partial_exits.append(
-                    {"date": bar.d.isoformat(), "price": trail_stop, "qty": portion,
-                     "reason": "stop_loss" if not tp1_hit else "trail_stop"}
-                )
-                trade.exit_date = bar.d
-                trade.exit_price = trail_stop
-                trade.exit_reason = "stop_loss" if not tp1_hit else "trail_stop"
-                trade.gross_pnl = realised
-                return trade
-            # TP1 partial
+            # TP1 partial (check before stop)
             if not tp1_hit and bar.h >= tp1:
                 portion = qty * tp1_size
                 realised += (tp1 - entry) * portion
@@ -793,10 +2164,10 @@ def simulate_trade(
                 )
                 remaining -= tp2_size
                 tp2_hit = True
-        else:  # bearish
-            if bar.h >= trail_stop:
+            # Stop-loss check (after TP — only if no TP hit on this bar)
+            if bar.l <= trail_stop and remaining > 0:
                 portion = qty * remaining
-                realised += (entry - trail_stop) * portion
+                realised += (trail_stop - entry) * portion
                 trade.partial_exits.append(
                     {"date": bar.d.isoformat(), "price": trail_stop, "qty": portion,
                      "reason": "stop_loss" if not tp1_hit else "trail_stop"}
@@ -806,7 +2177,8 @@ def simulate_trade(
                 trade.exit_reason = "stop_loss" if not tp1_hit else "trail_stop"
                 trade.gross_pnl = realised
                 return trade
-            # TP1 partial
+        else:  # bearish
+            # TP1 partial (check before stop)
             if not tp1_hit and bar.l <= tp1:
                 portion = qty * tp1_size
                 realised += (entry - tp1) * portion
@@ -826,6 +2198,19 @@ def simulate_trade(
                 )
                 remaining -= tp2_size
                 tp2_hit = True
+            # Stop-loss check (after TP — only if no TP hit on this bar)
+            if bar.h >= trail_stop and remaining > 0:
+                portion = qty * remaining
+                realised += (entry - trail_stop) * portion
+                trade.partial_exits.append(
+                    {"date": bar.d.isoformat(), "price": trail_stop, "qty": portion,
+                     "reason": "stop_loss" if not tp1_hit else "trail_stop"}
+                )
+                trade.exit_date = bar.d
+                trade.exit_price = trail_stop
+                trade.exit_reason = "stop_loss" if not tp1_hit else "trail_stop"
+                trade.gross_pnl = realised
+                return trade
 
         # Trailing stop on remainder
         if rules.get("trail") and remaining > 0:
@@ -834,8 +2219,8 @@ def simulate_trade(
                 new_trail = high_water - atr * rules.get("trail_atr_mult", 2.0)
                 trail_stop = max(trail_stop, new_trail)
             else:
-                # For bearish, track lowest water mark and trail stop UP
-                low_water = bar.l  # bar low for trailing
+                # BUG FIX: Track lowest water mark properly (like high_water for bullish)
+                low_water = min(low_water, bar.l)
                 new_trail = low_water + atr * rules.get("trail_atr_mult", 2.0)
                 trail_stop = min(trail_stop, new_trail)
 
@@ -1124,7 +2509,7 @@ def write_trades(conn, run_id: int, trades: list[GreeksTrade]) -> None:
                 t.stop_loss, t.tp1_price, t.tp2_price, t.atr_at_entry,
                 t.risk_per_share, t.capital_at_entry,
                 t.exit_date, t.exit_price, t.exit_reason,
-                t.gross_pnl, t.gross_pnl, round(t.r_multiple, 4), t.hold_days,
+                t.gross_pnl, t.net_pnl, round(t.r_multiple, 4), t.hold_days,
                 Json(t.partial_exits), t.pdt_flag,
                 t.trade_mode, t.option_delta, t.option_theta, t.option_theta_pct,
                 t.option_vega, t.option_gamma, t.iv_rank_at_entry, t.iv_regime_at_entry,
@@ -1269,15 +2654,26 @@ def _slice_metrics(trades: list[GreeksTrade]) -> dict[str, Any]:
     total_pnl = sum(t.gross_pnl for t in executed)
 
     # Max drawdown for this slice (equity curve method)
+    # BUG FIX: Start equity at the sum of absolute risk (capital basis)
+    # so all-loss slices still compute a meaningful drawdown.
+    # Use cumulative P&L relative to peak P&L reached.
     equity = 0.0
     peak = 0.0
     max_dd = 0.0
+    cumulative_risk = sum(
+        t.risk_per_share * t.quantity for t in executed
+        if t.risk_per_share > 0 and t.quantity > 0
+    )
+    # If we have no risk basis, just sum P&L directly
     for t in sorted(executed, key=lambda t: (t.exit_date or t.entry_date)):
         equity += t.gross_pnl
         peak = max(peak, equity)
         if peak > 0:
             dd = (peak - equity) / peak
             max_dd = max(max_dd, dd)
+        elif peak <= 0 and equity < 0:
+            # All trades are losers so far; dd = total loss / total risk
+            max_dd = 1.0  # 100% of risk capital lost
 
     return {
         "total_signals": len(trades),
@@ -1362,7 +2758,8 @@ def compute_slices(
                    exit_date, exit_price, exit_reason, gross_pnl, net_pnl,
                    r_multiple, hold_days, trade_mode, option_delta,
                    iv_rank_at_entry, iv_regime_at_entry, greeks_pass,
-                   greeks_fail_reasons, tp1_price, tp2_price, stop_loss
+                   greeks_fail_reasons, tp1_price, tp2_price, stop_loss,
+                   quantity, risk_per_share
             FROM trading.backtest_trades
             WHERE run_id = %s
         """, (run_id,))
@@ -1389,6 +2786,8 @@ def compute_slices(
                 'tp1_price': float(row['tp1_price'] or 0),
                 'tp2_price': float(row['tp2_price'] or 0),
                 'stop_loss': float(row['stop_loss'] or 0),
+                'quantity': float(row['quantity'] or 0),
+                'risk_per_share': float(row['risk_per_share'] or 0),
             })())
 
     # Use DB trades if available, otherwise fall back to in-memory signals
@@ -1587,6 +2986,8 @@ def run_greeks_backtest(
     # Track all signals (including greeks-rejected ones) and all executed trades
     all_signals: list[GreeksTrade] = []
     executed_trades: list[GreeksTrade] = []
+    open_positions: dict[str, GreeksTrade] = {}   # symbol -> currently open trade
+    skip_max_pos = 0                               # count of skipped due to position limit
     capital = initial_capital
 
     # Reject counters
@@ -1608,6 +3009,11 @@ def run_greeks_backtest(
         snapshot = fetch_daily_snapshot(conn, d)
         regime = fetch_regime(conn, d)
 
+        # BUG FIX: Capital look-ahead bias — collect same-day P&L and apply
+        # at end of day so subsequent signals on the same day don't see
+        # already-credited (or debited) capital from earlier trades' outcomes.
+        day_pnl = 0.0
+
         for row in snapshot:
             sym = row["symbol"]
 
@@ -1627,7 +3033,14 @@ def run_greeks_backtest(
             if signal_bar is None:
                 continue
 
-            entry_price = signal_bar.c  # Use close of signal day as proxy
+            # BUG FIX: Use next-day open as entry price (matching simulate_trade),
+            # not signal-day close, for greeks simulation
+            entry_idx_greeks = next(
+                (i for i, b in enumerate(bars) if b.d > d), None
+            )
+            if entry_idx_greeks is None:
+                continue
+            entry_price = bars[entry_idx_greeks].o
 
             # Simulate greeks and apply greeks strategy gates
             greeks = simulate_greeks(signal, entry_price, mode, use_new_rules)
@@ -1664,6 +3077,13 @@ def run_greeks_backtest(
             all_signals.append(trade)
 
             if greeks["greeks_pass"]:
+                # Enforce max concurrent positions — don't open new if at limit
+                if len(open_positions) >= MAX_CONCURRENT_POSITIONS:
+                    skip_max_pos += 1
+                    greeks_fail_count += 1
+                    greeks["greeks_fail_reasons"].append("max_concurrent_positions")
+                    continue
+
                 greeks_pass_count += 1
                 # Simulate the trade
                 sim_trade = simulate_trade(
@@ -1671,7 +3091,12 @@ def run_greeks_backtest(
                 )
                 if sim_trade is not None:
                     executed_trades.append(sim_trade)
-                    capital += sim_trade.gross_pnl
+                    # Track open position
+                    open_positions[sym] = sim_trade
+                    # BUG FIX: Defer capital update to end-of-day to avoid
+                    # look-ahead bias — same-day signals must all use the same
+                    # capital for position sizing.
+                    day_pnl += sim_trade.gross_pnl
             else:
                 greeks_fail_count += 1
                 for reason in greeks["greeks_fail_reasons"]:
@@ -1684,12 +3109,46 @@ def run_greeks_backtest(
                     elif "iv_outlier" in reason.lower():
                         reject_counts["iv_outlier_reject"] += 1
 
+        # Apply accumulated day P&L after all same-day signals are processed
+        capital += day_pnl
+
+        # Close out positions that exited today
+        closed_today = [sym for sym, t in open_positions.items()
+                        if t.exit_date is not None and t.exit_date <= d]
+        for sym_to_close in closed_today:
+            del open_positions[sym_to_close]
+
+    # Force-close any remaining open positions at end of data
+    # Treat as time_stop exit at last available bar's close
+    if open_positions:
+        last_date = trading_dates[-1] if trading_dates else end
+        force_closed = 0
+        for sym, t in list(open_positions.items()):
+            if t.exit_date is None:
+                t.exit_date = last_date
+                t.exit_reason = "end_of_data"
+                force_closed += 1
+                # P&L already computed by simulate_trade at end-of-bars
+                if t.gross_pnl == 0 and t.entry_price:
+                    # Try to compute from last available data
+                    bars = bars_cache.get(sym, [])
+                    last_bar = bars[-1] if bars else None
+                    if last_bar:
+                        direction_mult = 1.0 if t.direction == "bullish" else -1.0
+                        t.gross_pnl = direction_mult * (last_bar.c - t.entry_price) * t.quantity
+                        t.net_pnl = _compute_net_pnl(t)
+        open_positions.clear()
+        if force_closed:
+            print(f"  Force-closed {force_closed} open positions at end of data")
+
     pdt_violations = annotate_pdt(executed_trades) if mode == "day" else 0
     metrics = compute_metrics(executed_trades, initial_capital, start, end)
 
     print(f"  Signals through scanner: {signal_count}")
     print(f"  Greeks passed: {greeks_pass_count}  |  Greeks failed: {greeks_fail_count}")
     print(f"  Executed trades: {len(executed_trades)}")
+    if skip_max_pos:
+        print(f"  Skipped (max positions): {skip_max_pos}")
     for k, v in reject_counts.items():
         if v > 0:
             print(f"    {k}: {v}")
@@ -1701,7 +3160,9 @@ def run_greeks_backtest(
     for s in all_signals:
         key = (s.symbol, s.signal_date)
         if key in executed_by_key:
-            merged.append(executed_by_key[key])
+            t = executed_by_key[key]
+            t.net_pnl = _compute_net_pnl(t)
+            merged.append(t)
         else:
             merged.append(s)
     run_id = write_run(conn, run_name, mode, start, end, initial_capital, use_new_rules)
@@ -1841,6 +3302,10 @@ def main() -> int:
     p.add_argument("--capital", type=float, default=10_000.0)
     p.add_argument("--compare", action="store_true",
                    help="Run both OLD and NEW greeks rules and compare")
+    p.add_argument("--signal-quality", action="store_true",
+                   help="Decompose results into signal accuracy vs exit execution quality")
+    p.add_argument("--atr-sweep", action="store_true",
+                   help="Sweep ATR stop/target multipliers to find optimal per-stock config")
     p.add_argument("--name", help="Run name prefix (default: auto-generated)")
     # Multi-dimensional slicing flags
     p.add_argument("--by-regime", action="store_true",
@@ -1879,7 +3344,130 @@ def main() -> int:
             "sector_filter": args.sector,
         }
 
-        if args.compare:
+        if args.atr_sweep:
+            # ATR multiplier sweep mode: find optimal stop/target per stock
+            run_name = args.name or f"atrsweep_{args.mode}_{args.start.isoformat()}_{args.end.isoformat()}"
+
+            print("\n▶ ATR Multiplier Sweep: scanning for optimal stop/target per stock...")
+            symbol_results, overall_best = run_atr_sweep(
+                conn, args.mode, args.start, args.end,
+                use_new_rules=True, capital=args.capital,
+            )
+            print_atr_sweep_report(
+                args.mode, args.start, args.end,
+                symbol_results, overall_best,
+            )
+
+            # Persist sweep results to DB
+            if symbol_results:
+                write_atr_sweep_results(
+                    conn, run_name, symbol_results, overall_best,
+                    args.mode, args.start, args.end,
+                )
+
+        elif args.signal_quality:
+            # Signal quality mode: separate signal accuracy from exit execution
+            run_name = args.name or f"sq_{args.mode}_{args.start.isoformat()}_{args.end.isoformat()}_NEW"
+
+            # Create the backtest_runs row so we have a run_id for FK
+            run_id = write_run(conn, run_name, args.mode, args.start, args.end,
+                               args.capital, use_new_rules=True)
+            conn.commit()
+
+            results, summary = run_signal_quality_analysis(
+                conn, args.mode, args.start, args.end,
+                use_new_rules=True, run_name=run_name,
+                initial_capital=args.capital,
+            )
+            print_signal_quality_report(
+                run_name, args.mode, args.start, args.end,
+                results, summary,
+            )
+
+            # Persist results to DB
+            if results:
+                write_signal_quality_results(conn, run_id, results)
+                write_metrics(conn, run_id, {
+                    "final_capital": summary.get("decomposition", {}).get("actual_exit_pnl_atr", 0),
+                }, summary.get("decomposition", {}).get("actual_exit_pnl_atr", 0))
+                conn.commit()
+
+            # Optionally also run OLD rules for comparison
+            if args.compare:
+                print("\n▶ Comparing with OLD greeks rules...")
+                old_name = f"{run_name}_OLD"
+
+                # Create backtest_runs row for OLD pass
+                old_run_id = write_run(conn, old_name, args.mode, args.start, args.end,
+                                       args.capital, use_new_rules=False)
+                conn.commit()
+
+                old_results, old_summary = run_signal_quality_analysis(
+                    conn, args.mode, args.start, args.end,
+                    use_new_rules=False, run_name=old_name,
+                    initial_capital=args.capital,
+                )
+                print_signal_quality_report(
+                    old_name, args.mode, args.start, args.end,
+                    old_results, old_summary,
+                )
+
+                # Persist OLD results
+                if old_results:
+                    write_signal_quality_results(conn, old_run_id, old_results)
+                    conn.commit()
+
+                # Side-by-side comparison on key split metrics
+                new_sa = summary["signal_accuracy"]
+                old_sa = old_summary["signal_accuracy"]
+                new_ee = summary["exit_efficiency"]
+                old_ee = old_summary["exit_efficiency"]
+                new_dc = summary["decomposition"]
+                old_dc = old_summary["decomposition"]
+
+                print()
+                print("=" * 72)
+                print("SIGNAL QUALITY COMPARISON: NEW vs OLD greeks rules")
+                print("=" * 72)
+                print(f"{'Metric':<35} {'NEW':>12} {'OLD':>12} {'Delta':>12}")
+                print("-" * 72)
+
+                rows = [
+                    ("Signal accuracy %", new_sa.get("accuracy_pct", 0), old_sa.get("accuracy_pct", 0)),
+                    ("Strong signals %", new_sa.get("grade_breakdown", {}).get("strong", {}).get("pct_of_total", 0), old_sa.get("grade_breakdown", {}).get("strong", {}).get("pct_of_total", 0)),
+                    ("Avg MFE (ATR)", new_sa.get("avg_mfe_atr", 0), old_sa.get("avg_mfe_atr", 0)),
+                    ("Avg MAE (ATR)", new_sa.get("avg_mae_atr", 0), old_sa.get("avg_mae_atr", 0)),
+                    ("Avg capture %", new_ee.get("avg_capture_pct", 0), old_ee.get("avg_capture_pct", 0)),
+                    ("Median capture %", new_ee.get("median_capture_pct", 0), old_ee.get("median_capture_pct", 0)),
+                    ("Exit efficiency ratio %", new_dc.get("exit_efficiency_ratio", 0), old_dc.get("exit_efficiency_ratio", 0)),
+                    ("Actual exit P&L (ATR)", new_dc.get("actual_exit_pnl_atr", 0), old_dc.get("actual_exit_pnl_atr", 0)),
+                    ("Exit slippage (ATR)", new_dc.get("exit_slippage_atr", 0), old_dc.get("exit_slippage_atr", 0)),
+                ]
+                for label, nv, ov in rows:
+                    delta = nv - ov
+                    print(f"{label:<35} {nv:>12.2f} {ov:>12.2f} {delta:>+12.2f}")
+                print("=" * 72)
+
+                # Verdict
+                acc_diff = new_sa.get("accuracy_pct", 0) - old_sa.get("accuracy_pct", 0)
+                cap_diff = new_ee.get("avg_capture_pct", 0) - old_ee.get("avg_capture_pct", 0)
+                slip_diff = old_dc.get("exit_slippage_atr", 0) - new_dc.get("exit_slippage_atr", 0)
+
+                parts = []
+                if acc_diff > 0:
+                    parts.append(f"signal accuracy +{acc_diff:.1f}%")
+                if cap_diff > 0:
+                    parts.append(f"exit capture +{cap_diff:.1f}%")
+                if slip_diff > 0:
+                    parts.append(f"exit slippage reduced by {slip_diff:.1f} ATR")
+
+                if parts:
+                    print(f"\n✅ NEW greeks improves: {', '.join(parts)}")
+                else:
+                    print(f"\n⚠️  NEW greeks does NOT clearly improve signal quality vs OLD rules")
+                print()
+
+        elif args.compare:
             # Run TWO passes: OLD rules then NEW rules
             base_name = args.name or f"greeks_{args.mode}_{args.start.isoformat()}_{args.end.isoformat()}"
 

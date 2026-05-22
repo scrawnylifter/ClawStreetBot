@@ -88,6 +88,7 @@ Scripts live under layer directories — run them with their full layered path. 
 - `python archive/backtests/backtest.py --mode swing --start 2024-01-01 --end 2026-05-01`
 - `python archive/backtests/regime_backtest.py all --start 2024-05-01 --end 2026-05-01 --mode swing`
 - `python archive/backtests/backtest_liquidity_v3.py` — liquidity sweep refinement backtest (A/B/C/D)
+- `python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --atr-sweep` — ATR multiplier sweep (optimal stop/target per stock)
 - `python archive/explorers/explore_data.py` / `explore_options.py` / `options_analysis.py`
 
 ## Credentials (gitignored)
