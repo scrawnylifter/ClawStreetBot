@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# TODO: This script is dead code in the pipeline. Either wire market.greeks_filter
+# into scan_setups.py (gate on passes_filter=true) or delete this script. Carrying
+# an unused analytical table that mirrors live filter logic is a divergence trap.
 """Apply the Greeks Strategy filter to the latest option chain per symbol.
 
 Joins market.iv_rank, market.realized_vol, and market.greeks with

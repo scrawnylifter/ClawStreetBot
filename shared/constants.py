@@ -123,6 +123,62 @@ def load_env(filename: str) -> None:
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+# ---------------------------------------------------------------------------
+# Unified Greeks Strategy — single source of truth for delta/theta/IV gates
+# ---------------------------------------------------------------------------
+# Mode-keyed delta bands (CLAUDE.md → Greeks Strategy). Used by:
+#   - shared/fetch_alpaca_snapshot.select_best_option (scanner-time)
+#   - 05_execution/scripts/execute_trade.reselect_option_for_risk_mode
+#   - 04_approval/scripts/process_approved.preflight
+# Each entry: (min, max). Target deltas: day=0.75, swing=0.60, long_term=0.75.
+MODE_DELTA_BANDS = {
+    "day":       (0.65, 0.85),
+    "swing":     (0.50, 0.70),
+    "long_term": (0.65, 0.85),
+}
+MODE_DELTA_TARGETS = {
+    "day":       0.75,
+    "swing":     0.60,
+    "long_term": 0.75,
+}
+
+# Hard rejects regardless of mode.
+DELTA_FLOOR   = 0.50   # |delta| < 0.50 → lottery ticket, always reject
+DELTA_CEILING = 0.90   # |delta| > 0.90 → just buy shares, always reject
+
+# Per-mode theta budget as a fraction of option mid (|theta|/mid).
+# Day trades can absorb more theta because they're held minutes-to-hours;
+# long-term holds get the tightest budget because theta compounds over weeks.
+THETA_BUDGETS = {
+    "day":       0.05,
+    "swing":     0.03,
+    "long_term": 0.01,
+}
+
+
+def classify_regime(iv_rank) -> str:
+    """Classify IV regime from iv_rank percentile (0-100).
+
+    Returns one of: buy_premium / directional / spreads_cautious / sell_premium.
+    Mirrors the regime gating in 01_data/scripts/compute_greeks_filter.py and
+    obsidian/.../Greeks Strategy.md so preflight can refuse naked premium-buying
+    when the underlying is in a sell-premium regime.
+    """
+    if iv_rank is None:
+        return "directional"
+    try:
+        r = float(iv_rank)
+    except (TypeError, ValueError):
+        return "directional"
+    if r < 25:
+        return "buy_premium"
+    if r < 50:
+        return "directional"
+    if r < 75:
+        return "spreads_cautious"
+    return "sell_premium"
+
+
 load_env(".env.db")
 
 DB_CONFIG = {

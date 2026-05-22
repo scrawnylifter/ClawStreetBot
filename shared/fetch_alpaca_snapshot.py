@@ -69,29 +69,24 @@ ALPACA_SECRET_KEY = os.environ["ALPACA_PAPER_SECRET_KEY"]
 
 # Strategy filter — swing/long-term Greeks profile (see CLAUDE.md).
 MIN_DTE = 30
-DELTA_MIN = 0.50
-DELTA_MAX = 0.70
 
 # Maximum acceptable bid-ask spread as a fraction of mid price. Contracts
 # with wider spreads are illiquid — the round-trip cost alone can wipe a
 # 3:1 R:R setup. Shared with process_approved.py via scripts.constants
 # so the scanner-time and preflight gates can't drift apart.
 from constants import MAX_SPREAD_PCT  # noqa: E402
+from constants import (  # noqa: E402
+    MODE_DELTA_BANDS,
+    MODE_DELTA_TARGETS,
+    THETA_BUDGETS,
+    DELTA_FLOOR,
+    DELTA_CEILING,
+)
 
-# Risk-mode-aware delta bands. Standard matches the historical scanner band.
-# Conservative tightens around the high-probability core (0.55–0.65, aim 0.60)
-# so the contract has more in-the-money cushion. Aggressive widens to capture
-# more leverage: lower-delta contracts (closer to 0.40) cost less per contract,
-# higher-delta (closer to 0.80) approach share-equivalent — both increase
-# per-dollar exposure relative to a 0.60 baseline. Aim 0.50 on aggressive
-# pushes toward the cheaper, higher-leverage end of the band.
-#
-# Keyed by signal_alerts.risk_mode (see migration 023 + telegram_callback_listener).
-DELTA_BANDS = {
-    "conservative": {"min": 0.55, "max": 0.65, "target": 0.60},
-    "standard":     {"min": 0.50, "max": 0.70, "target": 0.60},
-    "aggressive":   {"min": 0.40, "max": 0.80, "target": 0.50},
-}
+# Risk-mode-aware delta bands and theta budgets are now in shared/constants.py:
+#   MODE_DELTA_BANDS, MODE_DELTA_TARGETS, THETA_BUDGETS, DELTA_FLOOR, DELTA_CEILING
+# select_best_option() looks up MODE_DELTA_BANDS[mode] for the base band,
+# then shifts the target within the band based on risk_mode.
 
 
 def fnum(x) -> float | None:
@@ -158,22 +153,43 @@ def get_underlying_price(symbol: str) -> float | None:
 
 def select_best_option(symbol: str, want_type: str | None,
                        min_dte: int, max_dte: int,
-                       risk_mode: str = "standard") -> dict | None:
+                       risk_mode: str = "standard",
+                       mode: str = "swing") -> dict | None:
     """Return the single best contract matching strategy filters, or None.
 
-    risk_mode picks the delta band + score target from DELTA_BANDS:
-      conservative → tighter 0.55–0.65, aim 0.60 (high prob, share-like)
-      standard     → 0.50–0.70, aim 0.60 (current default)
-      aggressive   → 0.40–0.80, aim 0.50 (lower-delta = more leverage / cheaper)
-    Unknown risk_mode falls back to 'standard'.
+    mode selects the base delta band from MODE_DELTA_BANDS and theta budget
+    from THETA_BUDGETS (day / swing / long_term).  risk_mode shifts the
+    target within the band:
+      conservative → target - 0.05 (favor higher-probability ITM contracts)
+      aggressive   → target + 0.05 (favor cheaper, higher-leverage contracts)
+      standard     → no shift (use band's default target from MODE_DELTA_TARGETS)
+
+    Hard rejects regardless of mode:
+      |delta| < DELTA_FLOOR  (0.50)  — lottery ticket
+      |delta| > DELTA_CEILING (0.90) — just buy shares
+      |theta|/mid > 2 * THETA_BUDGETS[mode] — time-decay too aggressive
+
+    Soft scoring preference:
+      Lower |theta|/mid (theta_pct) is preferred — added to the delta-distance
+      score so that among equally-close-to-target contracts, the one bleeding
+      less theta per day wins.
     """
     client = OptionHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
     today = date.today()
 
-    band = DELTA_BANDS.get(risk_mode) or DELTA_BANDS["standard"]
-    delta_min = band["min"]
-    delta_max = band["max"]
-    delta_target = band["target"]
+    # Base band from mode (day/swing/long_term) keyed constants.
+    band = MODE_DELTA_BANDS.get(mode) or MODE_DELTA_BANDS["swing"]
+    delta_min = band[0]
+    delta_max = band[1]
+    delta_target = MODE_DELTA_TARGETS.get(mode) or MODE_DELTA_TARGETS["swing"]
+
+    # Risk-mode target shift within the band.
+    if risk_mode == "conservative":
+        delta_target = max(delta_min, delta_target - 0.05)
+    elif risk_mode == "aggressive":
+        delta_target = min(delta_max, delta_target + 0.05)
+
+    theta_budget = THETA_BUDGETS.get(mode) or THETA_BUDGETS["swing"]
 
     req = OptionChainRequest(
         underlying_symbol=symbol,
@@ -208,6 +224,12 @@ def select_best_option(symbol: str, want_type: str | None,
             continue
 
         abs_delta = abs(delta)
+
+        # Hard rejects — floor/ceiling apply regardless of mode.
+        if abs_delta < DELTA_FLOOR or abs_delta > DELTA_CEILING:
+            continue
+
+        # Band filter from MODE_DELTA_BANDS[mode].
         if abs_delta < delta_min or abs_delta > delta_max:
             continue
 
@@ -229,10 +251,19 @@ def select_best_option(symbol: str, want_type: str | None,
         spread_pct = (ask - bid) / mid if mid > 0 else float("inf")
         if spread_pct > MAX_SPREAD_PCT:
             continue
+
+        # Theta hard reject: |theta|/mid > 2 * budget means daily time-decay
+        # would consume more than double the acceptable fraction of premium.
+        theta_pct = abs(theta) / mid if (theta is not None and mid > 0) else 0.0
+        if theta_pct > 2 * theta_budget:
+            continue
+
         iv = fnum(getattr(snap, "implied_volatility", None))
 
-        # Score: prefer delta closest to the risk-mode-specific target.
-        score = abs(abs_delta - delta_target)
+        # Score: prefer delta closest to the adjusted target, with a soft
+        # preference for lower theta bleed (theta_pct).  The theta component
+        # is weighted at 10% so it breaks ties but doesn't override delta fit.
+        score = abs(abs_delta - delta_target) + 0.10 * theta_pct
         if score < best_score:
             best_score = score
             best = {

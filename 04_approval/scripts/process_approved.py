@@ -43,6 +43,11 @@ from constants import (  # noqa: E402
     MAX_SPREAD_PCT_DECIMAL as MAX_SPREAD_PCT,
     SIGNAL_TTL_MINUTES,
     DEFAULT_SIGNAL_TTL_MINUTES,
+    MODE_DELTA_BANDS,
+    THETA_BUDGETS,
+    DELTA_FLOOR,
+    DELTA_CEILING,
+    classify_regime,
 )
 
 load_env(".env.db")
@@ -472,19 +477,40 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
         else:
             out.append((CHECK_WARN, "option_expiry NULL — can't verify DTE"))
 
-        # delta band
+        # delta band (mode-keyed, with hard floor/ceiling rejects)
         delta = _to_decimal(signal.get("option_delta"))
         if delta is None:
             out.append((CHECK_WARN, "option_delta NULL — can't verify delta band"))
         else:
-            lo, hi = DELTA_OK_RANGE_DAY if mode == "day" else DELTA_OK_RANGE_SWING
+            lo, hi = MODE_DELTA_BANDS.get(mode, MODE_DELTA_BANDS["swing"])
+            lo_d, hi_d = Decimal(str(lo)), Decimal(str(hi))
             d = abs(delta)
-            if d < lo:
-                out.append((CHECK_WARN, f"|Δ| {d} < {lo} — lottery-ticket risk"))
-            elif d > hi:
-                out.append((CHECK_WARN, f"|Δ| {d} > {hi} — consider shares instead"))
+            if d < Decimal(str(DELTA_FLOOR)):
+                out.append((CHECK_FAIL, f"|Δ| {d} < {DELTA_FLOOR} hard floor — lottery ticket, reject"))
+            elif d > Decimal(str(DELTA_CEILING)):
+                out.append((CHECK_FAIL, f"|Δ| {d} > {DELTA_CEILING} hard ceiling — just buy shares, reject"))
+            elif d < lo_d:
+                out.append((CHECK_WARN, f"|Δ| {d} < {lo_d} mode={mode} band"))
+            elif d > hi_d:
+                out.append((CHECK_WARN, f"|Δ| {d} > {hi_d} mode={mode} band"))
             else:
-                out.append((CHECK_PASS, f"|Δ| {d} in [{lo}, {hi}]"))
+                out.append((CHECK_PASS, f"|Δ| {d} in [{lo_d}, {hi_d}] (mode={mode})"))
+
+        # theta budget — |theta| / option_mid must stay under per-mode budget
+        opt_theta = _to_decimal(signal.get("option_theta"))
+        opt_mid_for_theta = _to_decimal(signal.get("option_mid"))
+        if opt_theta is None or opt_mid_for_theta is None or opt_mid_for_theta <= 0:
+            out.append((CHECK_WARN, "option_theta or option_mid NULL — can't verify theta budget"))
+        else:
+            theta_pct = (abs(opt_theta) / opt_mid_for_theta).quantize(Decimal("0.0001"))
+            budget = Decimal(str(THETA_BUDGETS.get(mode, THETA_BUDGETS["swing"])))
+            if theta_pct > budget:
+                out.append((CHECK_FAIL,
+                            f"theta {theta_pct*100:.2f}% of mid > {budget*100:.1f}% "
+                            f"budget (mode={mode}) — premium decay too steep"))
+            else:
+                out.append((CHECK_PASS,
+                            f"theta {theta_pct*100:.2f}% of mid ≤ {budget*100:.1f}% (mode={mode})"))
 
         # bid-ask spread
         opt_bid = _to_decimal(signal.get("option_bid"))
@@ -502,6 +528,76 @@ def preflight(signal: dict, sizing: dict, mode: str, conn=None, equity: Decimal 
                             f"(bid={opt_bid}, ask={opt_ask}) — illiquid, refusing to cross"))
             else:
                 out.append((CHECK_PASS, f"bid-ask spread {pct_str} ≤ {cap_str}"))
+
+        # IV regime + drift + outlier checks. We re-query iv_rank at preflight
+        # time because the regime can flip between scan and approval (esp.
+        # during earnings windows). sell_premium = naked long-premium is
+        # explicitly contraindicated by the Greeks Strategy.
+        if conn is not None:
+            sym = signal.get("symbol")
+            signal_iv_rank = _to_decimal(signal.get("iv_rank"))
+            current_iv_rank = None
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT iv_rank_52w FROM market.iv_rank
+                            WHERE symbol = %s
+                            ORDER BY date DESC LIMIT 1""",
+                        (sym,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] is not None:
+                        current_iv_rank = Decimal(str(row[0]))
+            except Exception as e:
+                out.append((CHECK_WARN, f"iv_rank lookup failed: {e}"))
+
+            if current_iv_rank is None:
+                out.append((CHECK_WARN, f"no current iv_rank for {sym} — can't verify regime"))
+            else:
+                regime = classify_regime(current_iv_rank)
+                if regime == "sell_premium":
+                    out.append((CHECK_FAIL,
+                                f"IV regime sell_premium (iv_rank={current_iv_rank}≥75) — "
+                                f"naked long-premium contraindicated"))
+                elif regime == "spreads_cautious":
+                    out.append((CHECK_WARN,
+                                f"IV regime spreads_cautious (iv_rank={current_iv_rank}) — "
+                                f"premium getting rich"))
+                else:
+                    out.append((CHECK_PASS,
+                                f"IV regime {regime} (iv_rank={current_iv_rank})"))
+
+                # IV drift: how much has iv_rank moved since signal was created?
+                if signal_iv_rank is not None:
+                    drift = abs(signal_iv_rank - current_iv_rank)
+                    if drift > Decimal("15"):
+                        out.append((CHECK_WARN,
+                                    f"iv_rank drift {drift:.1f} (signal={signal_iv_rank} → "
+                                    f"now={current_iv_rank}) — IV regime may have shifted"))
+                    else:
+                        out.append((CHECK_PASS,
+                                    f"iv_rank drift {drift:.1f} ≤ 15 since signal"))
+
+            # IV outlier check: refuse to buy premium into a 3σ high-IV spike
+            # (post-earnings crush risk).
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT direction FROM market.iv_outliers
+                            WHERE symbol = %s
+                              AND date = CURRENT_DATE
+                              AND direction = 'high'
+                            LIMIT 1""",
+                        (sym,),
+                    )
+                    if cur.fetchone() is not None:
+                        out.append((CHECK_FAIL,
+                                    f"{sym} flagged as iv_outlier (direction=high) today "
+                                    f"— IV spike, crush risk on long premium"))
+                    else:
+                        out.append((CHECK_PASS, f"no high-IV outlier flag for {sym} today"))
+            except Exception as e:
+                out.append((CHECK_WARN, f"iv_outliers lookup failed: {e}"))
     else:
         out.append((CHECK_WARN, "no option_symbol on signal — falling back to stock trade"))
 

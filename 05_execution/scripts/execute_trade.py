@@ -205,13 +205,21 @@ def submit_to_alpaca(client, signal: dict, sizing: dict, mode: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def reselect_option_for_risk_mode(
-    conn, signal: dict, risk_mode: str,
-) -> dict:
-    """If risk_mode requires a different delta band than 'standard' and the
-    signal carries an option contract, re-query Alpaca for the best matching
-    option in that band and overwrite the option_* fields on signal_alerts.
+    conn, signal: dict, risk_mode: str, mode: str = "swing",
+) -> dict | None:
+    """Re-query Alpaca for the best matching option and verify greeks.
 
-    Returns the (possibly-updated) signal dict.
+    Always re-snapshots greeks (even for standard risk_mode) so the contract
+    we execute against reflects live market conditions, not a stale scanner-
+    time snapshot.
+
+    After re-snapshot, re-verifies:
+      - delta is within MODE_DELTA_BANDS[mode]
+      - |theta|/mid < THETA_BUDGETS[mode]
+
+    Returns the (possibly-updated) signal dict on success, or None if
+    re-verification fails — the caller should refuse to trade when greeks
+    have drifted outside the strategy's bounds.
 
     Why this exists: the scanner binds a 0.50–0.70 delta contract at scan
     time. The user picks risk mode AFTER (Approve / Conservative / Aggressive
@@ -220,19 +228,15 @@ def reselect_option_for_risk_mode(
     leverage). Without this re-selection every approval submits the same
     scanner-chosen contract regardless of risk mode — audit M1.
 
-    Standard is the no-op case: the scanner's delta band already matches
-    standard's 0.50–0.70, so we keep the row's existing option_* fields and
-    save the Alpaca round-trip.
-
-    If the re-selection fails (no contract in the new band, Alpaca down,
-    etc.) we LOG and fall back to the scanner's original contract — better
-    to execute the standard-band trade than refuse to trade at all.
+    Even for standard risk_mode, re-snapshotting ensures the delta and
+    theta haven't drifted past strategy limits between scan and execution.
     """
-    if risk_mode == "standard" or not signal.get("option_symbol"):
+    if not signal.get("option_symbol"):
         return signal
 
     try:
-        from fetch_alpaca_snapshot import select_best_option, MIN_DTE
+        from fetch_alpaca_snapshot import select_best_option, MIN_DTE  # noqa: F811
+        from constants import MODE_DELTA_BANDS, THETA_BUDGETS  # noqa: F811
     except Exception:
         log.exception("reselect_option_for_risk_mode: import fas failed; "
                       "falling back to scanner-chosen option")
@@ -243,7 +247,7 @@ def reselect_option_for_risk_mode(
     try:
         best = select_best_option(
             sym, want_type=want_type, min_dte=MIN_DTE,
-            max_dte=120, risk_mode=risk_mode,
+            max_dte=120, risk_mode=risk_mode, mode=mode,
         )
     except Exception:
         log.exception("reselect_option_for_risk_mode: Alpaca query failed for %s; "
@@ -251,13 +255,39 @@ def reselect_option_for_risk_mode(
         return signal
 
     if not best:
-        log.warning("reselect_option_for_risk_mode: no %s contract in %s band "
-                    "for %s; keeping scanner option %s",
-                    want_type, risk_mode, sym, signal.get("option_symbol"))
-        return signal
+        log.warning("reselect_option_for_risk_mode: no %s contract in %s/%s band "
+                    "for %s; greeks re-verification failed",
+                    want_type, risk_mode, mode, sym)
+        return None
+
+    # Re-verify greeks are within mode bounds.
+    band = MODE_DELTA_BANDS.get(mode) or MODE_DELTA_BANDS["swing"]
+    theta_budget = THETA_BUDGETS.get(mode) or THETA_BUDGETS["swing"]
+    abs_delta = abs(best["delta"])
+    theta_pct = (
+        abs(best["theta"]) / best["mid"]
+        if best.get("theta") is not None and best.get("mid") and best["mid"] > 0
+        else 0.0
+    )
+
+    if abs_delta < band[0] or abs_delta > band[1]:
+        log.warning(
+            "reselect_option_for_risk_mode: re-snapshot delta %.4f outside "
+            "MODE_DELTA_BANDS[%s] [%.2f, %.2f] for %s; rejecting",
+            abs_delta, mode, band[0], band[1], sym,
+        )
+        return None
+
+    if theta_pct > theta_budget:
+        log.warning(
+            "reselect_option_for_risk_mode: re-snapshot theta_pct %.4f > "
+            "THETA_BUDGETS[%s] %.4f for %s; rejecting",
+            theta_pct, mode, theta_budget, sym,
+        )
+        return None
 
     if best["occ_symbol"] == signal.get("option_symbol"):
-        # Same contract — scanner already picked the right one.
+        # Same contract — scanner already picked the right one, greeks verified.
         return signal
 
     # Different contract — persist the swap. The scanner's stored
@@ -544,8 +574,14 @@ def execute_one(conn, client, signal: dict, equity: Decimal, verbose: bool) -> d
 
     # M1: re-select the option contract for non-standard risk modes BEFORE
     # sizing, so the qty / preflight / submit all reflect the contract we
-    # actually trade. No-op for standard mode and for stock-only signals.
-    signal = reselect_option_for_risk_mode(conn, signal, risk_mode)
+    # actually trade. Now also re-snapshots for standard mode to verify
+    # greeks haven't drifted.  Returns None if re-verification fails.
+    signal = reselect_option_for_risk_mode(conn, signal, risk_mode, mode=mode)
+    if signal is None:
+        msg = "greeks re-verification failed (delta/theta outside strategy bounds)"
+        record_skip(conn, sid, msg)
+        notify_execution({"status": "skipped", "reason": msg}, signal if signal else {})
+        return {"status": "skipped", "message": f"#{sid} {sym} SKIP — {msg}", "reason": msg}
 
     opt_mid = pa._to_decimal(signal.get("option_mid"))
     if opt_mid and opt_mid > 0:
