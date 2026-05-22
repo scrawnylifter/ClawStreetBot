@@ -1,5 +1,9 @@
 {
+  "updatedAt": "2026-05-22T05:43:13.799Z",
+  "createdAt": "2026-05-16T17:43:47.334Z",
+  "id": "CJNUeFiG4Sp1Hsyj",
   "name": "derived_daily",
+  "active": true,
   "isArchived": false,
   "nodes": [
     {
@@ -8,11 +12,10 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "30 14 * * 1-5"
+              "expression": "30 15 * * 1-5"
             }
           ]
-        },
-        "timezone": "America/Los_Angeles"
+        }
       },
       "id": "trigger",
       "name": "Weekdays 15:30 PDT",
@@ -25,7 +28,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_realized_vol.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_realized_vol.py"
       },
       "id": "rv",
       "name": "compute realized vol",
@@ -38,7 +41,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/ingest_alpaca_iv.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_alpaca_iv.py"
       },
       "id": "iv_ingest",
       "name": "ingest alpaca iv",
@@ -51,7 +54,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_iv_rank.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_iv_rank.py"
       },
       "id": "ivr",
       "name": "compute iv rank",
@@ -64,7 +67,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_gex_dex.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_gex_dex.py"
       },
       "id": "gex",
       "name": "compute gex/dex",
@@ -77,7 +80,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_technical_indicators.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_technical_indicators.py"
       },
       "id": "tech",
       "name": "compute technical indicators",
@@ -90,7 +93,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_greeks_filter.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_greeks_filter.py"
       },
       "id": "gfilter",
       "name": "compute greeks filter",
@@ -103,7 +106,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_iv_outliers.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/compute_iv_outliers.py"
       },
       "id": "ivout",
       "name": "compute iv outliers",
@@ -203,7 +206,7 @@
   "staticData": null,
   "meta": null,
   "pinData": null,
-  "versionId": "9ee54f19-453a-4c36-9735-7b75957a4854",
+  "versionId": "cd88ee46-3105-43c8-97b6-e0074e0035c1",
   "activeVersionId": null,
   "triggerCount": 0,
   "shared": [

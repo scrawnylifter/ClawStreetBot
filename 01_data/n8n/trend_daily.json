@@ -1,11 +1,6 @@
 {
   "name": "trend_daily",
-  "settings": {
-    "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "executionTimeout": 300,
-    "timezone": "America/Los_Angeles"
-  },
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -13,10 +8,11 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 16 * * 1-5"
+              "expression": "0 15 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "trigger",
       "name": "Mon-Fri 16:00 PDT (after derived_daily)",
@@ -54,5 +50,89 @@
       ]
     }
   },
-  "active": true
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Mon-Fri 16:00 PDT (after derived_daily)": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "9db7b525-233f-4869-8bee-03885d577c96",
+  "activeVersionId": "9db7b525-233f-4869-8bee-03885d577c96",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-22T16:20:52.108Z",
+      "createdAt": "2026-05-22T16:20:52.108Z",
+      "role": "workflow:owner",
+      "workflowId": "MPNxmS0AW2hHVGfc",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:42.913Z",
+    "createdAt": "2026-05-22T23:32:42.913Z",
+    "versionId": "9db7b525-233f-4869-8bee-03885d577c96",
+    "workflowId": "MPNxmS0AW2hHVGfc",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 15 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "trigger",
+        "name": "Mon-Fri 16:00 PDT (after derived_daily)",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          200,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/01_data/scripts/compute_trend.py --backfill --days 400"
+        },
+        "id": "trend",
+        "name": "Compute Trend Status",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          440,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Mon-Fri 16:00 PDT (after derived_daily)": {
+        "main": [
+          [
+            {
+              "node": "Compute Trend Status",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

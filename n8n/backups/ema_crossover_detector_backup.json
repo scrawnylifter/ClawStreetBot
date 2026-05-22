@@ -1,5 +1,9 @@
 {
-  "name": "backfill_pending",
+  "updatedAt": "2026-05-22T16:20:51.984Z",
+  "createdAt": "2026-05-22T16:20:51.984Z",
+  "id": "nroZXikNgGGfpWE5",
+  "name": "ema_crossover_detector",
+  "active": true,
   "isArchived": false,
   "nodes": [
     {
@@ -7,15 +11,14 @@
         "rule": {
           "interval": [
             {
-              "field": "minutes",
-              "minutesInterval": 5
+              "field": "cronExpression",
+              "expression": "15 16 * * 1-5"
             }
           ]
-        },
-        "timezone": "America/Los_Angeles"
+        }
       },
       "id": "trigger",
-      "name": "Every 5 min",
+      "name": "Weekdays 16:15 PDT (after derived_daily)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -25,10 +28,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+        "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/detect_ema_crossover.py --lookback 1"
       },
-      "id": "run",
-      "name": "backfill pending symbols",
+      "id": "detect",
+      "name": "detect EMA crossovers",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -38,11 +41,11 @@
     }
   ],
   "connections": {
-    "Every 5 min": {
+    "Weekdays 16:15 PDT (after derived_daily)": {
       "main": [
         [
           {
-            "node": "backfill pending symbols",
+            "node": "detect EMA crossovers",
             "type": "main",
             "index": 0
           }
@@ -52,50 +55,46 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "saveExecutionProgress": false,
-    "saveManualExecutions": true,
-    "executionTimeout": 1800,
     "timezone": "America/Los_Angeles"
   },
   "staticData": {
-    "node:Every 5 min": {
+    "node:Weekdays 16:15 PDT (after derived_daily)": {
       "recurrenceRules": []
     }
   },
   "meta": null,
   "pinData": null,
-  "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-  "activeVersionId": "12a31940-3993-4e46-a4f6-87b57e371945",
+  "versionId": "4d88c3b7-85c0-4f88-b435-11bc6a2ef86d",
+  "activeVersionId": "4d88c3b7-85c0-4f88-b435-11bc6a2ef86d",
   "triggerCount": 1,
   "shared": [
     {
-      "updatedAt": "2026-05-16T17:43:47.332Z",
-      "createdAt": "2026-05-16T17:43:47.332Z",
+      "updatedAt": "2026-05-22T16:20:51.985Z",
+      "createdAt": "2026-05-22T16:20:51.985Z",
       "role": "workflow:owner",
-      "workflowId": "wbNusm1Nfjah3Dgs",
+      "workflowId": "nroZXikNgGGfpWE5",
       "projectId": "iSTlMsmgH1qOgtzb"
     }
   ],
   "activeVersion": {
-    "updatedAt": "2026-05-22T23:32:43.766Z",
-    "createdAt": "2026-05-22T23:32:43.766Z",
-    "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-    "workflowId": "wbNusm1Nfjah3Dgs",
+    "updatedAt": "2026-05-22T16:20:51.986Z",
+    "createdAt": "2026-05-22T16:20:51.986Z",
+    "versionId": "4d88c3b7-85c0-4f88-b435-11bc6a2ef86d",
+    "workflowId": "nroZXikNgGGfpWE5",
     "nodes": [
       {
         "parameters": {
           "rule": {
             "interval": [
               {
-                "field": "minutes",
-                "minutesInterval": 5
+                "field": "cronExpression",
+                "expression": "15 16 * * 1-5"
               }
             ]
-          },
-          "timezone": "America/Los_Angeles"
+          }
         },
         "id": "trigger",
-        "name": "Every 5 min",
+        "name": "Weekdays 16:15 PDT (after derived_daily)",
         "type": "n8n-nodes-base.scheduleTrigger",
         "typeVersion": 1.2,
         "position": [
@@ -105,10 +104,10 @@
       },
       {
         "parameters": {
-          "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+          "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/detect_ema_crossover.py --lookback 1"
         },
-        "id": "run",
-        "name": "backfill pending symbols",
+        "id": "detect",
+        "name": "detect EMA crossovers",
         "type": "n8n-nodes-base.executeCommand",
         "typeVersion": 1,
         "position": [
@@ -118,11 +117,11 @@
       }
     ],
     "connections": {
-      "Every 5 min": {
+      "Weekdays 16:15 PDT (after derived_daily)": {
         "main": [
           [
             {
-              "node": "backfill pending symbols",
+              "node": "detect EMA crossovers",
               "type": "main",
               "index": 0
             }

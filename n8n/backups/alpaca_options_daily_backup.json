@@ -1,5 +1,9 @@
 {
-  "name": "backfill_pending",
+  "updatedAt": "2026-05-22T05:43:13.704Z",
+  "createdAt": "2026-05-17T03:39:08.781Z",
+  "id": "NeLxXUJj8l7iss6d",
+  "name": "alpaca_options_daily",
+  "active": true,
   "isArchived": false,
   "nodes": [
     {
@@ -7,15 +11,14 @@
         "rule": {
           "interval": [
             {
-              "field": "minutes",
-              "minutesInterval": 5
+              "field": "cronExpression",
+              "expression": "55 14 * * 1-5"
             }
           ]
-        },
-        "timezone": "America/Los_Angeles"
+        }
       },
       "id": "trigger",
-      "name": "Every 5 min",
+      "name": "Weekdays 14:55 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -25,10 +28,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_alpaca_options.py --all"
       },
       "id": "run",
-      "name": "backfill pending symbols",
+      "name": "ingest options + greeks (Alpaca)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -38,11 +41,11 @@
     }
   ],
   "connections": {
-    "Every 5 min": {
+    "Weekdays 14:55 PDT": {
       "main": [
         [
           {
-            "node": "backfill pending symbols",
+            "node": "ingest options + greeks (Alpaca)",
             "type": "main",
             "index": 0
           }
@@ -52,50 +55,48 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "saveExecutionProgress": false,
     "saveManualExecutions": true,
     "executionTimeout": 1800,
     "timezone": "America/Los_Angeles"
   },
   "staticData": {
-    "node:Every 5 min": {
+    "node:Weekdays 14:55 PDT": {
       "recurrenceRules": []
     }
   },
   "meta": null,
   "pinData": null,
-  "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-  "activeVersionId": "12a31940-3993-4e46-a4f6-87b57e371945",
+  "versionId": "7b428a59-5f5b-4dec-86d2-eb023ffa69b9",
+  "activeVersionId": "7b428a59-5f5b-4dec-86d2-eb023ffa69b9",
   "triggerCount": 1,
   "shared": [
     {
-      "updatedAt": "2026-05-16T17:43:47.332Z",
-      "createdAt": "2026-05-16T17:43:47.332Z",
+      "updatedAt": "2026-05-17T03:39:08.782Z",
+      "createdAt": "2026-05-17T03:39:08.782Z",
       "role": "workflow:owner",
-      "workflowId": "wbNusm1Nfjah3Dgs",
+      "workflowId": "NeLxXUJj8l7iss6d",
       "projectId": "iSTlMsmgH1qOgtzb"
     }
   ],
   "activeVersion": {
-    "updatedAt": "2026-05-22T23:32:43.766Z",
-    "createdAt": "2026-05-22T23:32:43.766Z",
-    "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-    "workflowId": "wbNusm1Nfjah3Dgs",
+    "updatedAt": "2026-05-17T03:39:08.783Z",
+    "createdAt": "2026-05-17T03:39:08.783Z",
+    "versionId": "7b428a59-5f5b-4dec-86d2-eb023ffa69b9",
+    "workflowId": "NeLxXUJj8l7iss6d",
     "nodes": [
       {
         "parameters": {
           "rule": {
             "interval": [
               {
-                "field": "minutes",
-                "minutesInterval": 5
+                "field": "cronExpression",
+                "expression": "55 14 * * 1-5"
               }
             ]
-          },
-          "timezone": "America/Los_Angeles"
+          }
         },
         "id": "trigger",
-        "name": "Every 5 min",
+        "name": "Weekdays 14:55 PDT",
         "type": "n8n-nodes-base.scheduleTrigger",
         "typeVersion": 1.2,
         "position": [
@@ -105,10 +106,10 @@
       },
       {
         "parameters": {
-          "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+          "command": "docker exec clawstreet-worker python /app/scripts/ingest_alpaca_options.py --all"
         },
         "id": "run",
-        "name": "backfill pending symbols",
+        "name": "ingest options + greeks (Alpaca)",
         "type": "n8n-nodes-base.executeCommand",
         "typeVersion": 1,
         "position": [
@@ -118,11 +119,11 @@
       }
     ],
     "connections": {
-      "Every 5 min": {
+      "Weekdays 14:55 PDT": {
         "main": [
           [
             {
-              "node": "backfill pending symbols",
+              "node": "ingest options + greeks (Alpaca)",
               "type": "main",
               "index": 0
             }

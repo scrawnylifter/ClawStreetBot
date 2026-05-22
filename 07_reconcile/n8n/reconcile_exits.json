@@ -1,5 +1,6 @@
 {
   "name": "reconcile_exits",
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -7,16 +8,20 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "* 6-14 * * 1-5"
+              "expression": "* 13-14 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "a5d9e3f4-6b7a-8e0c-1f2d-3c4d5e6f7a8b",
       "name": "Every minute market hours +1h",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -26,7 +31,10 @@
       "name": "reconcile SELL fills",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [
+        520,
+        300
+      ]
     }
   ],
   "connections": {
@@ -48,5 +56,83 @@
     "executionTimeout": 120,
     "timezone": "America/Los_Angeles"
   },
-  "active": false
+  "staticData": {
+    "node:Every minute market hours +1h": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "6171a70e-3b90-44b5-ab7c-1e5647a56b30",
+  "activeVersionId": "6171a70e-3b90-44b5-ab7c-1e5647a56b30",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-22T14:35:11.201Z",
+      "createdAt": "2026-05-22T14:35:11.201Z",
+      "role": "workflow:owner",
+      "workflowId": "dARwPHPLKbqvhWcf",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:43.262Z",
+    "createdAt": "2026-05-22T23:32:43.262Z",
+    "versionId": "6171a70e-3b90-44b5-ab7c-1e5647a56b30",
+    "workflowId": "dARwPHPLKbqvhWcf",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "* 13-14 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "a5d9e3f4-6b7a-8e0c-1f2d-3c4d5e6f7a8b",
+        "name": "Every minute market hours +1h",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          240,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/07_reconcile/scripts/reconcile_exits.py"
+        },
+        "id": "b6e0f4a5-7c8b-9f1d-0a3e-4d5e6f7a8b9c",
+        "name": "reconcile SELL fills",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          520,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every minute market hours +1h": {
+        "main": [
+          [
+            {
+              "node": "reconcile SELL fills",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

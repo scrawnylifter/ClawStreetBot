@@ -1,5 +1,9 @@
 {
+  "updatedAt": "2026-05-22T05:43:13.744Z",
+  "createdAt": "2026-05-16T17:43:47.328Z",
+  "id": "wbNusm1Nfjah3Dgs",
   "name": "backfill_pending",
+  "active": true,
   "isArchived": false,
   "nodes": [
     {
@@ -11,8 +15,7 @@
               "minutesInterval": 5
             }
           ]
-        },
-        "timezone": "America/Los_Angeles"
+        }
       },
       "id": "trigger",
       "name": "Every 5 min",
@@ -25,7 +28,7 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/backfill_runner.py"
       },
       "id": "run",
       "name": "backfill pending symbols",
@@ -64,8 +67,8 @@
   },
   "meta": null,
   "pinData": null,
-  "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-  "activeVersionId": "12a31940-3993-4e46-a4f6-87b57e371945",
+  "versionId": "a300a842-0683-4d64-93f6-d2dea386c0b5",
+  "activeVersionId": "a300a842-0683-4d64-93f6-d2dea386c0b5",
   "triggerCount": 1,
   "shared": [
     {
@@ -77,9 +80,9 @@
     }
   ],
   "activeVersion": {
-    "updatedAt": "2026-05-22T23:32:43.766Z",
-    "createdAt": "2026-05-22T23:32:43.766Z",
-    "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
+    "updatedAt": "2026-05-17T00:37:56.249Z",
+    "createdAt": "2026-05-17T00:37:56.249Z",
+    "versionId": "a300a842-0683-4d64-93f6-d2dea386c0b5",
     "workflowId": "wbNusm1Nfjah3Dgs",
     "nodes": [
       {
@@ -91,8 +94,7 @@
                 "minutesInterval": 5
               }
             ]
-          },
-          "timezone": "America/Los_Angeles"
+          }
         },
         "id": "trigger",
         "name": "Every 5 min",
@@ -105,7 +107,7 @@
       },
       {
         "parameters": {
-          "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+          "command": "docker exec clawstreet-worker python /app/scripts/backfill_runner.py"
         },
         "id": "run",
         "name": "backfill pending symbols",
