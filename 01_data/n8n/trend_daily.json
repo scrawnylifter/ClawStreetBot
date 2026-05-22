@@ -13,13 +13,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 11 * * 1-5"
+              "expression": "0 16 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Mon-Fri 11:00 PDT",
+      "name": "Mon-Fri 16:00 PDT (after derived_daily)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -42,7 +42,7 @@
     }
   ],
   "connections": {
-    "Mon-Fri 11:00 PDT": {
+    "Mon-Fri 16:00 PDT (after derived_daily)": {
       "main": [
         [
           {
