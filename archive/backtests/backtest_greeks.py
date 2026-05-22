@@ -6,6 +6,13 @@ Walks forward through historical daily data, applies the FULL v2 scanner gates
 delta bands, theta budget, IV regime), and records every signal + trade outcome with
 greeks metadata.
 
+Multi-dimensional slicing (--by-regime, --by-symbol, --by-sector, --period):
+  After the walk-forward pass completes, an optional GROUP BY analysis pass slices
+  the trades by regime / symbol / sector / named time period. Filters (--symbol,
+  --sector) can narrow the pool first. Dimensions can be combined, e.g.:
+    --by-regime --sector Technology = "how does the Tech sector perform in each regime?"
+  Slices are persisted to trading.backtest_slices for historical comparison.
+
 Two-pass mode (--compare):
   Pass 1: OLD greeks rules — flat delta band 0.50-0.70 for ALL modes, theta budget 0.03.
   Pass 2: NEW greeks rules — mode-keyed delta bands (MODE_DELTA_BANDS), per-mode
@@ -36,15 +43,19 @@ Greeks simulation (no historical option snapshots available):
   - Gamma: rough approximation ≈ 0.01-0.05 of mid depending on DTE.
   - IV rank + IV regime: from actual DB data.
 
-DB tables (must exist — see db/init/032_backtest_greeks.sql):
+DB tables (must exist — see db/init/032_backtest_greeks.sql, 033_backtest_slices.sql):
   - trading.backtest_runs           — run metadata
   - trading.backtest_trades         — individual trades with greeks columns
   - trading.backtest_greeks_summary — per-run per-mode aggregate stats
+  - trading.backtest_slices         — per-slice metrics (regime/symbol/sector/period)
 
 Usage:
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --mode swing
   python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --compare
+  python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --by-regime
+  python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --by-symbol --sector Technology
+  python archive/backtests/backtest_greeks.py --start 2025-09-08 --end 2026-05-21 --period iran_crisis --by-sector
 """
 from __future__ import annotations
 
@@ -134,6 +145,19 @@ STRATEGY_RULES: dict[str, dict[str, Any]] = {
 
 PDT_WINDOW_DAYS = 5
 PDT_MAX_TRADES = 3
+
+# ---------------------------------------------------------------------------
+# Named time periods for --period flag
+# ---------------------------------------------------------------------------
+NAMED_PERIODS: dict[str, tuple[str, str]] = {
+    "iran_crisis": ("2025-04-04", "2025-06-13"),   # bear regime
+    "recovery":    ("2025-06-16", "2025-07-09"),   # transition after crisis
+    "bull_run":    ("2025-07-10", "2025-08-31"),   # first bull island
+    "full":        ("2024-05-16", "2026-05-21"),   # all available data
+}
+
+# Sector lookup: symbol → sector (backed by market.assets, pre-loaded at runtime)
+SECTOR_MAP: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -1206,6 +1230,316 @@ def write_metrics(conn, run_id: int, metrics: dict[str, Any], final_capital: flo
 
 
 # ---------------------------------------------------------------------------
+# Sector map loader
+# ---------------------------------------------------------------------------
+def load_sector_map(conn) -> dict[str, str]:
+    """Load symbol→sector mapping from market.assets."""
+    global SECTOR_MAP
+    with conn.cursor() as cur:
+        cur.execute("SELECT symbol, sector FROM market.assets WHERE active = TRUE")
+        SECTOR_MAP = {r[0]: (r[1] or "Unknown") for r in cur.fetchall()}
+    return SECTOR_MAP
+
+
+# ---------------------------------------------------------------------------
+# Multi-dimensional slicing engine
+# ---------------------------------------------------------------------------
+def _slice_metrics(trades: list[GreeksTrade]) -> dict[str, Any]:
+    """Compute standard slice metrics from a list of trades."""
+    if not trades:
+        return {
+            "total_signals": 0, "greeks_passed": 0, "trades": 0,
+            "winners": 0, "losers": 0, "win_rate": None,
+            "avg_r": None, "profit_factor": None, "avg_hold_days": None,
+            "max_dd_pct": None, "total_pnl": 0.0,
+        }
+
+    greeks_passed = len([t for t in trades if t.greeks_pass])
+    executed = [t for t in trades if t.exit_date is not None]
+    winners = [t for t in executed if t.gross_pnl > 0]
+    losers = [t for t in executed if t.gross_pnl <= 0]
+    win_rate = (len(winners) / len(executed)) if executed else None
+    avg_r = statistics.mean([t.r_multiple for t in executed]) if executed else None
+    avg_hold = statistics.mean([t.hold_days for t in executed]) if executed else None
+
+    gross_win = sum(t.gross_pnl for t in winners)
+    gross_loss = abs(sum(t.gross_pnl for t in losers))
+    pf = (gross_win / gross_loss) if gross_loss > 0 else (float("inf") if gross_win > 0 else 0.0)
+
+    total_pnl = sum(t.gross_pnl for t in executed)
+
+    # Max drawdown for this slice (equity curve method)
+    equity = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for t in sorted(executed, key=lambda t: (t.exit_date or t.entry_date)):
+        equity += t.gross_pnl
+        peak = max(peak, equity)
+        if peak > 0:
+            dd = (peak - equity) / peak
+            max_dd = max(max_dd, dd)
+
+    return {
+        "total_signals": len(trades),
+        "greeks_passed": greeks_passed,
+        "trades": len(executed),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": round(win_rate, 4) if win_rate is not None else None,
+        "avg_r": round(avg_r, 4) if avg_r is not None else None,
+        "profit_factor": round(pf, 4) if pf != float("inf") else None,
+        "avg_hold_days": round(avg_hold, 1) if avg_hold is not None else None,
+        "max_dd_pct": round(max_dd * 100, 2) if max_dd > 0 else 0.0,
+        "total_pnl": round(total_pnl, 2),
+    }
+
+
+def _get_regime_for_date(conn, d: date) -> str:
+    """Get market regime for a specific date from market.regime."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT regime FROM market.regime
+            WHERE date <= %s
+            ORDER BY date DESC LIMIT 1
+        """, (d,))
+        r = cur.fetchone()
+        return r[0] if r else "transition"
+
+
+# Pre-load regime map for the backtest range to avoid per-trade DB queries
+_regime_cache: dict[str, str] = {}
+
+
+def _preload_regime_cache(conn, start: date, end: date) -> None:
+    """Pre-load all regime classifications for the date range."""
+    global _regime_cache
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT date, regime FROM market.regime
+            WHERE date BETWEEN %s AND %s
+            ORDER BY date
+        """, (start, end))
+        _regime_cache = {r[0].isoformat(): r[1] for r in cur.fetchall()}
+
+
+def _regime_for_signal(signal_date: date) -> str:
+    """Return regime for a signal date using cached data, with fallback."""
+    key = signal_date.isoformat()
+    if key in _regime_cache:
+        return _regime_cache[key]
+    # Fallback: find nearest prior date in cache
+    for i in range(1, 30):
+        prev = (signal_date - timedelta(days=i)).isoformat()
+        if prev in _regime_cache:
+            return _regime_cache[prev]
+    return "transition"
+
+
+def compute_slices(
+    conn,
+    all_signals: list[GreeksTrade],
+    mode: str,
+    run_id: int,
+    by_regime: bool = False,
+    by_symbol: bool = False,
+    by_sector: bool = False,
+    period: str | None = None,
+    symbol_filter: str | None = None,
+    sector_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Compute multi-dimensional slices from completed trades in DB.
+
+    Queries trading.backtest_trades for the given run_id to get trades
+    with full exit data (exit_date, gross_pnl, r_multiple, hold_days).
+    Falls back to filtering in-memory signals if DB query returns nothing.
+    """
+    # Load completed trades from DB (they have exit simulation results)
+    from psycopg2.extras import RealDictCursor
+    db_trades = []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT symbol, signal_date, direction, entry_price, entry_date,
+                   exit_date, exit_price, exit_reason, gross_pnl, net_pnl,
+                   r_multiple, hold_days, trade_mode, option_delta,
+                   iv_rank_at_entry, iv_regime_at_entry, greeks_pass,
+                   greeks_fail_reasons, tp1_price, tp2_price, stop_loss
+            FROM trading.backtest_trades
+            WHERE run_id = %s
+        """, (run_id,))
+        for row in cur.fetchall():
+            db_trades.append(type('DBTrade', (), {
+                'symbol': row['symbol'],
+                'signal_date': row['signal_date'],
+                'direction': row['direction'],
+                'entry_price': row['entry_price'] or 0,
+                'entry_date': row['entry_date'],
+                'exit_date': row['exit_date'],
+                'exit_price': row['exit_price'],
+                'exit_reason': row['exit_reason'],
+                'gross_pnl': float(row['gross_pnl'] or 0),
+                'net_pnl': float(row['net_pnl'] or 0),
+                'r_multiple': float(row['r_multiple'] or 0),
+                'hold_days': row['hold_days'] or 0,
+                'trade_mode': row['trade_mode'],
+                'option_delta': float(row['option_delta'] or 0),
+                'iv_rank_at_entry': float(row['iv_rank_at_entry'] or 0),
+                'iv_regime_at_entry': row['iv_regime_at_entry'],
+                'greeks_pass': row['greeks_pass'],
+                'greeks_fail_reasons': row['greeks_fail_reasons'] or [],
+                'tp1_price': float(row['tp1_price'] or 0),
+                'tp2_price': float(row['tp2_price'] or 0),
+                'stop_loss': float(row['stop_loss'] or 0),
+            })())
+
+    # Use DB trades if available, otherwise fall back to in-memory signals
+    pool = db_trades if db_trades else list(all_signals)
+
+    # Apply filters first
+    if symbol_filter:
+        pool = [t for t in pool if t.symbol == symbol_filter.upper()]
+
+    if sector_filter:
+        if not SECTOR_MAP:
+            load_sector_map(conn)
+        symbols_in_sector = [s for s, sec in SECTOR_MAP.items() if sec == sector_filter]
+        pool = [t for t in pool if t.symbol in symbols_in_sector]
+
+    if period:
+        if period not in NAMED_PERIODS:
+            print(f"⚠️  Unknown period '{period}'. Available: {', '.join(NAMED_PERIODS.keys())}")
+            return []
+        p_start, p_end = NAMED_PERIODS[period]
+        p_start_d = date.fromisoformat(p_start)
+        p_end_d = date.fromisoformat(p_end)
+        pool = [t for t in pool if p_start_d <= t.signal_date <= p_end_d]
+
+    slices: list[dict[str, Any]] = []
+
+    # If no grouping flags, just emit the filtered pool as a single "period" or "filtered" slice
+    has_grouping = by_regime or by_symbol or by_sector
+    if not has_grouping:
+        if period:
+            m = _slice_metrics(pool)
+            m["slice_type"] = "period"
+            m["slice_value"] = period
+            m["mode"] = mode
+            slices.append(m)
+        elif symbol_filter or sector_filter:
+            m = _slice_metrics(pool)
+            m["slice_type"] = "sector" if sector_filter else "symbol"
+            m["slice_value"] = sector_filter or symbol_filter
+            m["mode"] = mode
+            slices.append(m)
+        return slices
+
+    # Group by regime
+    if by_regime:
+        regime_groups: dict[str, list[GreeksTrade]] = {}
+        for t in pool:
+            r = _regime_for_signal(t.signal_date)
+            regime_groups.setdefault(r, []).append(t)
+        for r in sorted(regime_groups.keys()):
+            m = _slice_metrics(regime_groups[r])
+            m["slice_type"] = "regime"
+            m["slice_value"] = r
+            m["mode"] = mode
+            slices.append(m)
+
+    # Group by symbol
+    if by_symbol:
+        sym_groups: dict[str, list[GreeksTrade]] = {}
+        for t in pool:
+            sym_groups.setdefault(t.symbol, []).append(t)
+        for s in sorted(sym_groups.keys()):
+            m = _slice_metrics(sym_groups[s])
+            m["slice_type"] = "symbol"
+            m["slice_value"] = s
+            m["mode"] = mode
+            slices.append(m)
+
+    # Group by sector
+    if by_sector:
+        if not SECTOR_MAP:
+            load_sector_map(conn)
+        sec_groups: dict[str, list[GreeksTrade]] = {}
+        for t in pool:
+            sec = SECTOR_MAP.get(t.symbol, "Unknown")
+            sec_groups.setdefault(sec, []).append(t)
+        for s in sorted(sec_groups.keys()):
+            m = _slice_metrics(sec_groups[s])
+            m["slice_type"] = "sector"
+            m["slice_value"] = s
+            m["mode"] = mode
+            slices.append(m)
+
+    return slices
+
+
+def write_slices(conn, run_id: int, slices: list[dict[str, Any]]) -> None:
+    """Persist slice metrics to trading.backtest_slices (idempotent)."""
+    with conn.cursor() as cur:
+        for s in slices:
+            cur.execute("""
+                INSERT INTO trading.backtest_slices (
+                    run_id, slice_type, slice_value, mode,
+                    total_signals, greeks_passed, trades,
+                    winners, losers, win_rate, avg_r,
+                    profit_factor, avg_hold_days, max_dd_pct, total_pnl
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (run_id, slice_type, slice_value, mode) DO UPDATE SET
+                    total_signals = EXCLUDED.total_signals,
+                    greeks_passed = EXCLUDED.greeks_passed,
+                    trades = EXCLUDED.trades,
+                    winners = EXCLUDED.winners,
+                    losers = EXCLUDED.losers,
+                    win_rate = EXCLUDED.win_rate,
+                    avg_r = EXCLUDED.avg_r,
+                    profit_factor = EXCLUDED.profit_factor,
+                    avg_hold_days = EXCLUDED.avg_hold_days,
+                    max_dd_pct = EXCLUDED.max_dd_pct,
+                    total_pnl = EXCLUDED.total_pnl
+            """, (
+                run_id, s["slice_type"], s["slice_value"], s.get("mode"),
+                s["total_signals"], s["greeks_passed"], s["trades"],
+                s["winners"], s["losers"], s["win_rate"], s["avg_r"],
+                s["profit_factor"], s["avg_hold_days"], s["max_dd_pct"], s["total_pnl"],
+            ))
+
+
+def print_slice_table(slices: list[dict[str, Any]], title: str) -> None:
+    """Print a compact table of slice results."""
+    if not slices:
+        print(f"\n{title}: no data")
+        return
+
+    print(f"\n{title}")
+    print(f"{'':>12}| {'Trades':>6} | {'Win%':>6} | {'Avg R':>6} | {'PF':>6} | {'MaxDD':>6} | {'PNL':>10}")
+    print("-" * 12 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 12)
+
+    for s in slices:
+        val = s["slice_value"][:12]
+        trades = s["trades"]
+        wr = s.get("win_rate")
+        wr_str = f"{wr*100:.1f}%" if wr is not None else "n/a"
+        ar = s.get("avg_r")
+        ar_str = f"{ar:+.2f}" if ar is not None else "n/a"
+        pf = s.get("profit_factor")
+        pf_str = f"{pf:.2f}" if pf is not None else "n/a"
+        dd = s.get("max_dd_pct", 0.0)
+        dd_str = f"{dd:.1f}%" if dd else "0.0%"
+        pnl = s.get("total_pnl", 0.0)
+        pnl_str = f"${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}"
+        if pnl < 0:
+            pnl_str = f"-${abs(pnl):,.0f}"
+        print(f"{val:>12}| {trades:>6} | {wr_str:>6} | {ar_str:>6} | {pf_str:>6} | {dd_str:>6} | {pnl_str:>10}")
+
+
+# ---------------------------------------------------------------------------
 # Walk-forward backtest engine
 # ---------------------------------------------------------------------------
 def run_greeks_backtest(
@@ -1360,9 +1694,18 @@ def run_greeks_backtest(
         if v > 0:
             print(f"    {k}: {v}")
 
-    # Write to DB
+    # Write to DB — use executed_trades (which have exit simulation results)
+    # Merge simulation results back into all_signals for complete DB records
+    executed_by_key = {(t.symbol, t.signal_date): t for t in executed_trades}
+    merged = []
+    for s in all_signals:
+        key = (s.symbol, s.signal_date)
+        if key in executed_by_key:
+            merged.append(executed_by_key[key])
+        else:
+            merged.append(s)
     run_id = write_run(conn, run_name, mode, start, end, initial_capital, use_new_rules)
-    write_trades(conn, run_id, all_signals)
+    write_trades(conn, run_id, merged)
     write_greeks_summary(conn, run_id, mode, all_signals, executed_trades)
     write_metrics(conn, run_id, metrics, metrics["final_capital"])
     conn.commit()
@@ -1499,6 +1842,17 @@ def main() -> int:
     p.add_argument("--compare", action="store_true",
                    help="Run both OLD and NEW greeks rules and compare")
     p.add_argument("--name", help="Run name prefix (default: auto-generated)")
+    # Multi-dimensional slicing flags
+    p.add_argument("--by-regime", action="store_true",
+                   help="Group results by market regime (bear/transition/bull)")
+    p.add_argument("--by-symbol", action="store_true",
+                   help="Group results per symbol (NVDA, AMD, etc.)")
+    p.add_argument("--by-sector", action="store_true",
+                   help="Group results per sector (Technology, Healthcare, etc.)")
+    p.add_argument("--period", choices=list(NAMED_PERIODS.keys()),
+                   help="Filter to a named time period")
+    p.add_argument("--symbol", help="Filter to a specific symbol (e.g. NVDA)")
+    p.add_argument("--sector", help="Filter to a specific sector (e.g. Technology)")
     args = p.parse_args()
 
     # Validate date range against data availability
@@ -1508,8 +1862,23 @@ def main() -> int:
         print(f"⚠️  IV rank data starts {min_iv_date}, adjusting start from {args.start} to {min_iv_date}")
         args.start = min_iv_date
 
+    # Pre-load supporting data for slicing
     conn = psycopg2.connect(**DB_CONFIG)
     try:
+        # Always load sector map and regime cache for slicing support
+        load_sector_map(conn)
+        # Extend regime cache range to cover full data (incl. named periods)
+        _preload_regime_cache(conn, date(2024, 5, 1), date(2026, 5, 31))
+
+        slicing_kwargs = {
+            "by_regime": args.by_regime,
+            "by_symbol": args.by_symbol,
+            "by_sector": args.by_sector,
+            "period": args.period,
+            "symbol_filter": args.symbol,
+            "sector_filter": args.sector,
+        }
+
         if args.compare:
             # Run TWO passes: OLD rules then NEW rules
             base_name = args.name or f"greeks_{args.mode}_{args.start.isoformat()}_{args.end.isoformat()}"
@@ -1534,6 +1903,27 @@ def main() -> int:
 
             # Print comparison
             print_comparison(old_metrics, new_metrics, old_rejects, new_rejects, args.mode)
+
+            # Slicing on the NEW pass
+            has_slicing = any([args.by_regime, args.by_symbol, args.by_sector, args.period,
+                               args.symbol, args.sector])
+            if has_slicing and new_signals:
+                # Get the NEW run_id
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM trading.backtest_runs WHERE run_name = %s",
+                                (new_name,))
+                    new_run_row = cur.fetchone()
+                new_run_id = new_run_row[0] if new_run_row else 0
+                slices = compute_slices(conn, new_signals, args.mode, run_id=new_run_id, **slicing_kwargs)
+                if new_run_id and slices:
+                    write_slices(conn, new_run_id, slices)
+                    conn.commit()
+
+                # Print slice tables grouped by type
+                for stype in ["regime", "symbol", "sector", "period"]:
+                    matching = [s for s in slices if s["slice_type"] == stype]
+                    if matching:
+                        print_slice_table(matching, f"BY {stype.upper()}")
         else:
             # Single pass with NEW rules
             run_name = args.name or f"greeks_{args.mode}_{args.start.isoformat()}_{args.end.isoformat()}_NEW"
@@ -1564,6 +1954,27 @@ def main() -> int:
                         r = s.iv_regime_at_entry
                         regimes[r] = regimes.get(r, 0) + 1
                     print(f"  IV regimes: {dict(sorted(regimes.items()))}")
+
+            # Multi-dimensional slicing analysis
+            has_slicing = any([args.by_regime, args.by_symbol, args.by_sector, args.period,
+                               args.symbol, args.sector])
+            if has_slicing and signals:
+                # Get run_id
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM trading.backtest_runs WHERE run_name = %s",
+                                (run_name,))
+                    run_row = cur.fetchone()
+                slice_run_id = run_row[0] if run_row else 0
+                slices = compute_slices(conn, signals, args.mode, run_id=slice_run_id, **slicing_kwargs)
+                if slice_run_id and slices:
+                    write_slices(conn, slice_run_id, slices)
+                    conn.commit()
+
+                # Print slice tables grouped by type
+                for stype in ["regime", "symbol", "sector", "period"]:
+                    matching = [s for s in slices if s["slice_type"] == stype]
+                    if matching:
+                        print_slice_table(matching, f"BY {stype.upper()}")
 
     finally:
         conn.close()
