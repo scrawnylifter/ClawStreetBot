@@ -25,32 +25,13 @@ from pathlib import Path
 
 import psycopg2
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
 
-
-def load_env(filename: str) -> None:
-    path = PROJECT_ROOT / filename
-    if not path.exists():
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
+from constants import DB_CONFIG, load_env  # noqa: E402
 
 load_env(".env.db")
 
 import yfinance as yf  # noqa: E402
-
-DB_CONFIG = {
-    "host": os.environ.get("POSTGRES_HOST", "localhost"),
-    "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-    "dbname": os.environ.get("POSTGRES_DB", "clawstreet"),
-    "user": os.environ["POSTGRES_USER"],
-    "password": os.environ["POSTGRES_PASSWORD"],
-}
 
 # Map yfinance quarterly_financials row labels → our column names.
 INCOME_LABELS = {

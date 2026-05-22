@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -29,7 +28,9 @@ from zoneinfo import ZoneInfo
 
 # Shared imports (constants + option lookup) — load shared/ regardless of CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
-from constants import SESSION_OPEN, SESSION_CLOSE, is_market_day, is_market_hours  # noqa: E402
+from constants import DB_CONFIG, SESSION_OPEN, SESSION_CLOSE, is_market_day, is_market_hours, load_env  # noqa: E402
+
+load_env(".env.db")
 
 ET = ZoneInfo("America/New_York")
 
@@ -37,32 +38,6 @@ import psycopg2
 
 log = logging.getLogger("liquidity_sweep")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# ── Env loading ──
-
-def load_env(filename: str) -> None:
-    path = PROJECT_ROOT / filename
-    if not path.exists():
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
-load_env(".env.db")
-
-DB_CONFIG = {
-    "host": os.environ.get("POSTGRES_HOST", "localhost"),
-    "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-    "dbname": os.environ["POSTGRES_DB"],
-    "user": os.environ["POSTGRES_USER"],
-    "password": os.environ["POSTGRES_PASSWORD"],
-}
-# Sibling imports (for option lookup — sys.path already set above)
 
 # ── Strategy rules (backtest-validated) ──
 
@@ -102,23 +77,7 @@ class SwingLevel:
 # ── Data fetching ──
 
 def get_connection():
-    env_path = Path("/app/.env.db")
-    if not env_path.exists():
-        env_path = PROJECT_ROOT / ".env.db"
-    conn_params = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                conn_params[k.strip()] = v.strip()
-    return psycopg2.connect(
-        host=conn_params.get("POSTGRES_HOST", "localhost"),
-        port=int(conn_params.get("POSTGRES_PORT", 5432)),
-        user=conn_params.get("POSTGRES_USER", "clawstreet"),
-        password=conn_params.get("POSTGRES_PASSWORD", ""),
-        dbname=conn_params.get("POSTGRES_DB", "clawstreet"),
-    )
+    return psycopg2.connect(**DB_CONFIG)
 
 
 def fetch_daily_bars(conn, symbol, lookback_days=120):

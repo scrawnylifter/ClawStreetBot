@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -42,32 +41,11 @@ import psycopg2
 log = logging.getLogger("orb")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ET = ZoneInfo("America/New_York")
 
 # Shared imports (constants + option lookup) — load shared/ regardless of CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
-from constants import SESSION_OPEN, SCANNER_ORB_START, is_market_day  # noqa: E402
-
-
-# ── Env loading ──
-
-def load_env(filename: str) -> None:
-    path = PROJECT_ROOT / filename
-    if not path.exists():
-        # Inside the worker container the .env files live under /app
-        alt = Path("/app") / filename
-        if alt.exists():
-            path = alt
-        else:
-            return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-
+from constants import DB_CONFIG, SESSION_OPEN, SCANNER_ORB_START, is_market_day, load_env  # noqa: E402
 
 load_env(".env.db")
 
@@ -123,38 +101,7 @@ class Bar5m:
 # ── DB ──
 
 def get_connection():
-    """Connect to Postgres.
-
-    Resolution order for each setting: .env.db file (if present) → process
-    env (docker-compose populates POSTGRES_HOST=postgres etc. via env_file)
-    → safe default. The file-first order matters because the worker
-    container inherits POSTGRES_HOST=postgres from compose but the .env.db
-    file inside the repo doesn't carry POSTGRES_HOST — so a file-only
-    lookup with localhost-default fails to reach the postgres service
-    container.
-    """
-    env_path = Path("/app/.env.db")
-    if not env_path.exists():
-        env_path = PROJECT_ROOT / ".env.db"
-    cfg: dict[str, str] = {}
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    cfg[k.strip()] = v.strip()
-
-    def _get(key: str, default: str | None = None) -> str | None:
-        return cfg.get(key) or os.environ.get(key) or default
-
-    return psycopg2.connect(
-        host=_get("POSTGRES_HOST", "postgres"),
-        port=int(_get("POSTGRES_PORT", "5432")),
-        user=_get("POSTGRES_USER", "clawstreet"),
-        password=_get("POSTGRES_PASSWORD", ""),
-        dbname=_get("POSTGRES_DB", "clawstreet"),
-    )
+    return psycopg2.connect(**DB_CONFIG)
 
 
 def get_active_symbols(conn) -> list[str]:

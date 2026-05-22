@@ -39,7 +39,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -55,7 +54,9 @@ from fetch_alpaca_snapshot import (  # noqa: E402
     get_underlying_price,
     select_best_option,
 )
-from constants import is_market_day, is_market_hours  # noqa: E402
+from constants import DB_CONFIG, is_market_day, is_market_hours, load_env  # noqa: E402
+
+load_env(".env.db")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,24 +88,7 @@ RR_MIN = 3.0
 # ---------------------------------------------------------------------------
 
 def get_connection():
-    """Open a Postgres connection using /app/.env.db (worker container path)."""
-    env_path = Path("/app/.env.db")
-    if not env_path.exists():
-        # Local-dev fallback: project root .env.db
-        env_path = Path(__file__).resolve().parent.parent / ".env.db"
-    conn_params: dict[str, str] = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                conn_params[k.strip()] = v.strip()
-    return psycopg2.connect(
-        host=conn_params.get("POSTGRES_HOST", "postgres"),
-        user=conn_params.get("POSTGRES_USER", "clawstreet"),
-        password=conn_params.get("POSTGRES_PASSWORD", ""),
-        dbname=conn_params.get("POSTGRES_DB", "clawstreet"),
-    )
+    return psycopg2.connect(**DB_CONFIG)
 
 
 # ---------------------------------------------------------------------------
