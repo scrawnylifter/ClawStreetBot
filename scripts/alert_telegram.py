@@ -237,6 +237,40 @@ def _format_quote_line(opt_bid, opt_ask, opt_mid, spread_pct) -> str:
             f"{mid_str}{spread_str}")
 
 
+def _append_option_block(lines: list, signal: dict, direction: str, symbol: str):
+    """Append option contract details with greeks and quote to alert lines."""
+    opt_sym = signal.get("option_symbol")
+    if not opt_sym:
+        return
+    opt_strike = signal.get("option_strike", 0)
+    opt_expiry = signal.get("option_expiry", "?")
+    opt_delta = signal.get("option_delta", 0)
+    opt_theta = signal.get("option_theta")
+    opt_mid = signal.get("option_mid")
+    opt_bid = signal.get("option_bid")
+    opt_ask = signal.get("option_ask")
+    contract_type = "C" if direction == "bullish" else "P"
+
+    lines.append("")
+    # Header line: symbol strike C/P expiry delta
+    lines.append(
+        f"<b>Option:</b> {symbol} ${float(opt_strike):.0f}{contract_type} "
+        f"exp {opt_expiry} (Δ{float(opt_delta):.2f})"
+    )
+    # Greeks line: theta if available
+    greek_bits = []
+    if opt_theta is not None:
+        greek_bits.append(f"Θ{float(opt_theta):.3f}")
+    if greek_bits:
+        lines.append(f"Greeks: {' | '.join(greek_bits)}")
+    # Quote line with spread
+    if opt_bid is not None and opt_ask is not None:
+        lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid,
+                                        signal.get("spread_pct")))
+    elif opt_mid is not None:
+        lines.append(f"Mid: ${float(opt_mid):.2f}")
+
+
 def _trend_english(val) -> str:
     if val == "bull":
         return "up"
@@ -284,18 +318,8 @@ def format_ema_crossover_alert(signal: dict) -> str:
     regime_emoji = "🟢" if regime == "bull" else ("🔴" if regime == "bear" else "⚪")
     lines.append(f"Short-term {micro}, mid-term {inter}, long-term {prim}. Market regime: {regime_emoji} {regime}")
 
-    opt_sym = signal.get("option_symbol")
-    if opt_sym:
-        opt_strike = signal.get("option_strike", 0)
-        opt_expiry = signal.get("option_expiry", "?")
-        opt_delta = signal.get("option_delta", 0)
-        contract_type = "C" if direction == "bullish" else "P"
-        lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
-        opt_bid = signal.get("option_bid")
-        opt_ask = signal.get("option_ask")
-        opt_mid = signal.get("option_mid")
-        if opt_bid is not None and opt_ask is not None:
-            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid, signal.get("spread_pct")))
+    # --- Option contract ---
+    _append_option_block(lines, signal, direction, symbol)
 
     context_bits = []
     iv_rank = signal.get("iv_rank")
@@ -377,18 +401,8 @@ def format_15m_crossover_alert(signal: dict) -> str:
     regime_emoji = "🟢" if regime == "bull" else ("🔴" if regime == "bear" else "⚪")
     lines.append(f"Short-term {micro}, mid-term {inter}, long-term {prim}. Market regime: {regime_emoji} {regime}")
 
-    opt_sym = signal.get("option_symbol")
-    if opt_sym:
-        opt_strike = signal.get("option_strike", 0)
-        opt_expiry = signal.get("option_expiry", "?")
-        opt_delta = signal.get("option_delta", 0)
-        contract_type = "C" if direction == "bullish" else "P"
-        lines.append(f"\nSuggested: {symbol} ${opt_strike:.0f}{contract_type} exp {opt_expiry} (Δ{opt_delta:.2f})")
-        opt_bid = signal.get("option_bid")
-        opt_ask = signal.get("option_ask")
-        opt_mid = signal.get("option_mid")
-        if opt_bid is not None and opt_ask is not None:
-            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid, signal.get("spread_pct")))
+    # --- Option contract ---
+    _append_option_block(lines, signal, direction, symbol)
 
     context_bits = []
     iv_rank = signal.get("iv_rank")
@@ -471,19 +485,8 @@ def format_setup_scanner_alert(signal: dict) -> str:
     lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
     lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
 
-    opt_sym = signal.get("option_symbol")
-    if opt_sym:
-        opt_strike = signal.get("option_strike", 0)
-        opt_expiry = signal.get("option_expiry", "?")
-        opt_delta = signal.get("option_delta", 0)
-        opt_mid = signal.get("option_mid")
-        contract_type = "C" if direction == "bullish" else "P"
-        lines.append("")
-        lines.append(f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} exp {opt_expiry} (Δ{float(opt_delta):.2f})")
-        opt_bid = signal.get("option_bid")
-        opt_ask = signal.get("option_ask")
-        if opt_bid is not None and opt_ask is not None:
-            lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid, signal.get("spread_pct")))
+    # --- Option contract ---
+    _append_option_block(lines, signal, direction, symbol)
 
     context_bits = []
     iv_rank = signal.get("iv_rank")
@@ -568,17 +571,8 @@ def format_liquidity_sweep_alert(signal: dict) -> str:
     lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
     lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
 
-    opt_sym = signal.get("option_symbol")
-    if opt_sym:
-        opt_strike = signal.get("option_strike", 0)
-        opt_expiry = signal.get("option_expiry", "?")
-        opt_delta = signal.get("option_delta", 0)
-        opt_mid = signal.get("option_mid")
-        contract_type = "C" if direction == "bullish" else "P"
-        lines.append("")
-        lines.append(f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} exp {opt_expiry} (Δ{float(opt_delta):.2f})")
-        if opt_mid is not None:
-            lines.append(f"Mid: ${float(opt_mid):.2f}")
+    # --- Option contract ---
+    _append_option_block(lines, signal, direction, symbol)
 
     lines.append("")
     lines.append("⚡ Close-beyond confirmation passed")
@@ -649,20 +643,8 @@ def format_orb_alert(signal: dict) -> str:
         f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}"
     )
 
-    opt_sym = signal.get("option_symbol")
-    if opt_sym:
-        opt_strike = signal.get("option_strike", 0)
-        opt_expiry = signal.get("option_expiry", "?")
-        opt_delta = signal.get("option_delta", 0)
-        opt_mid = signal.get("option_mid")
-        contract_type = "C" if direction == "bullish" else "P"
-        lines.append("")
-        lines.append(
-            f"Suggested: {symbol} ${float(opt_strike):.0f}{contract_type} "
-            f"exp {opt_expiry} (Δ{float(opt_delta):.2f})"
-        )
-        if opt_mid is not None:
-            lines.append(f"Mid: ${float(opt_mid):.2f}")
+    # --- Option contract ---
+    _append_option_block(lines, signal, direction, symbol)
 
     if near_pdh or near_pdl:
         lines.append("")
