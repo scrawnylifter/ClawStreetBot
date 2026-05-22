@@ -238,7 +238,7 @@ def _format_quote_line(opt_bid, opt_ask, opt_mid, spread_pct) -> str:
 
 
 def _append_option_block(lines: list, signal: dict, direction: str, symbol: str):
-    """Append option contract details with greeks and quote to alert lines."""
+    """Append option contract details with greeks, quote, and option risk/reward."""
     opt_sym = signal.get("option_symbol")
     if not opt_sym:
         return
@@ -265,10 +265,39 @@ def _append_option_block(lines: list, signal: dict, direction: str, symbol: str)
         lines.append(f"Greeks: {' | '.join(greek_bits)}")
     # Quote line with spread
     if opt_bid is not None and opt_ask is not None:
+        cost = float(opt_mid) if opt_mid is not None else (float(opt_bid) + float(opt_ask)) / 2
         lines.append(_format_quote_line(opt_bid, opt_ask, opt_mid,
                                         signal.get("spread_pct")))
     elif opt_mid is not None:
+        cost = float(opt_mid)
         lines.append(f"Mid: ${float(opt_mid):.2f}")
+    else:
+        cost = None
+    # Option risk/reward
+    if cost is not None and cost > 0:
+        stop = float(signal.get("stop_price", 0))
+        price = float(signal.get("trigger_price", 0))
+        tp1 = float(signal.get("tp1_price", 0))
+        opt_delta_f = float(opt_delta)
+        # Max loss = what you paid (1 contract = 100× mid)
+        max_loss = cost * 100
+        # Rough TP1 estimate: delta × share move × 100
+        if direction == "bullish" and stop > 0:
+            share_move_to_tp1 = tp1 - price
+            opt_gain_tp1 = opt_delta_f * share_move_to_tp1 * 100
+            rr_opt = opt_gain_tp1 / max_loss if max_loss > 0 else 0
+            lines.append(
+                f"Max risk: ${max_loss:.0f} → Est TP1 gain: ${opt_gain_tp1:.0f} "
+                f"({rr_opt:.1f}:1)"
+            )
+        elif direction == "bearish" and stop > 0:
+            share_move_to_tp1 = price - tp1
+            opt_gain_tp1 = opt_delta_f * share_move_to_tp1 * 100
+            rr_opt = opt_gain_tp1 / max_loss if max_loss > 0 else 0
+            lines.append(
+                f"Max risk: ${max_loss:.0f} → Est TP1 gain: ${opt_gain_tp1:.0f} "
+                f"({rr_opt:.1f}:1)"
+            )
 
 
 def _trend_english(val) -> str:
@@ -307,7 +336,10 @@ def format_ema_crossover_alert(signal: dict) -> str:
     reward_d = tp1 - price if direction == "bullish" else price - tp1
     rr_check = "✅" if rr >= 3 else "⚠️"
     lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
-    lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({rr:.1f}:1) {rr_check}")
+    if signal.get("option_symbol"):
+        lines.append(f"Stock move: ${risk_d:.2f} risk → ${reward_d:.2f} reward ({rr:.1f}:1) {rr_check}")
+    else:
+        lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({rr:.1f}:1) {rr_check}")
 
     cross_dir = "above" if direction == "bullish" else "below"
     lines.append(f"\n9-day moving average crossed {cross_dir} 21-day — trend forming (ADX {adx:.0f}).")
@@ -387,7 +419,10 @@ def format_15m_crossover_alert(signal: dict) -> str:
     reward_d = tp1 - price if direction == "bullish" else price - tp1
     rr_check = "✅" if rr >= 3 else "⚠️"
     lines.append(f"Entry: ${price:.2f} | Stop: ${stop:.2f} | Target: ${tp1:.2f} / ${tp2:.2f}")
-    lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({rr:.1f}:1) {rr_check}")
+    if signal.get("option_symbol"):
+        lines.append(f"Stock move: ${risk_d:.2f} risk → ${reward_d:.2f} reward ({rr:.1f}:1) {rr_check}")
+    else:
+        lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({rr:.1f}:1) {rr_check}")
 
     cross_dir = "above" if direction == "bullish" else "below"
     daily_pos = signal.get("daily_ema_position", "?")
@@ -483,7 +518,10 @@ def format_setup_scanner_alert(signal: dict) -> str:
     rr_check = "✅" if float(rr) >= 3 else "⚠️"
     lines.append("")
     lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
-    lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
+    if signal.get("option_symbol"):
+        lines.append(f"Stock move: ${risk_d:.2f} risk → ${reward_d:.2f} reward ({float(rr):.1f}:1) {rr_check}")
+    else:
+        lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
 
     # --- Option contract ---
     _append_option_block(lines, signal, direction, symbol)
@@ -569,7 +607,10 @@ def format_liquidity_sweep_alert(signal: dict) -> str:
     rr_check = "✅" if float(rr) >= 3 else "⚠️"
     lines.append("")
     lines.append(f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | Target: ${float(tp1):.2f} / ${float(tp2):.2f}")
-    lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
+    if signal.get("option_symbol"):
+        lines.append(f"Stock move: ${risk_d:.2f} risk → ${reward_d:.2f} reward ({float(rr):.1f}:1) {rr_check}")
+    else:
+        lines.append(f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}")
 
     # --- Option contract ---
     _append_option_block(lines, signal, direction, symbol)
@@ -639,9 +680,14 @@ def format_orb_alert(signal: dict) -> str:
         f"Entry: ${float(price):.2f} | Stop: ${float(stop):.2f} | "
         f"Target: ${float(tp1):.2f} / ${float(tp2):.2f}"
     )
-    lines.append(
-        f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}"
-    )
+    if signal.get("option_symbol"):
+        lines.append(
+            f"Stock move: ${risk_d:.2f} risk → ${reward_d:.2f} reward ({float(rr):.1f}:1) {rr_check}"
+        )
+    else:
+        lines.append(
+            f"Risk ${risk_d:.2f} → Reward ${reward_d:.2f} ({float(rr):.1f}:1) {rr_check}"
+        )
 
     # --- Option contract ---
     _append_option_block(lines, signal, direction, symbol)
