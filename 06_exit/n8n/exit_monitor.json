@@ -1,0 +1,52 @@
+{
+  "name": "exit_monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 6-13 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "c1f5a9b0-2d3c-4a6e-7b8d-9e0f1a2b3c4d",
+      "name": "Every 5min market hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/06_exit/scripts/exit_monitor.py"
+      },
+      "id": "d2a6b0c1-3e4d-5b7f-8c9e-0f1a2b3c4d5e",
+      "name": "evaluate open positions",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Every 5min market hours": {
+      "main": [
+        [
+          {
+            "node": "evaluate open positions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 180,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": false
+}

@@ -1,0 +1,52 @@
+{
+  "name": "signals_daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a3f7c1e2-4b5d-6e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Mon-Fri 16:30 PDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "docker exec clawstreet-worker python /app/04_approval/scripts/generate_signals.py"
+      },
+      "id": "b4e8d2f3-5c6a-7f9b-0a1c-2d3e4f5a6b7c",
+      "name": "generate signals",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Mon-Fri 16:30 PDT": {
+      "main": [
+        [
+          {
+            "node": "generate signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
+    "timezone": "America/Los_Angeles"
+  },
+  "active": false
+}

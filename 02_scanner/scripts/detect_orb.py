@@ -372,21 +372,20 @@ def fetch_nearest_option(symbol: str, direction: str,
 def save_signal(conn, sig: dict) -> int | None:
     """Insert into market.signal_alerts. Returns row id or None on duplicate.
 
-    Mirrors detect_liquidity_sweep.save_signal — explicit 4-hour cooldown
-    SELECT before INSERT because the table's UNIQUE on (symbol, strategy,
-    direction, timeframe, created_at) never collides (created_at defaults
-    to NOW())."""
+    ORB fires once per symbol per direction per day — check same-calendar-day
+    dedup. (Other strategies use a 4-hour cooldown, but ORB is an opening-range
+    event that shouldn't re-alert within the same session.)"""
     cur = conn.cursor()
     try:
         cur.execute("""
             SELECT 1 FROM market.signal_alerts
              WHERE symbol = %s AND strategy = %s
                AND direction = %s AND timeframe = %s
-               AND created_at > NOW() - INTERVAL '4 hours'
+               AND created_at::date = CURRENT_DATE
              LIMIT 1
         """, (sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"]))
         if cur.fetchone():
-            log.info("%s: cooldown active (%s %s %s alerted within 4h), skipping",
+            log.info("%s: already alerted today (%s %s %s), skipping",
                      sig["symbol"], sig["strategy"], sig["direction"], sig["timeframe"])
             return None
 

@@ -6,7 +6,7 @@ Autonomous stock screening, alerts, and trading bot. Paper trading on Alpaca, hi
 
 - **Market hours:** NEVER hardcode 9:30, 16:00, 09:30, session times, or market-open/close strings. ALWAYS import from `shared/constants.py` (which loads from `config/market_hours.yml`). Use `SESSION_OPEN`, `SESSION_CLOSE`, `SCANNER_ORB_START`, `INGEST_INTRADAY_START/END`, `is_market_day()`, `is_market_hours()`, `NYSE_HOLIDAYS`. The YAML is the single source of truth — n8n cron schedules should match the ingestion/scanner windows defined there.
 - **Watchlist:** ALWAYS query `market.assets WHERE active=TRUE` — never hardcode symbol lists. The YAML at `config/watchlist.yml` is the source of truth for what should be active; `01_data/scripts/setup_watchlist.py` syncs it to the DB.
-- **Layered imports:** scripts in `01_data/scripts/`, `02_scanner/scripts/`, `03_alert/scripts/`, `admin/scripts/` import shared utilities (`constants`, `fetch_alpaca_snapshot`) from `shared/`. Each script that needs them does `sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))` then `from constants import …`.
+- **Layered imports:** scripts in `0X_layer/scripts/` import shared utilities (`constants`, `fetch_alpaca_snapshot`) from `shared/`. Each script does `sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))` then `from constants import DB_CONFIG, load_env`.
 
 ## Architecture
 
@@ -30,10 +30,10 @@ The bot is organised as a 7-layer pipeline. Each layer is a numbered top-level d
 | 01 | **data** | ✅ live | `ingest_alpaca_*`, `compute_*`, `setup_watchlist` | Ingest OHLCV, options, greeks, IV, fundamentals; compute derived analytics (IV rank, RV, GEX/DEX, technicals, trend) |
 | 02 | **scanner** | ✅ live | `scan_setups`, `detect_ema_crossover`, `detect_ema_crossover_15m`, `detect_orb`, `detect_liquidity_sweep` | Pattern detection — write rows to `market.signal_alerts` with `status='new'` |
 | 03 | **alert** | ✅ live | `alert_telegram` | Telegram dispatch (4-button keyboard) + `expire_stale_new` + `notify_errors` + exit-fill push messages |
-| 04 | **approval** | ⛔ missing (rebuild from `archive/v1-pipeline/`) | (target: `telegram_callback_listener`, `process_approved`) | Capture user button press → write `risk_mode`; run pre-flight (PDT, drawdown) → flip to `approved`/`denied` |
-| 05 | **execution** | ⛔ missing (rebuild from `archive/v1-pipeline/`) | (target: `execute_trade`) | Submit Alpaca paper orders (bracket for stock, mid-price limit for options); `client_order_id`-deduped |
-| 06 | **exit** | ⛔ missing (rebuild from `archive/v1-pipeline/`) | (target: `exit_monitor`) | TP/SL/trailing-stop/time-stop decision tree; emit SELLs |
-| 07 | **reconcile** | ⛔ missing (rebuild from `archive/v1-pipeline/`) | (target: `reconcile_orders`, `reconcile_exits`, `snapshot_equity`) | Poll Alpaca for BUY/SELL fills, update `trading.positions`, capture realized P&L, daily equity snapshot |
+|| 04 | **approval** | ✅ ported | `generate_signals`, `process_approved` | Composite signal scoring (6-factor); pre-flight checks (PDT, drawdown) → flip to `approved`/`denied` |
+|| 05 | **execution** | ✅ ported | `execute_trade`, `snapshot_equity` | Submit Alpaca paper orders (bracket for stock, mid-price limit for options); daily equity snapshots for drawdown |
+|| 06 | **exit** | ✅ ported | `exit_monitor` | TP/SL/trailing-stop/time-stop decision tree; emit SELLs |
+|| 07 | **reconcile** | ✅ ported | `reconcile_orders`, `reconcile_exits` | Poll Alpaca for BUY/SELL fills, update `trading.positions`, capture realized P&L |
 
 **Cross-layer:** `shared/` (constants, snapshot helper), `admin/` (backfill runner + n8n REST helper), `config/` (watchlist + market_hours YAMLs), `db/init/` + `n8n/migrations/` (schema), `obsidian/vault/` (knowledge base), `archive/` (decommissioned + v1 pipeline staged for v2 rebuild).
 
@@ -279,6 +279,10 @@ source .env.db && psql ...         # or use load_env() in Python
 | `./01_data` | `/app/01_data` |
 | `./02_scanner` | `/app/02_scanner` |
 | `./03_alert` | `/app/03_alert` |
+| `./04_approval` | `/app/04_approval` |
+| `./05_execution` | `/app/05_execution` |
+| `./06_exit` | `/app/06_exit` |
+| `./07_reconcile` | `/app/07_reconcile` |
 | `./shared` | `/app/shared` |
 | `./admin` | `/app/admin` |
 | `./config` | `/app/config` |
@@ -375,22 +379,35 @@ ClawStreetBot/
 │   └── n8n/
 │       └── alert_dispatch.json           ← ★ Mon-Fri every 1min 6-13 PDT
 │
-├── 04_approval/                ← LAYER 4: USER APPROVAL + PRE-FLIGHT (⛔ to be rebuilt from archive/v1-pipeline)
-│   ├── scripts/                          ← target: telegram_callback_listener.py, process_approved.py
-│   ├── n8n/
-│   └── db/                               ← layer-specific migrations land here
+├── 04_approval/                ← LAYER 4: Approval + pre-flight
+│   ├── scripts/
+│   │   ├── generate_signals.py       ← 6-factor composite signal scoring (0-100)
+│   │   └── process_approved.py       ← Drawdown halts + PDT + pre-flight → approve/deny
+│   └── n8n/
+│       ├── signals_daily.json        ← Mon-Fri 16:30 PDT
+│       └── process_approved.json     ← Mon-Fri every 1min 6-13 PDT
 │
-├── 05_execution/               ← LAYER 5: ALPACA SUBMISSION (⛔ to be rebuilt from archive/v1-pipeline)
-│   ├── scripts/                          ← target: execute_trade.py (bracket orders for stock, mid-price for options)
-│   └── n8n/                              ← target: execute_trade.json
+├── 05_execution/               ← LAYER 5: Alpaca paper submission
+│   ├── scripts/
+│   │   ├── execute_trade.py          ← Alpaca order submit; bracket for stock, mid-price for options
+│   │   └── snapshot_equity.py        ← Daily equity snapshot (drawdown denominator)
+│   └── n8n/
+│       ├── execute_trade.json        ← Mon-Fri every 1min 6-13 PDT
+│       └── equity_snapshot_daily.json ← Mon-Fri 14:30 PDT
 │
-├── 06_exit/                    ← LAYER 6: EXIT DECISION TREE (⛔ to be rebuilt from archive/v1-pipeline)
-│   ├── scripts/                          ← target: exit_monitor.py (TP/SL/trail/time-stop)
-│   └── n8n/                              ← target: exit_monitor.json
+├── 06_exit/                    ← LAYER 6: Exit decision tree
+│   ├── scripts/
+│   │   └── exit_monitor.py           ← TP/SL/trail-stop/time-stop; trail after TP2 for swing
+│   └── n8n/
+│       └── exit_monitor.json         ← Mon-Fri every 5min 6-13 PDT
 │
-├── 07_reconcile/               ← LAYER 7: ALPACA FILL RECONCILIATION (⛔ to be rebuilt from archive/v1-pipeline)
-│   ├── scripts/                          ← target: reconcile_orders.py, reconcile_exits.py, snapshot_equity.py
-│   └── n8n/                              ← target: reconcile_orders.json, reconcile_exits.json, equity_snapshot_daily.json
+├── 07_reconcile/               ← LAYER 7: Fill reconciliation
+│   ├── scripts/
+│   │   ├── reconcile_orders.py       ← BUY fill → trading.positions
+│   │   └── reconcile_exits.py       ← SELL fill → close + realized P&L + exit push notification
+│   └── n8n/
+│       ├── reconcile_orders.json     ← Mon-Fri every 1min 6-14 PDT
+│       └── reconcile_exits.json      ← Mon-Fri every 1min 6-14 PDT
 │
 ├── shared/                     ← Cross-layer Python utilities (imported by 02_scanner, 03_alert, etc.)
 │   ├── constants.py                      ← Market hours, session times, MAX_SPREAD_PCT, load_env(), is_market_*()
@@ -425,7 +442,7 @@ ClawStreetBot/
 
 ## Current Phase
 
-All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execution loop) shipped in v1; v2 rebuild of layers 04–07 from `archive/v1-pipeline/` pending. Phase 5F (ORB scanner) shipped.**
+All phases 1-4 complete. **Phase 5A (signal detection) complete. Phase 5B (execution loop) shipped in v1, now ported to v2 layered structure. Phase 5F (ORB scanner) shipped. Layers 01-07 all populated with scripts + n8n workflows.**
 
 - [x] Docker services running (Postgres, Redis, Obsidian, worker, n8n)
 - [x] Alpaca paper trading connected

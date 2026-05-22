@@ -72,6 +72,10 @@ services:
       - ./01_data:/app/01_data:ro
       - ./02_scanner:/app/02_scanner:ro
       - ./03_alert:/app/03_alert:ro
+      - ./04_approval:/app/04_approval:ro
+      - ./05_execution:/app/05_execution:ro
+      - ./06_exit:/app/06_exit:ro
+      - ./07_reconcile:/app/07_reconcile:ro
       - ./shared:/app/shared:ro
       - ./admin:/app/admin:ro
       - ./config:/app/config:ro
@@ -170,6 +174,7 @@ services:
       - N8N_PROTOCOL=http
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_GRANT_TOKEN_TTL=120
       - N8N_SECURE_COOKIE=false
       # Disable insights module — its compaction service contends with cron for the SQLite
       # write lock, causing "Missed execution deadline" skips on minute-level crons.
@@ -180,6 +185,8 @@ services:
       - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
       # Raise SQLite connection pool so cron/triggers don't starve behind background jobs.
       - DB_SQLITE_POOL_SIZE=10
+      # Extend SQLite busy timeout (default 5s) so pruning/cron don't timeout on lock contention.
+      - DB_SQLITE_BUSY_TIMEOUT=15000
       # Re-enable Execute Command and Local File Trigger nodes (disabled by default in n8n v2.x).
       # Setting NODES_EXCLUDE to an empty array overrides the breaking-change rule.
       - NODES_EXCLUDE=[]
@@ -192,6 +199,10 @@ services:
       - ./01_data/n8n:/workflows/01_data:ro
       - ./02_scanner/n8n:/workflows/02_scanner:ro
       - ./03_alert/n8n:/workflows/03_alert:ro
+      - ./04_approval/n8n:/workflows/04_approval:ro
+      - ./05_execution/n8n:/workflows/05_execution:ro
+      - ./06_exit/n8n:/workflows/06_exit:ro
+      - ./07_reconcile/n8n:/workflows/07_reconcile:ro
     depends_on:
       - worker
       - docker-proxy
