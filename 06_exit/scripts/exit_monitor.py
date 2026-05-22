@@ -14,13 +14,16 @@ Decision tree (first match wins; full close unless noted):
                                      bypass TP1/TP2 (already past those).
     4. underlying reached tp2     → full close (day / long_term modes)
                                      OR trail-activate (swing mode)
-    5. underlying reached tp1     → partial close (50%)
-                                      submit a SELL for qty//2 and stamp
-                                      tp1_sell_order_id + tp1_hit_at;
-                                      reconcile_exits reduces positions.quantity
-                                      when the partial fills.
-    6. day-trade time stop        → full close (mode=day, ≥ 12:45 PDT)
-    7. option DTE ≤ 1             → full close (Law 5)
+   5. underlying reached tp1     → partial close (50%)
+                                    submit a SELL for qty//2 and stamp
+                                    tp1_sell_order_id + tp1_hit_at;
+                                    reconcile_exits reduces positions.quantity
+                                    when the partial fills.
+   6. stale swing/long_term position → full close (mode=swing: 7 cal days,
+                                        mode=long_term: 30 cal days,
+                                        underlying within 0.5×ATR of entry)
+   7. day-trade time stop        → full close (mode=day, ≥ 12:45 PDT)
+   8. option DTE ≤ 1             → full close (Law 5)
 
 Default is dry-run; --confirm submits real SELL orders on Alpaca paper.
 paper=True is hard-coded.
@@ -83,6 +86,8 @@ EQUITIES_TZ = ZoneInfo("America/Los_Angeles")
 
 OPTION_PREMIUM_STOP_FRACTION = Decimal("0.50")  # close if mid ≤ 50% of entry
 MIN_DTE_HOLDABLE = 1                            # close if DTE ≤ this
+STALE_CALENDAR_DAYS = 7                          # swing positions idle this long → close
+STALE_CALENDAR_DAYS_LONG = 30                   # long_term positions idle this long → close
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +233,10 @@ def decide_exit(
       4. TP2 reached              → full close (day/long_term) or
                                      trail-activate (swing)
       5. TP1 reached (one-shot)   → partial close
-      6. day-trade time stop      → full close
-      7. option DTE ≤ 1           → full close (Law 5)
+      6. stale swing/long_term   → full close (open > 7/30 days,
+                                     underlying within 0.5×ATR of entry)
+      7. day-trade time stop      → full close
+      8. option DTE ≤ 1           → full close (Law 5)
     """
     direction = signal.get("direction") or "bullish"
     is_option = bool(signal.get("option_symbol"))
@@ -316,21 +323,57 @@ def decide_exit(
         return (ACTION_TP1_PARTIAL,
                 f"tp1: underlying {underlying_price} reached {tp1}", None)
 
-    # 6. Day-trade time stop. risk_mode='aggressive' promotes a swing setup
-    # to day-mode (and 'conservative' demotes a day setup to swing) — matches
-    # the inference process_approved.preflight uses for the PDT counter.
+    # Compute trade mode once — used by stale-position and time-stop checks.
     mode = pa.infer_trade_mode(
         signal.get("strategy"),
         signal.get("timeframe"),
         risk_mode=signal.get("risk_mode"),
     )
+
+    # 6. Stale position — full close if the position has been open too
+    #    long without the underlying moving meaningfully away from entry.
+    #    Applies to swing (7-day threshold) and long_term (30-day threshold).
+    #    Day positions are handled by the time stop (step 7). Only checked
+    #    when no trail stop is active (trail means we're already managing it).
+    if trail_stop is None and mode in ("swing", "long_term") and entry_price is not None and atr_14 is not None:
+        stale_days = STALE_CALENDAR_DAYS_LONG if mode == "long_term" else STALE_CALENDAR_DAYS
+        opened_at = position.get("opened_at")
+        if opened_at is not None:
+            if isinstance(opened_at, datetime):
+                opened_dt = opened_at
+            elif isinstance(opened_at, str):
+                opened_dt = datetime.fromisoformat(opened_at)
+            else:
+                opened_dt = None
+            if opened_dt is not None:
+                # Make both timezone-aware for comparison
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+                cal_days = (now - opened_dt).days
+                if cal_days >= stale_days:
+                    # Underlying has barely moved — within 0.5×ATR of entry
+                    if underlying_price is not None:
+                        drift = underlying_price - entry_price
+                        if drift < 0:
+                            drift = -drift
+                        half_atr = atr_14 * Decimal("0.5")
+                        if drift < half_atr:
+                            return (ACTION_FULL_CLOSE,
+                                    f"stale: position idle for {cal_days} days, "
+                                    f"underlying within 0.5×ATR of entry "
+                                    f"(drift={drift:.4f} < 0.5×ATR={half_atr:.4f})",
+                                    None)
+
+    # 7. Day-trade time stop. risk_mode='aggressive' promotes a swing setup
+    # to day-mode (and 'conservative' demotes a day setup to swing) — matches
+    # the inference process_approved.preflight uses for the PDT counter.
     if mode == "day":
         stop_utc = _today_time_stop_utc(now)
         if now >= stop_utc:
             return (ACTION_FULL_CLOSE,
                     f"time_stop: {now.isoformat()} ≥ 12:45 PDT", None)
 
-    # 7. Option expiry imminent.
+    # 8. Option expiry imminent.
     if is_option:
         expiry = signal.get("option_expiry")
         if isinstance(expiry, date):

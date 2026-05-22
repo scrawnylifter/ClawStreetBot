@@ -172,6 +172,7 @@ def infer_trade_mode(
     expresses explicit intent:
       - aggressive   → day   (intraday scalp; flatten before close)
       - conservative → swing (slower hold, lower risk)
+      - long_term    → long_term (DCA / buy-the-dip accumulation)
       - standard / None → fall through to strategy/timeframe inference
     """
     rm = (risk_mode or "").lower()
@@ -179,9 +180,15 @@ def infer_trade_mode(
         return "day"
     if rm == "conservative":
         return "swing"
+    if rm == "long_term":
+        return "long_term"
 
     s = (strategy or "").lower()
     t = (timeframe or "").lower()
+
+    # Long-term strategies: dip buying / DCA accumulation, or weekly timeframe.
+    if s in ("dip_buy", "accumulation") or t == "1w":
+        return "long_term"
 
     if s == "ema_crossover_15m" or t in ("5m", "15m"):
         return "day"
