@@ -75,10 +75,36 @@ From [[Trade Entry Criteria]]:
 - [ ] IV rank checked — avoid entries when IV rank > 70 (expensive options)
 - [ ] Correlation check — ORB on NVDA + AMD + MU same morning = one trade (see [[Correlation Risk]])
 
+## Exit Plan
+
+### Hard Stop (safety net)
+- ATR × 1.5 below entry (long) / above entry (short) — **always in place**, never removed
+- Price reverses back inside opening range → immediate exit (false breakout)
+
+### Take-Profit (tiered — from [[Risk Management]])
+- **TP1:** ATR × 4.5 (3:1 R:R) → sell 1/3
+- **TP2:** ATR × 7.5 (5:1 R:R) → sell 1/3
+- **Trail remaining 1/3 through shelf levels** (see Shelf Trailing below)
+
+### Shelf Trailing (for the final 1/3)
+After TP2 exits the first 2/3, trail the remaining position through **shelf levels** — prior swing points or consolidation zones where price retests to continue the trend.
+- **Shelf** = a minor swing high/low (3-bar minimum) or consolidation zone on 5m
+- Stay in the trade while price **respects** shelves (touches and bounces)
+- Exit when a 5m candle **closes past** a shelf level (structure broken)
+- If a shelf overlaps with an FVG, it's a **confluent** level — stronger, but still trail through it the same way
+- **Backtest evidence** (22 signals): shelf trail produced 3.84 PF vs 2.45 PF baseline, 0.52R avg vs 0.17R avg, lower drawdown (-7.22R vs -9.72R)
+- **Caveat:** 22 signals is thin (Law 6 — luck vs. skill). Needs more data. Shelf detection currently on 5m proxy — real 1m bars would surface more micro-shelves.
+
+⚠️ FVG-as-entry is **rejected** (backtested -0.04R avg over 3,306 trades). FVG is a **profit target only**, never an entry trigger.
+
+### Time Stop
+- **Flatten all positions before market close** — no overnight gap risk
+
 ## Invalidation
 Exit immediately if:
 - Price reverses back inside the opening range (false breakout)
 - Volume dies immediately after breakout
+- Shelf level disrespected (5m candle closes past it) while holding trailing 1/3
 - Sector or market turns against thesis
 - Trade causing emotional reaction (Law 2 — size down)
 - Time stop hit — flatten before close, no exceptions
@@ -89,6 +115,16 @@ Exit immediately if:
 - **1-hour ORB:** Most conservative, best for high-priced stocks
 
 ## Backtest Results
-- **Win Rate:** TBD
-- **Profit Factor:** TBD
-- **Max Drawdown:** TBD
+
+### Exit Method Comparison (22 ORB + liquidity sweep signals)
+
+| Method | Win Rate | Avg R | Profit Factor | Max DD | Total R |
+|--------|----------|-------|--------------|--------|---------|
+| Baseline (ATR stops only) | 40.9% | 0.17R | 2.45 | -9.72R | 3.63R |
+| **Shelf trail** | 40.9% | **0.52R** | **3.84** | **-7.22R** | **11.35R** |
+| Shelf + FVG partials | 40.9% | 0.13R | 2.43 | -6.95R | 2.80R |
+| Confluent only (shelf+FVG overlap) | 40.9% | 0.39R | 2.88 | -8.64R | 8.52R |
+
+- **Backtest script:** `scripts/backtest_fvg_shelf.py` (branch `feature/fvg-shelf-backtest`)
+- **Caveat:** 22 signals is thin. Needs more data before graduating from Draft. Shelf detection on 5m proxy — 1m bars would sharpen.
+- **FVG-as-entry:** ❌ Rejected (-0.04R avg, 3,306 trades in prior liquidity backtest)

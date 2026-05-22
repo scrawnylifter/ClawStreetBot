@@ -82,7 +82,10 @@ Exits are dictated by the profile, not the strategy:
 
 - **Stop-loss** — hard stop at `entry − ATR × multiplier` (Day: 1.5, Swing: 2.0). For options legs, a 40–50% premium stop runs in parallel as thesis-invalidation.
 - **Take-profit (tiered)** — partial close 1/3 at TP1, another 1/3 at TP2, trail the remaining 1/3. ATR multiples per the table above.
+- **Shelf trailing (for the trailing 1/3)** — after TP2, trail the final 1/3 through shelf levels (prior swing points / consolidation zones on 5m). Exit when a candle closes past a shelf. See [[ORB — Opening Range Breakout]] for backtest evidence (3.84 PF vs 2.45 PF baseline).
 - **Time stop** — Day: flatten before market close (12:45 PDT in `exit_monitor`). Swing: configurable per strategy, default = exit if no progress within max-hold window. Long-Term: none.
+
+⚠️ FVG-as-entry is **rejected** (backtested -0.04R avg over 3,306 trades). FVG is only used as a **profit target or shelf overlay** — never as an entry trigger.
 
 #### 6. Signal-Based Exit
 
