@@ -1,6 +1,6 @@
 ---
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-22
 tags: [strategy, day-trading, mOC]
 ---
 
@@ -11,16 +11,28 @@ Hold periods: minutes to hours. In-and-out same day. No overnight risk.
 Fastest signal-to-execution cycle. The 30 DTE contract rule (Law 5) still applies — but that's insurance, not hold time. You might hold a 45 DTE call for 30 minutes.
 
 ## Risk Profile
-→ All risk parameters at [[Position Sizing#Day Trading]] and [[Loss Limits#Tiered Exit — Day Trading]]
+→ All risk parameters at [[Position Sizing#Day Trading]] and [[Loss Limits#Tiered Exit Strategy — Day Trading (As Implemented)]]
 
 | Parameter | Value |
 |-----------|-------|
 | Risk per trade | 5% |
 | R:R minimum | 3:1 |
-| Stop type | ATR × 1.5 / opening range boundary |
+| Stop | ATR × 1.5 from entry |
+| TP1 | ATR × 4.5 (3:1 R:R), sell **50%** |
+| TP2 | ATR × 7.5 (5:1 R:R), **full close** (no trailing) |
+| Time stop | **12:45 PDT** flatten all positions |
+| Premium stop (options) | 50% of entry price |
 | Max concurrent | 2-3 positions |
-| Take-profit | 20% / 40% / flatten before close |
-| Time stop | Flatten before market close |
+| Delta band (scanner) | 0.50–0.70 |
+| Delta band (post-approval) | standard: 0.50–0.70, aggressive: 0.40–0.80 |
+
+> ⚠️ Day mode TP2 is a **full close** — no trailing stop. Day trades flatten at the time stop (12:45 PDT) anyway.
+
+**Code references:**
+- Stop/TP: `02_scanner/scripts/detect_orb.py` RULES `stop_mult=1.5, tp1_mult=4.5, tp2_mult=7.5`
+- TP1 = 50%: `06_exit/scripts/exit_monitor.py` line 681: `partial_qty = qty_remaining // 2`
+- Time stop: `06_exit/scripts/exit_monitor.py` line 81: `TIME_STOP_LOCAL = time(12, 45)` (America/Los_Angeles)
+- Premium stop: `06_exit/scripts/exit_monitor.py` line 84: `OPTION_PREMIUM_STOP_FRACTION = Decimal("0.50")`
 
 ## Strategies
 

@@ -1,6 +1,6 @@
 ---
 created: 2026-05-15
-updated: 2026-05-15
+updated: 2026-05-22
 tags: [risk, position-sizing, capital, mOC]
 ---
 
@@ -37,14 +37,21 @@ In-and-out same day or next day. Fast pace, more trades per session, tight stops
 |-----------|-------|-----------|
 | Risk per trade | **5%** | More trades per session = lower per-trade risk |
 | Reward:Risk minimum | **3:1** | Same floor — no exceptions |
-| Stop type | ATR × 1.5 (tight) or opening range boundary | Fast exit — no room to breathe |
+| Stop type | ATR × 1.5 (tight) | Fast exit — no room to breathe |
+| TP1 target | ATR × 4.5 (3:1 R:R), sell **50%** | Lock in gains, let remainder run |
+| TP2 target | ATR × 7.5 (5:1 R:R), full close | Day mode flattens at TP2, no trailing |
+| Time stop | 12:45 PDT, flatten everything | No overnight gap risk |
 | Position cap | 20% (Law 3) | Hard ceiling |
 | Max concurrent positions | 2-3 | Can't watch more in real-time |
-| Take-profit | See [[Loss Limits#Tiered Exit — Day Trading]] | |
 | Win rate to break even | **25%** | At 3:1 R:R |
-| Time stop | Flatten before market close | No overnight gap risk |
 
-> **The 30 DTE rule still applies** (Law 5) — contracts must have ≥30 DTE, but that's insurance, not hold time. You might be in the trade for 30 minutes.
+**Code reference:**
+- Stop: `detect_orb.py` RULES `stop_mult=1.5`
+- TP1/TP2: `detect_orb.py` RULES `tp1_mult=4.5, tp2_mult=7.5`
+- TP1 exits 50%: `exit_monitor.py` line 681: `partial_qty = qty_remaining // 2`
+- Time stop: `exit_monitor.py` `TIME_STOP_LOCAL = time(12, 45)` (America/Los_Angeles)
+
+> **The 30 DTE rule still applies** (Law 5) — contracts must have ≥30 DTE at entry, and exit when DTE ≤ 1. That's insurance, not hold time. You might be in the trade for 30 minutes.
 
 ### Swing Trading
 
@@ -54,13 +61,23 @@ Quick in, quick out. Higher risk per trade, tighter stops, defined targets.
 |-----------|-------|-----------|
 | Risk per trade | **10%** | Aggressive — each winner pays for ~3 losers at 3:1 |
 | Reward:Risk minimum | **3:1** | Risk $1 to make $3 |
-| Stop type | ATR × 2.0 (standard) or strategy-specific | Quick exit if thesis invalid |
+| Stop type | ATR × 2.0 (standard) | Quick exit if thesis invalid |
+| TP1 target | ATR × 6.0 (3:1 R:R), sell **50%** | Lock in gains |
+| TP2 target | ATR × 10.0 (5:1 R:R), then **trail** at 2× ATR | Let winners run |
+| Time stop | ⚠️ Not implemented in code | No stale-swing timeout exists |
 | Position cap | 20% (Law 3) | Hard ceiling |
 | Max concurrent positions | 3-5 | Limited focus |
-| Take-profit | See [[Loss Limits#Tiered Exit — Swing Trading]] | |
 | Win rate to break even | **25%** | At 3:1 R:R |
 
+**Code reference:**
+- Stop: `scan_setups.py` ATR_STOP_MULT = 2.0
+- TP1/TP2: `scan_setups.py` ATR_TP1_MULT = 6.0, ATR_TP2_MULT = 10.0
+- TP2 trail: `exit_monitor.py` lines 300-310 — swing mode activates trail, not full close
+- Trail distance: `exit_monitor.py` lines 183-202 — trail = 2× ATR(14)
+
 ### Long-Term Holding
+
+> ⚠️ **Not implemented in code.** `infer_trade_mode()` in `process_approved.py` never returns `long_term` — no scanner produces long-term signals. RISK_PCT defines `long_term: 0.05` per-tranche, but it's unreachable. The parameters below are design targets only.
 
 Months to years. Conviction plays — you believe in the company and are willing to sit through drawdowns.
 
@@ -70,7 +87,7 @@ Months to years. Conviction plays — you believe in the company and are willing
 | Entry method | 3-tranche scale-in on dips | Buy the 5% Dip — average into positions |
 | Max position (full build) | 15-20% (3 tranches × 5-7%) | Conviction justifies concentration |
 | Hard stop | Thesis invalidation | Not a % number — sell when the reason you bought is gone |
-| Take-profit | See [[Loss Limits#Tiered Exit — Long-Term Holding]] | |
+| Take-profit | 50%/100%/ride to 200%+ (aspirational) | ⚠️ No scanner or exit logic for long-term mode |
 | R:R | Not measured the same way | Upside is 100%+, downside tolerance is 30-40% |
 
 **Why long-term is different:**
@@ -165,20 +182,31 @@ Long-term holds don't use a traditional stop — the stop is **thesis invalidati
 | Swing | 10% per trade | 3:1 | 3 losses |
 | Long-term | 30-40% drawdown tolerance | Not rigid — hold until thesis plays out | N/A (conviction model) |
 
-### Method 2: ATR-Based (For Swing Trades)
+### Method 2: ATR-Based (For Day and Swing Trades)
 
-Use Average True Range (ATR) to set stop distance dynamically.
+Use Average True Range (ATR) to set stop distance dynamically. All multipliers are defined in code.
 
 ```
-Swing:  Position Size = (Equity × 10%) / (ATR × 2.0)
+Day (intraday):    Stop = ATR × 1.5,   TP1 = ATR × 4.5,   TP2 = ATR × 7.5
+Swing (daily):     Stop = ATR × 2.0,   TP1 = ATR × 6.0,   TP2 = ATR × 10.0
+Liquidity sweep:   Stop = swept level ± ATR × 0.05,  TP1 = R:R × 3.0,  TP2 = R:R × 5.0
 ```
 
-| Strategy | ATR Multiplier | Stop Distance | R:R Target |
-|----------|---------------|---------------|------------|
-| Swing (tight) | 1.5× | Narrow | 3:1 |
-| Swing (normal) | 2.0× | Standard | 3:1 |
+| Strategy | Stop Mult | TP1 Mult | TP2 Mult | TP1 Partial Size | TP2 Action |
+|----------|-----------|----------|----------|-------------------|------------|
+| Day / Intraday | 1.5× | 4.5× | 7.5× | 50% (qty//2) | Full close (flatten) |
+| Swing (daily) | 2.0× | 6.0× | 10.0× | 50% (qty//2) | Trail-activate at 2× ATR |
+| Liquidity sweep | ± 0.05× (buffer) | R:R 3.0 | R:R 5.0 | 50% | Trail (swing) or close (day) |
 
-> Long-term holds don't use ATR stops — they use 3-tranche dip buying with thesis invalidation as the stop.
+> ⚠️ TP1 exits **50%** of the position (qty//2), NOT 1/3 as older docs stated.
+
+**Code references:**
+- `02_scanner/scripts/scan_setups.py`: ATR_STOP_MULT=2.0, ATR_TP1_MULT=6.0, ATR_TP2_MULT=10.0
+- `02_scanner/scripts/detect_orb.py`: RULES stop_mult=1.5, tp1_mult=4.5, tp2_mult=7.5
+- `02_scanner/scripts/detect_liquidity_sweep.py`: tp1_rr=3.0, tp2_rr=5.0, tp1_size=0.50, buffer ATR×0.05
+- `06_exit/scripts/exit_monitor.py`: qty//2 for TP1 partial; 2× ATR trail; full close on TP2 (day) vs trail-activate (swing)
+
+> Long-term holds don't use ATR stops — they use 3-tranche dip buying with thesis invalidation as the stop. ⚠️ But `infer_trade_mode()` never returns `long_term`, so this is aspirational.
 
 **Example (Swing, $10K account):**
 - ATR(14) on NVDA: $5.20
@@ -243,15 +271,17 @@ Max Contracts = Max Premium / (Premium × 100)
 Signal received
       │
       v
-Identify strategy type
-      ├── Day → 5% risk, 3:1 R:R, ATR × 1.5 stop
-      ├── Swing → 10% risk, 3:1 R:R, ATR × 2.0 stop
-      └── Long-term → 3-tranche scale-in, thesis-based stop, 30-40% drawdown tolerance
+Identify strategy type (infer_trade_mode)
+      ├── Day → 5% risk, ATR × 1.5 stop, ATR × 4.5/7.5 TP1/TP2
+      ├── Swing → 10% risk, ATR × 2.0 stop, ATR × 6.0/10.0 TP1/TP2
+      └── Long-term → ⚠️ NOT PRODUCED by any scanner currently
+      
+      ⚠️ Note: aggressive risk_mode → day, conservative → swing, standard → inferred from strategy/timeframe
       │
       v
 Calculate position size
-      ├── Swing: (Equity × 10%) / Stop Distance
-      └── Long-term: Equity × 5-7% per tranche (3 tranches max)
+      ├── Day/Swing: (Equity × Risk%) / Stop Distance (ATR-based)
+      └── Long-term: Equity × 5-7% per tranche (3 tranches max, aspirational)
       │
       v
 Check against hard limits
@@ -260,17 +290,17 @@ Check against hard limits
       └── Sector concentration > cap? → reduce or reject
       │
       v
-Check R:R ratio (swing only)
+Check R:R ratio (day/swing only)
       ├── Potential profit / risk ≥ 3:1?
       └── If insufficient R:R → SKIP
       │
       v
-Verify Kelly sanity check (swing only)
+Verify Kelly sanity check (day/swing only)
       ├── Kelly < 5%? → SKIP (no edge)
       └── Kelly OK? → PROCEED with fixed-fractional size
       │
       v
-Submit bracket order with stop-loss (swing) or scale-in order (long-term)
+Submit bracket order with stop-loss (day/swing) or scale-in order (long-term, aspirational)
 ```
 
 ---
@@ -279,18 +309,24 @@ Submit bracket order with stop-loss (swing) or scale-in order (long-term)
 
 | Parameter | Day Trading | Swing Trading | Long-Term Holding |
 |-----------|-------------|---------------|-------------------|
-| Risk per trade | 5% | 10% | 30-40% drawdown tolerance |
+| Risk per trade | 5% | 10% | ⚠️ 5% per tranche (aspirational — no scanner produces this mode) |
 | R:R minimum | 3:1 | 3:1 | Not rigid — hold until thesis plays out |
 | Win rate (breakeven) | 25% | 25% | N/A (conviction model) |
-| Stop method | ATR × 1.5 / opening range | ATR × 2.0 | Thesis invalidation only |
-| Entry method | Single entry | Single entry | 3-tranche scale-in on dips |
-| Max position | 20% (Law 3) | 20% (Law 3) | 15-20% (full build across tranches) |
+| Stop method | ATR × 1.5 | ATR × 2.0 | Thesis invalidation only (aspirational) |
+| TP1 | ATR × 4.5, sell 50% | ATR × 6.0, sell 50% | Aspirational |
+| TP2 | ATR × 7.5, full close | ATR × 10.0, trail at 2× ATR | Aspirational |
+| TP1 partial size | **50%** (qty//2) | **50%** (qty//2) | Aspirational (1/3 in design) |
+| Time stop | 12:45 PDT (flatten all) | ⚠️ Not implemented | N/A |
+| Premium stop (options) | 50% of entry, all modes | 50% of entry, all modes | 50% of entry, all modes |
+| Entry method | Single entry | Single entry | 3-tranche scale-in on dips (aspirational) |
+| Max position | 20% (Law 3) | 20% (Law 3) | 15-20% (full build across tranches, aspirational) |
 | Max concurrent | 2-3 positions | 3-5 positions | 2-3 positions |
-| TP structure | See [[Loss Limits]] | See [[Loss Limits]] | See [[Loss Limits]] |
 | Kelly usage | Half-Kelly sanity check | Half-Kelly sanity check | Not applicable |
 | Options max premium | 5% of equity | 10% of equity | 5-7% per tranche |
 | Options max notional | 2× account equity | 2× account equity | 2× account equity |
-| Time stop | Flatten before close | 5-10 trading days (close if thesis not playing out) | N/A |
+| Delta band (scanner) | 0.50–0.70 | 0.50–0.70 | 0.50–0.70 |
+| Delta band (post-approval) | standard: 0.50–0.70, conservative: 0.55–0.65, aggressive: 0.40–0.80 | same | same |
+| Drawdown halt | Daily 30%, Weekly 40%, Monthly 50% (binary) | same | same |
 
 ---
 

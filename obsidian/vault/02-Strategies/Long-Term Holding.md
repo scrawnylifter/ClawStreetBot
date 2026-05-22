@@ -1,27 +1,29 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-22
 tags: [strategy, long-term, mOC]
 ---
 
 # Long-Term Holding Strategies
+
+> ⚠️ **Not implemented in code.** `infer_trade_mode()` in `process_approved.py` never returns `long_term` — no scanner produces long-term signals. RISK_PCT defines `long_term: 0.05` per-tranche, but it's unreachable. Everything below is a design target, not a live system.
 
 Hold periods: months to years. Building positions over time.
 
 These are my conviction plays. I believe in the thesis, so I accumulate on weakness.
 
 ## Risk Profile
-→ All risk parameters at [[Position Sizing#Long-Term Holding]] and [[Loss Limits#Tiered Exit — Long-Term Holding]]
+→ All risk parameters at [[Position Sizing#Long-Term Holding]] and [[Loss Limits#Tiered Exit Strategy — Long-Term Holding (Aspirational Only)]]
 
-| Parameter | Value |
-|-----------|-------|
-| Risk tolerance | 30-40% drawdown per position |
-| R:R | Not measured the same way — hold until thesis plays out |
-| Stop type | Thesis invalidation ("is my reason for buying still true?") |
-| Entry method | 3-tranche scale-in on dips (~5-7% per tranche) |
-| Max position (full build) | 15-20% |
-| Take-profit | 50% / 100% / ride to 200%+ |
-| Time stop | N/A — thesis-based exit, not time-based |
+| Parameter | Value | Status |
+|-----------|-------|--------|
+| Risk tolerance | 30-40% drawdown per position | Aspirational |
+| R:R | Not measured the same way — hold until thesis plays out | Aspirational |
+| Stop type | Thesis invalidation ("is my reason for buying still true?") | Aspirational |
+| Entry method | 3-tranche scale-in on dips (~5-7% per tranche) | Aspirational |
+| Max position (full build) | 15-20% | Aspirational |
+| Take-profit | 50% / 100% / ride to 200%+ | Aspirational |
+| Time stop | N/A — thesis-based exit, not time-based | Aspirational |
 
 ## Core Rule
 

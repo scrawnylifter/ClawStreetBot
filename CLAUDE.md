@@ -170,44 +170,49 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 7. There Will Always Be Another Opportunity — don't force bad trades
 8. Do Your Fucking Research — know what you're trading and why
 
-### Risk Management — Day Trading
-- **Risk per trade:** 5% of capital (more trades/session = lower per-trade risk)
-- **Risk/Reward:** 3:1 (same floor, no exceptions)
-- **Stop-loss:** ATR × 1.5 or opening range boundary
-- **Take-profit:** 20% first target, 40% second target, flatten before close
-- **Time stop:** Flatten before market close — no overnight risk
-- **30 DTE on contracts is insurance, not hold time** — you might hold a 45 DTE call for 30 minutes
-- **PDT:** Max 3 day trades per 5-business-day window (2 normal, 1 emergency only), 4th = ban
+### Mode Classification (`process_approved.py:infer_trade_mode`)
+- `aggressive` risk_mode → **day**
+- `conservative` risk_mode → **swing**
+- `ema_crossover_15m` / `orb` / timeframe `5m`/`15m` → **day**
+- `liquidity_sweep` with 5m/15m → **day**, else **swing**
+- `ema_crossover` / `setup_scanner` / `daily_signal` → **swing**
+- **long_term** is defined in RISK_PCT but not yet produced by any scanner
 
-### Risk Management — Swing Trading
-- **Risk per trade:** 10% of capital
-- **Risk/Reward:** 3:1 (25% win rate breakeven)
-- **Stop-loss:** ATR × 2.0
-- **Take-profit:** 30% first target, 50% second target, trail remaining
-- **Drawdown halts:** 10% daily, 20% weekly, 30% monthly
+### Risk Per Trade (position sizing in `process_approved.py`)
+- **Day:** 5% of equity (`RISK_PCT['day'] = 0.05`)
+- **Swing:** 10% of equity (`RISK_PCT['swing'] = 0.10`)
+- **Long-term:** 5% per tranche, max 15% position (`RISK_PCT['long_term'] = 0.05`) — **not yet wired**
 
-### Risk Management — Long-Term Holding
-- **3-tranche conviction model** (5% risk per tranche, max 15% position)
-- **Drawdown tolerance:** 30-40%
-- **Stop method:** thesis-based ("is my reason for buying still true?"), not price-based
-- **Take-profit:** 50% first target, 100% second target, ride to 200%+
-- **"Buy the dip" ≠ "averaging down"** — deliberate scale-in vs. denial
+### Stop-Loss & Take-Profit — ATR-Based (single source of truth per strategy)
 
-### Options-Specific
-- Alpaca OCC format: `ROOTYYMMDD[CP]STRIKE×1000`
-- Polygon OCC format: `O:ROOTYYMMDD[CP]STRIKE×1000` (zero-padded to 8 digits)
-- No `feed=` param on Alpaca option requests (raises error)
-- Paper tier returns `open_interest=None` sometimes
+All stops and targets are ATR(14) multiples, NOT percentages. The ATR source varies by timeframe:
 
-### Bid-Ask Spread Filter (single source of truth: `shared/constants.py`)
-- **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `shared/constants.py`, imported everywhere else
-- **Definition:** `spread_pct = (ask - bid) / mid` — symmetric around the midpoint
-- **Why 15%:** Wider spreads make the round-trip cost alone large enough to wipe a 3:1 R:R setup. Anything tighter than 15% mid is treated as liquid enough to trade
-- **Three-layer enforcement** (a stale signal must survive all three to execute):
-  1. **Scanner-time** — `shared/fetch_alpaca_snapshot.select_best_option` rejects contracts above the cap before they ever land in `market.signal_alerts`. `02_scanner/scripts/detect_ema_crossover.py` additionally re-queries Alpaca after its DB pick and nullifies `option_symbol` if the live spread is too wide (signal still fires, just stock-only)
-  2. **Persistence** — `market.signal_alerts.spread_pct` (migration 031) stores the value at signal time; `03_alert/scripts/alert_telegram.py` red-flags (🚩) anything above the cap in the Telegram Quote line so the user sees the wide spread before they tap Approve
-  3. **Preflight** — `process_approved.py` (currently in `archive/v1-pipeline/`, target `04_approval/`) re-checks the spread against the same `MAX_SPREAD_PCT` import. Catches stale signals that widened between scan and approval
-- **Mid-price policy:** All option limit prices submitted to Alpaca (`execute_trade.py`) use `(bid + ask) / 2` rounded to a penny — never the ask. Crossing the spread on every entry leaks edge proportional to `spread_pct/2`; the mid is the fair price the market makers are happy to fill near
+| Strategy | Timeframe | Stop | TP1 | TP2 | R:R | ATR Source |
+|---|---|---|---|---|---|---|
+| setup_scanner / daily_signal | daily | ATR×2.0 | ATR×6.0 | ATR×10.0 | 3:1+ | Daily close |
+| ema_crossover (daily) | daily | ATR×2.0 | ATR×6.0 | ATR×10.0 | 3:1+ | Daily close |
+| ema_crossover_15m | 15m | ATR×1.5 | ATR×4.5 | ATR×7.5 | 3:1+ | 15m bars |
+| orb (Opening Range Breakout) | 5m | ATR×1.5 | ATR×4.5 | ATR×7.5 | 3:1+ | 5m bars |
+| liquidity_sweep | 5m | swept level ± ATR×0.05 | R:R ×3.0 | R:R ×5.0 | 3:1+ min | 5m bars |
+
+- **TP1 exits 50% of position** (`qty // 2` in `exit_monitor.py`)
+- **TP2** → day/long_term: full close; swing: trail-activate (2× ATR from entry)
+- **Liquidity sweep** uses a different model: stop = swept level ± tiny ATR buffer, targets = risk-per-share × R:R multiplier
+
+### Option Premium Stop
+- Close option position if mid ≤ **50% of entry price** (OPTION_PREMIUM_STOP_FRACTION = 0.50)
+- Enforced in `exit_monitor.py` check #2 and `process_approved.py` sizing
+- Applies to all strategies and modes — no per-strategy differentiation
+
+### Time Stops
+- **Day trades:** Flatten by 12:45 PDT (15 min before close) in `exit_monitor.py`
+- **Swing/long-term:** No time stop (held for days/weeks)
+- **No stale-swing timeout implemented** — positions can trail indefinitely after TP2
+
+### DTE Rules
+- **Entry:** Minimum 30 DTE — enforced in all scanners, preflight, and option selection (`MIN_DTE = 30`)
+- **Exit:** Close if DTE ≤ 1 (`MIN_DTE_HOLDABLE = 1` in `exit_monitor.py`) — lets you hold until near-expiry
+- No intermediate "exit before DTE drops below entry-plan" check
 
 ### PDT Rule (Account < $25K) — ✅ ENFORCED IN `process_approved.py`
 - **3 day trades max in a rolling 5-business-day window**
@@ -219,20 +224,43 @@ NVDA, AMD, MU, WDC, STX, APLD, IREN, NBIS, CIFR, RDDT, SERV, RKLB, ASTS, OKLO, N
 - PDT lock resets when oldest trade in window ages past 5 business days
 
 ### Drawdown Halts — ✅ ENFORCED IN `process_approved.py`
-- **10% daily loss** → halt all new trades
-- **20% weekly loss** → halt all new trades
-- **30% monthly loss** → halt all new trades
+- **30% daily loss** → halt all new trades
+- **40% weekly loss** → halt all new trades
+- **50% monthly loss** → halt all new trades
+- Widened from 10/20/30% to fit options-trading volatility (50% per-contract premium stops) and paper-account experimentation
+- Baseline = latest `market.equity_snapshots` value (NOT the origin $100K)
+- Binary enforcement only (no graded yellow/red tiers) — see [[Risk Management Framework]] for the full 3-tier design (not yet implemented)
 
-### Greeks Strategy (see `02-Strategies/Greeks Strategy.md`)
-- **IV Rank < 25%** → option buying zone (cheap premium)
-- **IV Rank 25-50%** → directional plays, standard strikes
-- **IV Rank 50-75%** → cautious, consider spreads
-- **IV Rank > 75%** → NO naked buying (premium too expensive)
-- **Delta range:** 0.50–0.70 (swing), 0.70–0.80 (day), 0.60–0.80 (long-term)
-- **Reject |delta| < 0.50** (lottery ticket) or **> 0.90** (just buy shares)
-- **Theta budget:** day < 5%/premium, swing < 3%, long-term < 1%
-- **Gamma risk:** high near expiry (Law 5 backs this up), moderate for swing, low for LT
-- **Vanna:** monitor around IV regime changes and earnings — delta shifts when IV shifts
+### Delta Bands (option strike selection)
+- **Scanner-time:** `select_best_option()` uses standard band 0.50–0.70 for ALL strategies
+- **Post-approval:** `reselect_option_for_risk_mode()` adjusts:
+  - `standard`: 0.50–0.70
+  - `conservative`: 0.55–0.65
+  - `aggressive`: 0.40–0.80
+- **Preflight:** Accepts 0.50–0.80 (single band for all modes)
+- **NOT YET ENFORCED:** Day-trade 0.70–0.80 spec, long-term 0.60–0.80 spec (see [[Greeks Strategy]])
+- **Hard reject:** |delta| < 0.50 (lottery ticket) or > 0.90 (just buy shares)
+
+### Bid-Ask Spread Filter (single source of truth: `shared/constants.py`)
+- **Cap:** `MAX_SPREAD_PCT = 0.15` — defined once in `shared/constants.py`, imported everywhere else
+- **Definition:** `spread_pct = (ask - bid) / mid` — symmetric around the midpoint
+- **Why 15%:** Wider spreads make the round-trip cost alone large enough to wipe a 3:1 R:R setup. Anything tighter than 15% mid is treated as liquid enough to trade
+- **Three-layer enforcement** (a stale signal must survive all three to execute):
+  1. **Scanner-time** — `shared/fetch_alpaca_snapshot.select_best_option` rejects contracts above the cap before they ever land in `market.signal_alerts`. `02_scanner/scripts/detect_ema_crossover.py` additionally re-queries Alpaca after its DB pick and nullifies `option_symbol` if the live spread is too wide (signal still fires, just stock-only)
+  2. **Persistence** — `market.signal_alerts.spread_pct` (migration 031) stores the value at signal time; `03_alert/scripts/alert_telegram.py` red-flags (🚩) anything above the cap in the Telegram Quote line so the user sees the wide spread before they tap Approve
+  3. **Preflight** — `04_approval/scripts/process_approved.py` re-checks the spread against the same `MAX_SPREAD_PCT` import. Catches stale signals that widened between scan and approval
+- **NOT re-verified at execution time** — execution uses mid-price limit, so stale-wide spreads simply won't fill (natural protection)
+- **Mid-price policy:** All option limit prices submitted to Alpaca (`execute_trade.py`) use `(bid + ask) / 2` rounded to a penny — never the ask. Crossing the spread on every entry leaks edge proportional to `spread_pct/2`; the mid is the fair price the market makers are happy to fill near
+
+### Exit Decision Tree (`06_exit/scripts/exit_monitor.py`)
+First match wins:
+1. **Stop breach** — underlying hits stop_price → full close
+2. **Premium stop** — option mid ≤ 50% of entry → full close (options only)
+3. **Trail stop** — if trail_stop_price set (after TP2 in swing) → close on breach / ratchet tighter
+4. **TP2** — day/long_term: full close; swing: trail-activate (2× ATR from entry)
+5. **TP1** — 50% partial close (`qty // 2`), one-shot (sticky `tp1_hit_at`)
+6. **Time stop** — day-trade ≥ 12:45 PDT → full close
+7. **DTE ≤ 1** — full close (Law 5)
 
 ## 🔐 MANDATORY: Secrets & Credentials
 

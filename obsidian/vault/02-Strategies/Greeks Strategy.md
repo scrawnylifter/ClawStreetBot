@@ -1,6 +1,6 @@
 ---
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-22
 tags: [strategy, options, greeks, delta, theta, IV, mOC]
 ---
 
@@ -58,13 +58,15 @@ Delta tells us how much the option moves per $1 move in the stock. It's also a r
 
 ### Delta Targets by Strategy
 
-| Strategy | Target Delta | Rationale |
-|----------|-------------|-----------|
-| **Day Trading (Calls)** | 0.70–0.80 | Need stock-like movement for scalp; less extrinsic value |
-| **Day Trading (Puts)** | -0.70 to -0.80 | Same — deep ITM for immediate directional exposure |
-| **Swing Trading (Calls)** | 0.50–0.70 | Balance between leverage and cost; tracks stock decently |
-| **Swing Trading (Puts)** | -0.50 to -0.70 | Same — directional conviction with manageable premium |
-| **Long-Term (Calls)** | 0.60–0.80 | Deep ITM for leverage; mostly intrinsic value, less theta risk |
+| Strategy | Target Delta | As Implemented | Rationale |
+|----------|-------------|----------------|-----------|
+| **All strategies (scanner)** | 0.50–0.70 | `scan_setups.py` DELTA_MIN=0.50, DELTA_MAX=0.70 | Single band for all scanner strategies |
+| **Standard (post-approval)** | 0.50–0.70 | `fetch_alpaca_snapshot.py` DELTA_BANDS | Default |
+| **Conservative (post-approval)** | 0.55–0.65 | `fetch_alpaca_snapshot.py` DELTA_BANDS | Tighter, cheaper options |
+| **Aggressive (post-approval)** | 0.40–0.80 | `fetch_alpaca_snapshot.py` DELTA_BANDS | Wider, more leverage |
+| **Day Trading (was doc'd)** | 0.70–0.80 | ⚠️ NOT enforced — no separate band | Design goal; scanner uses 0.50-0.70 |
+
+> ⚠️ The doc previously stated day-trading uses 0.70-0.80 delta. In code, the scanner uses 0.50-0.70 for ALL strategies. Post-approval, the `aggressive` risk_mode widens to 0.40-0.80, which covers day-trading leverage — but there's no separate day-trade delta band enforced.
 
 ### Delta Rules
 
@@ -106,6 +108,7 @@ Theta Budget = Daily Theta / Option Premium
 
 - **Reject any trade where daily theta > 5% of premium** — you're paying too much for time
 - **Law 5 (30 DTE minimum) exists partly for theta** — options < 30 DTE suffer accelerating time decay
+- **DTE exit threshold** — code enforces exit at DTE ≤ 1 (`exit_monitor.py` MIN_DTE_HOLDABLE = 1)
 - **Theta accelerates in the last 2 weeks** — even at 30 DTE, if you're holding and theta exceeds your budget, roll or close
 
 ---

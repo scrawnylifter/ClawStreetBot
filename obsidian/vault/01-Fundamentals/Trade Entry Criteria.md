@@ -1,6 +1,6 @@
 ---
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-22
 tags: [fundamentals, trade-entry, signals, mOC]
 ---
 
@@ -134,7 +134,7 @@ These are the *timing* signals — they don't tell us WHAT to trade, they tell u
 │  Alpaca API ──→ Paper Orders (Phase 2) ──→ Live Orders (Phase 3) │
 │                                                                  │
 │  Order Types: market, limit, stop, bracket                       │
-│  Exit Rules: stop-loss (mandatory), take-profit at 30%/50%       │
+│  Exit Rules: stop-loss (mandatory), take-profit (ATR-based)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
