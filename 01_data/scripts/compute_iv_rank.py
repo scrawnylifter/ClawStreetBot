@@ -23,7 +23,7 @@ from pathlib import Path
 
 import psycopg2
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_env(filename: str) -> None:

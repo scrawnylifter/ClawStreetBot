@@ -91,7 +91,7 @@ def get_connection():
     env_path = Path("/app/.env.db")
     if not env_path.exists():
         # Local-dev fallback: project root .env.db
-        env_path = Path(__file__).resolve().parent.parent / ".env.db"
+        env_path = Path(__file__).resolve().parents[2] / ".env.db"
     conn_params: dict[str, str] = {}
     with open(env_path) as f:
         for line in f:

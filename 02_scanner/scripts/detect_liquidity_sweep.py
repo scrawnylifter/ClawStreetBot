@@ -38,7 +38,7 @@ import psycopg2
 log = logging.getLogger("liquidity_sweep")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # ── Env loading ──
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # n8n REST API helper — sources credentials from .env.n8n
-# Usage: ./scripts/n8n_api.sh [list|activate|deactivate|delete|import] [workflow_id_or_file]
+# Usage: ./admin/scripts/n8n_api.sh [list|activate|deactivate|delete|import] [workflow_id_or_file]
 #
 # Examples:
-#   ./scripts/n8n_api.sh list
-#   ./scripts/n8n_api.sh activate CJNUeFiG4Sp1Hsyj
-#   ./scripts/n8n_api.sh deactivate CJNUeFiG4Sp1Hsyj
-#   ./scripts/n8n_api.sh delete CJNUeFiG4Sp1Hsyj
+#   ./admin/scripts/n8n_api.sh list
+#   ./admin/scripts/n8n_api.sh activate CJNUeFiG4Sp1Hsyj
+#   ./admin/scripts/n8n_api.sh deactivate CJNUeFiG4Sp1Hsyj
+#   ./admin/scripts/n8n_api.sh delete CJNUeFiG4Sp1Hsyj
 #   ./admin/scripts/n8n_api.sh import 01_data/n8n/derived_daily.json
 set -euo pipefail
 

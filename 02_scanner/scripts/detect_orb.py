@@ -42,7 +42,7 @@ import psycopg2
 log = logging.getLogger("orb")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ET = ZoneInfo("America/New_York")
 
 # Shared imports (constants + option lookup) — load shared/ regardless of CWD.

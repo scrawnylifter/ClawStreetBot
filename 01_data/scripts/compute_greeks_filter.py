@@ -39,7 +39,7 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import execute_values
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_env(filename: str) -> None:
