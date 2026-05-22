@@ -292,7 +292,7 @@ The full ingestion pipeline is scheduled by **n8n** (UI at <http://localhost:567
 | `trend_daily` | Mon–Fri 11:00 | Multi-timeframe trend detection + status |
 | `regime_weekly` | Sat 8:00 | Classify regime + optimize weights + compare |
 
-n8n runs scripts via `docker exec clawstreet-worker python /app/scripts/<name>.py`, so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
+n8n runs scripts via `docker exec clawstreet-worker python /app/<layer>/scripts/<name>.py` (e.g. `/app/01_data/scripts/ingest_alpaca_ohlcv.py`, `/app/02_scanner/scripts/scan_setups.py`, `/app/03_alert/scripts/alert_telegram.py`), so edits to scripts/config land immediately (the worker image only rebuilds when `requirements.txt` changes).
 
 **★ Primary alert mechanism:** The `setup_scanner` workflow (`scan_setups.py`) evaluates ALL watchlist symbols against 8 buying gates (trend, ADX, RSI, IV rank, IV-RV spread, premium cost, DTE, R:R) every 15 minutes during market hours. It only sends a Telegram alert when ALL 8 gates pass — silence means no signal. EMA crossover detectors (daily + 15m) remain active as supplementary alerts.
 
