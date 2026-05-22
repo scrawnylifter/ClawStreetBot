@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import statistics
 import sys
 from dataclasses import dataclass
@@ -41,17 +40,9 @@ _project_root = Path(__file__).resolve().parents[2]
 if str(_project_root / "shared") not in sys.path:
     sys.path.insert(0, str(_project_root / "shared"))
 
-from constants import load_env  # noqa: E402
+from constants import DB_CONFIG, load_env  # noqa: E402
 
 load_env(".env.db")
-
-DB_CONFIG = {
-    "host": os.environ.get("POSTGRES_HOST", "localhost"),
-    "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-    "dbname": os.environ["POSTGRES_DB"],
-    "user": os.environ["POSTGRES_USER"],
-    "password": os.environ["POSTGRES_PASSWORD"],
-}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -60,10 +51,25 @@ DB_CONFIG = {
 VIX_CALM = 18.0
 VIX_PANIC = 30.0
 
-# Sector proxies used for breadth when no full SPY500 feed is available.
-# Fraction of these above their own 50d SMA → breadth_proxy (0–1).
-# Sourced from constants watchlist so we don't hardcode.
-BREADTH_PROXY_SYMBOLS = ("NVDA", "AMD", "MU")
+# Fallback breadth basket if market.assets is empty (e.g. fresh DB before
+# setup_watchlist has run). Real basket is fetched from market.assets at
+# runtime — see fetch_breadth_symbols().
+BREADTH_PROXY_FALLBACK = ("NVDA", "AMD", "MU")
+
+
+def fetch_breadth_symbols(conn) -> tuple[str, ...]:
+    """Return active watchlist symbols (excluding SPY) for the breadth basket.
+
+    Falls back to BREADTH_PROXY_FALLBACK if the query returns nothing.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT symbol FROM market.assets "
+            "WHERE active = TRUE AND symbol <> 'SPY' "
+            "ORDER BY symbol"
+        )
+        symbols = tuple(r[0] for r in cur.fetchall())
+    return symbols or BREADTH_PROXY_FALLBACK
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -179,7 +185,8 @@ def spy_realized_vol_proxy(spy: list[SpyRow]) -> dict[date, float]:
 
 def fetch_breadth_series(conn, start: date, end: date) -> dict[date, float]:
     """Fraction of proxy symbols whose close > their own 50d SMA."""
-    if not BREADTH_PROXY_SYMBOLS:
+    symbols = fetch_breadth_symbols(conn)
+    if not symbols:
         return {}
     window_start = start - timedelta(days=120)
     with conn.cursor() as cur:
@@ -213,7 +220,7 @@ def fetch_breadth_series(conn, start: date, end: date) -> dict[date, float]:
             GROUP BY d
             ORDER BY d
             """,
-            (list(BREADTH_PROXY_SYMBOLS), window_start, end, start, end),
+            (list(symbols), window_start, end, start, end),
         )
         return {d: float(p) for d, p in cur.fetchall() if p is not None}
 
