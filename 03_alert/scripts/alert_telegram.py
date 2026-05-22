@@ -698,6 +698,70 @@ def format_orb_alert(signal: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Exit notification helpers
+# ---------------------------------------------------------------------------
+
+def format_exit_notification(
+    symbol: str,
+    strategy: str,
+    direction: str,
+    reason: str,
+    entry_price,
+    exit_price,
+    qty,
+    realized_pnl,
+    is_option: bool,
+    is_partial: bool,
+    residual_qty=None,
+) -> str:
+    """Format an exit-fill notification for Telegram delivery.
+
+    Parameters mirror the call-site in reconcile_exits._notify_exit so the
+    two modules stay in sync without ad-hoc tuple packing."""
+    dir_emoji = "🟢" if direction == "bullish" else "🔴"
+    side = "LONG" if direction == "bullish" else "SHORT"
+    instrument = "option" if is_option else "stock"
+
+    pnl = float(realized_pnl)
+    pnl_emoji = "✅" if pnl >= 0 else "❌"
+    pnl_sign = "+" if pnl >= 0 else ""
+
+    entry_f = float(entry_price)
+    exit_f = float(exit_price)
+    qty_f = float(qty)
+
+    partial_tag = " (partial)" if is_partial else ""
+    lines = [
+        f"{dir_emoji} <b>EXIT FILL{partial_tag}: {symbol}</b>",
+        f"{'─' * 30}",
+        f"Strategy: {strategy} | Side: {side} | Instrument: {instrument}",
+        f"Reason: {reason}",
+        f"Entry: ${entry_f:.2f} → Exit: ${exit_f:.2f} | Qty: {qty_f:.4f}",
+        f"P&L: {pnl_emoji} ${pnl_sign}{pnl:.2f}",
+    ]
+
+    if is_partial and residual_qty is not None:
+        lines.append(f"Residual qty: {float(residual_qty):.4f}")
+
+    return "\n".join(lines)
+
+
+def send_exit_notification(text: str) -> dict | None:
+    """Send an exit-fill notification via Telegram.
+
+    Loads config from .env.telegram and delegates to send_telegram_message.
+    Swallows all I/O failures (returns None) so callers never need to
+    handle Telegram outages."""
+    config = get_telegram_config()
+    token = config.get("TELEGRAM_BOT_TOKEN") or ""
+    chat_id = config.get("TELEGRAM_CHAT_ID") or ""
+    if not token or not chat_id:
+        log.error("send_exit_notification: missing Telegram config, skip")
+        return None
+    return send_telegram_message(token, chat_id, text, allowed_chat_id=chat_id)
+
+
+# ---------------------------------------------------------------------------
 # Strategy dispatch table
 # ---------------------------------------------------------------------------
 
