@@ -1,5 +1,6 @@
 {
   "name": "ema_crossover_15m",
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -7,10 +8,11 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "*/15 6-12 * * 1-5"
+              "expression": "*/15 6-13 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "schedule-trigger-15m",
       "name": "Every 15 min (market hours PDT)",
@@ -50,5 +52,84 @@
   },
   "settings": {
     "timezone": "America/Los_Angeles"
-  }
+  },
+  "staticData": {
+    "node:Every 15 min (market hours PDT)": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "bccd6d38-3038-42a6-a799-529d58b8d396",
+  "activeVersionId": "bccd6d38-3038-42a6-a799-529d58b8d396",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-17T02:42:22.650Z",
+      "createdAt": "2026-05-17T02:42:22.650Z",
+      "role": "workflow:owner",
+      "workflowId": "kKCO7KlqqavHZMMe",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:43.512Z",
+    "createdAt": "2026-05-22T23:32:43.512Z",
+    "versionId": "bccd6d38-3038-42a6-a799-529d58b8d396",
+    "workflowId": "kKCO7KlqqavHZMMe",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "*/15 6-13 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "schedule-trigger-15m",
+        "name": "Every 15 min (market hours PDT)",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          200,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/detect_ema_crossover_15m.py"
+        },
+        "id": "detect-15m",
+        "name": "Detect 15m Crossovers",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          450,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every 15 min (market hours PDT)": {
+        "main": [
+          [
+            {
+              "node": "Detect 15m Crossovers",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

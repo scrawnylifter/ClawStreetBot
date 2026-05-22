@@ -1,5 +1,6 @@
 {
   "name": "setup_scanner",
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -7,16 +8,20 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "*/15 6-12 * * 1-5"
+              "expression": "*/15 6-13 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "trigger",
       "name": "Every 15min market hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -26,7 +31,10 @@
       "name": "scan setups",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [
+        520,
+        300
+      ]
     }
   ],
   "connections": {
@@ -48,5 +56,83 @@
     "executionTimeout": 300,
     "timezone": "America/Los_Angeles"
   },
-  "active": true
+  "staticData": {
+    "node:Every 15min market hours": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "0d484cdd-3fd5-4f28-aa98-d785f55588ab",
+  "activeVersionId": "0d484cdd-3fd5-4f28-aa98-d785f55588ab",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-17T04:08:16.369Z",
+      "createdAt": "2026-05-17T04:08:16.369Z",
+      "role": "workflow:owner",
+      "workflowId": "EAyxUdwVpZ6fa3u6",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:42.869Z",
+    "createdAt": "2026-05-22T23:32:42.869Z",
+    "versionId": "0d484cdd-3fd5-4f28-aa98-d785f55588ab",
+    "workflowId": "EAyxUdwVpZ6fa3u6",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "*/15 6-13 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "trigger",
+        "name": "Every 15min market hours",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          240,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/scan_setups.py"
+        },
+        "id": "run",
+        "name": "scan setups",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          520,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every 15min market hours": {
+        "main": [
+          [
+            {
+              "node": "scan setups",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

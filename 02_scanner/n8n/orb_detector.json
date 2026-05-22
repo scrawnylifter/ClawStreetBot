@@ -1,5 +1,6 @@
 {
   "name": "orb_detector",
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -10,13 +11,17 @@
               "expression": "*/5 6-13 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "trigger",
       "name": "Every 5min market hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
@@ -26,7 +31,10 @@
       "name": "detect orb breakout",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [520, 300]
+      "position": [
+        520,
+        300
+      ]
     }
   ],
   "connections": {
@@ -48,5 +56,83 @@
     "executionTimeout": 300,
     "timezone": "America/Los_Angeles"
   },
-  "active": true
+  "staticData": {
+    "node:Every 5min market hours": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "722fab34-6372-436b-89c0-2f79d104fb93",
+  "activeVersionId": "722fab34-6372-436b-89c0-2f79d104fb93",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-18T04:52:24.014Z",
+      "createdAt": "2026-05-18T04:52:24.014Z",
+      "role": "workflow:owner",
+      "workflowId": "bZBiaXXCTyp7CV8x",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:43.212Z",
+    "createdAt": "2026-05-22T23:32:43.212Z",
+    "versionId": "722fab34-6372-436b-89c0-2f79d104fb93",
+    "workflowId": "bZBiaXXCTyp7CV8x",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "*/5 6-13 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "trigger",
+        "name": "Every 5min market hours",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          240,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/02_scanner/scripts/detect_orb.py"
+        },
+        "id": "run",
+        "name": "detect orb breakout",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          520,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every 5min market hours": {
+        "main": [
+          [
+            {
+              "node": "detect orb breakout",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

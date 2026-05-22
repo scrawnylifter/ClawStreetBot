@@ -1,5 +1,6 @@
 {
   "name": "alpaca_options_daily",
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -7,10 +8,11 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "55 14 * * 1-5"
+              "expression": "55 13 * * 1-5"
             }
           ]
-        }
+        },
+        "timezone": "America/Los_Angeles"
       },
       "id": "trigger",
       "name": "Weekdays 14:55 PDT",
@@ -54,5 +56,83 @@
     "executionTimeout": 1800,
     "timezone": "America/Los_Angeles"
   },
-  "active": true
+  "staticData": {
+    "node:Weekdays 14:55 PDT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "a7ecf31f-ddc8-4780-b98c-04ea19517bfb",
+  "activeVersionId": "a7ecf31f-ddc8-4780-b98c-04ea19517bfb",
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-17T03:39:08.782Z",
+      "createdAt": "2026-05-17T03:39:08.782Z",
+      "role": "workflow:owner",
+      "workflowId": "NeLxXUJj8l7iss6d",
+      "projectId": "iSTlMsmgH1qOgtzb"
+    }
+  ],
+  "activeVersion": {
+    "updatedAt": "2026-05-22T23:32:42.959Z",
+    "createdAt": "2026-05-22T23:32:42.959Z",
+    "versionId": "a7ecf31f-ddc8-4780-b98c-04ea19517bfb",
+    "workflowId": "NeLxXUJj8l7iss6d",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "55 13 * * 1-5"
+              }
+            ]
+          },
+          "timezone": "America/Los_Angeles"
+        },
+        "id": "trigger",
+        "name": "Weekdays 14:55 PDT",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          240,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "command": "docker exec clawstreet-worker python /app/01_data/scripts/ingest_alpaca_options.py --all"
+        },
+        "id": "run",
+        "name": "ingest options + greeks (Alpaca)",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          520,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Weekdays 14:55 PDT": {
+        "main": [
+          [
+            {
+              "node": "ingest options + greeks (Alpaca)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Joshua Romero",
+    "name": null,
+    "description": null,
+    "autosaved": false
+  },
+  "tags": []
 }

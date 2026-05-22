@@ -1,5 +1,9 @@
 {
-  "name": "backfill_pending",
+  "updatedAt": "2026-05-22T05:43:14.004Z",
+  "createdAt": "2026-05-17T04:08:16.356Z",
+  "id": "EAyxUdwVpZ6fa3u6",
+  "name": "setup_scanner",
+  "active": true,
   "isArchived": false,
   "nodes": [
     {
@@ -7,15 +11,14 @@
         "rule": {
           "interval": [
             {
-              "field": "minutes",
-              "minutesInterval": 5
+              "field": "cronExpression",
+              "expression": "*/15 6-12 * * 1-5"
             }
           ]
-        },
-        "timezone": "America/Los_Angeles"
+        }
       },
       "id": "trigger",
-      "name": "Every 5 min",
+      "name": "Every 15min market hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -25,10 +28,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+        "command": "docker exec clawstreet-worker python /app/scripts/scan_setups.py"
       },
       "id": "run",
-      "name": "backfill pending symbols",
+      "name": "scan setups",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -38,11 +41,11 @@
     }
   ],
   "connections": {
-    "Every 5 min": {
+    "Every 15min market hours": {
       "main": [
         [
           {
-            "node": "backfill pending symbols",
+            "node": "scan setups",
             "type": "main",
             "index": 0
           }
@@ -52,50 +55,48 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "saveExecutionProgress": false,
     "saveManualExecutions": true,
-    "executionTimeout": 1800,
+    "executionTimeout": 300,
     "timezone": "America/Los_Angeles"
   },
   "staticData": {
-    "node:Every 5 min": {
+    "node:Every 15min market hours": {
       "recurrenceRules": []
     }
   },
   "meta": null,
   "pinData": null,
-  "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-  "activeVersionId": "12a31940-3993-4e46-a4f6-87b57e371945",
+  "versionId": "0eb0f8b7-e370-4eb9-831d-f39cd665a0e4",
+  "activeVersionId": "0eb0f8b7-e370-4eb9-831d-f39cd665a0e4",
   "triggerCount": 1,
   "shared": [
     {
-      "updatedAt": "2026-05-16T17:43:47.332Z",
-      "createdAt": "2026-05-16T17:43:47.332Z",
+      "updatedAt": "2026-05-17T04:08:16.369Z",
+      "createdAt": "2026-05-17T04:08:16.369Z",
       "role": "workflow:owner",
-      "workflowId": "wbNusm1Nfjah3Dgs",
+      "workflowId": "EAyxUdwVpZ6fa3u6",
       "projectId": "iSTlMsmgH1qOgtzb"
     }
   ],
   "activeVersion": {
-    "updatedAt": "2026-05-22T23:32:43.766Z",
-    "createdAt": "2026-05-22T23:32:43.766Z",
-    "versionId": "12a31940-3993-4e46-a4f6-87b57e371945",
-    "workflowId": "wbNusm1Nfjah3Dgs",
+    "updatedAt": "2026-05-17T04:08:16.372Z",
+    "createdAt": "2026-05-17T04:08:16.372Z",
+    "versionId": "0eb0f8b7-e370-4eb9-831d-f39cd665a0e4",
+    "workflowId": "EAyxUdwVpZ6fa3u6",
     "nodes": [
       {
         "parameters": {
           "rule": {
             "interval": [
               {
-                "field": "minutes",
-                "minutesInterval": 5
+                "field": "cronExpression",
+                "expression": "*/15 6-12 * * 1-5"
               }
             ]
-          },
-          "timezone": "America/Los_Angeles"
+          }
         },
         "id": "trigger",
-        "name": "Every 5 min",
+        "name": "Every 15min market hours",
         "type": "n8n-nodes-base.scheduleTrigger",
         "typeVersion": 1.2,
         "position": [
@@ -105,10 +106,10 @@
       },
       {
         "parameters": {
-          "command": "docker exec clawstreet-worker python /app/admin/scripts/backfill_runner.py"
+          "command": "docker exec clawstreet-worker python /app/scripts/scan_setups.py"
         },
         "id": "run",
-        "name": "backfill pending symbols",
+        "name": "scan setups",
         "type": "n8n-nodes-base.executeCommand",
         "typeVersion": 1,
         "position": [
@@ -118,11 +119,11 @@
       }
     ],
     "connections": {
-      "Every 5 min": {
+      "Every 15min market hours": {
         "main": [
           [
             {
-              "node": "backfill pending symbols",
+              "node": "scan setups",
               "type": "main",
               "index": 0
             }
