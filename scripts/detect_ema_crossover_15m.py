@@ -17,7 +17,7 @@ Trade plan (Laws of Trading — swing):
   - Risk: 10% of portfolio
   - Min DTE: 30 days for options
 
-Schedule: Runs every 15 minutes during market hours (6:30 AM - 1:00 PM PDT)
+Schedule: Runs every 15 minutes during market hours (SESSION_OPEN–SESSION_CLOSE ET)
 """
 import os
 import sys
@@ -35,6 +35,7 @@ import numpy as np
 # Allow `import fetch_alpaca_snapshot` regardless of CWD (n8n runs from /).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_alpaca_snapshot import select_best_option  # noqa: E402
+from constants import is_market_day, is_market_hours  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -471,13 +472,13 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Detect but don't save")
     args = parser.parse_args()
 
-    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    # Market-hours gate: only fire during regular session (weekday + market hours via constants).
     now_et = datetime.now(ET)
-    if now_et.weekday() >= 5:
-        log.info("Weekend (%s ET) — market closed, exiting silent.",
+    if not is_market_day(now_et.date()):
+        log.info("Non-market day (%s ET) — market closed, exiting silent.",
                  now_et.strftime("%a %H:%M"))
         sys.exit(0)
-    if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+    if not is_market_hours(now_et.time()):
         log.info("Outside market hours (%s ET) — exiting silent.",
                  now_et.strftime("%H:%M"))
         sys.exit(0)

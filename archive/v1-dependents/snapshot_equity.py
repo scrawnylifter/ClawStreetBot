@@ -6,7 +6,7 @@ table for process_approved.calc_drawdown's drawdown halts. Idempotent for
 a given date: on conflict the row is updated so re-runs refresh today's
 value with the latest equity.
 
-Run once per trading day after market close (post-15:00 PDT). Without these
+Run once per trading day after market close (after INGEST_DAILY_AFTER_CLOSE ET). Without these
 snapshots, drawdown halts can't fire — preflight will warn instead.
 
 Usage:
@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from constants import INGEST_DAILY_AFTER_CLOSE  # noqa: E402
 import process_approved as pa  # noqa: E402
 
 logging.basicConfig(

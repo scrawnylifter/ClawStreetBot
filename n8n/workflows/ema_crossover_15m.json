@@ -33,19 +33,6 @@
         450,
         300
       ]
-    },
-    {
-      "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/alert_telegram.py --strategy ema_crossover_15m"
-      },
-      "id": "alert-15m",
-      "name": "Send 15m Alerts",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [
-        700,
-        300
-      ]
     }
   ],
   "connections": {
@@ -59,21 +46,9 @@
           }
         ]
       ]
-    },
-    "Detect 15m Crossovers": {
-      "main": [
-        [
-          {
-            "node": "Send 15m Alerts",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
     "timezone": "America/Los_Angeles"
-  },
-  "active": true
+  }
 }

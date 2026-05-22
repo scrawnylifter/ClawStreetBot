@@ -1,5 +1,5 @@
 {
-  "name": "ema_crossover_detector",
+  "name": "fundamentals_weekly",
   "nodes": [
     {
       "parameters": {
@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 6 * * 1-5"
+              "expression": "0 9 * * 6"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Weekdays 6:00 PDT (pre-market)",
+      "name": "Saturday 09:00 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -23,10 +23,10 @@
     },
     {
       "parameters": {
-        "command": "docker exec clawstreet-worker python /app/scripts/detect_ema_crossover.py --lookback 1"
+        "command": "docker exec clawstreet-worker python /app/scripts/ingest_yfinance_fundamentals.py --all"
       },
-      "id": "detect",
-      "name": "detect EMA crossovers",
+      "id": "run",
+      "name": "ingest fundamentals (yfinance)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
@@ -36,11 +36,11 @@
     }
   ],
   "connections": {
-    "Weekdays 6:00 PDT (pre-market)": {
+    "Saturday 09:00 PDT": {
       "main": [
         [
           {
-            "node": "detect EMA crossovers",
+            "node": "ingest fundamentals (yfinance)",
             "type": "main",
             "index": 0
           }
@@ -50,6 +50,9 @@
   },
   "settings": {
     "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800,
     "timezone": "America/Los_Angeles"
-  }
+  },
+  "active": true
 }

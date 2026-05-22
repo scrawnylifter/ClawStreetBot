@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "5 7-13 * * 1-5"
+              "expression": "5 6-13 * * 1-5"
             }
           ]
         }
       },
       "id": "trigger",
-      "name": "Hourly :05 6:30-13:00 PDT",
+      "name": "Hourly :05 6:00-13:30 PDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [240, 300]
@@ -40,7 +40,7 @@
     }
   ],
   "connections": {
-    "Hourly :05 6:30-13:00 PDT": {
+    "Hourly :05 6:00-13:30 PDT": {
       "main": [
         [
           {

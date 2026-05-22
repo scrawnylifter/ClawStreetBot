@@ -5,7 +5,58 @@ scanner → snapshot → preflight → executor chain. If the constant lives in
 more than one place, a stale copy will eventually drift past a real one and
 silently invert a gate.
 """
+import os
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# Market hours — loaded from config/market_hours.yml
+# ---------------------------------------------------------------------------
+def _load_market_hours() -> dict:
+    with open(PROJECT_ROOT / "config" / "market_hours.yml") as f:
+        return yaml.safe_load(f)
+
+_MARKET_HOURS = _load_market_hours()
+
+ET = timezone(timedelta(hours=-5))   # US/Eastern (non-DST; use America/New_York for aware)
+PDT = timezone(timedelta(hours=-7))  # US/Pacific (non-DST shorthand)
+
+# Regular session (ET)
+SESSION_OPEN = datetime.strptime(_MARKET_HOURS["regular_session"]["open"], "%H:%M").time()
+SESSION_CLOSE = datetime.strptime(_MARKET_HOURS["regular_session"]["close"], "%H:%M").time()
+
+# Ingestion windows (ET)
+INGEST_INTRADAY_START = datetime.strptime(_MARKET_HOURS["ingestion"]["intraday_start"], "%H:%M").time()
+INGEST_INTRADAY_END = datetime.strptime(_MARKET_HOURS["ingestion"]["intraday_end"], "%H:%M").time()
+INGEST_DAILY_AFTER_CLOSE = datetime.strptime(_MARKET_HOURS["ingestion"]["daily_after_close"], "%H:%M").time()
+
+# Scanner windows (ET)
+SCANNER_ORB_START = datetime.strptime(_MARKET_HOURS["scanner"]["orb_start"], "%H:%M").time()
+SCANNER_INTRADAY_END = datetime.strptime(_MARKET_HOURS["scanner"]["intraday_end"], "%H:%M").time()
+
+# NYSE holidays (parsed from config)
+NYSE_HOLIDAYS: set[date] = set()
+for _h in _MARKET_HOURS.get("holidays_2026", []):
+    NYSE_HOLIDAYS.add(date.fromisoformat(_h))
+
+
+def is_market_day(d: date | None = None) -> bool:
+    """True if d is a weekday and not an NYSE holiday."""
+    if d is None:
+        d = date.today()
+    return d.weekday() < 5 and d not in NYSE_HOLIDAYS
+
+
+def is_market_hours(et_now: time | None = None) -> bool:
+    """True if current time (ET) is within the regular session."""
+    if et_now is None:
+        et_now = datetime.now(timezone(timedelta(hours=-4 if date.today().month < 3 or date.today().month > 10 else -5))).time()
+    return SESSION_OPEN <= et_now <= SESSION_CLOSE
 
 # Maximum acceptable option bid-ask spread as a fraction of mid price.
 # (ask - bid) / mid, so symmetric around the midpoint.

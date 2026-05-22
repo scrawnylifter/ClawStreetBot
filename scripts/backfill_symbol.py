@@ -6,9 +6,9 @@ Used by:
     - manual invocation when adding/re-adding a symbol outside the YAML flow
 
 Chain:
-    1. ingest_polygon_ohlcv  --symbol $S --timeframe 1d (and 5m/15m if --all-timeframes)
-    2. ingest_polygon_options --symbol $S
-    3. backfill_historical_iv --symbol $S --days N
+    1. ingest_alpaca_ohlcv  --symbol $S --timeframe 1d (and 5m/15m if --all-timeframes)
+    2. ingest_alpaca_options --symbol $S
+    3. ingest_yfinance_fundamentals --symbol $S
     4. compute_realized_vol  --symbol $S
     5. compute_gex_dex       --symbol $S
     6. compute_iv_rank        (bulk, but cheap)
@@ -83,15 +83,15 @@ def script(name: str) -> str:
     return str(PROJECT_ROOT / "scripts" / name)
 
 
-def backfill(symbol: str, *, days_ohlcv: int, days_iv: int,
-             all_timeframes: bool, skip_options: bool, skip_iv: bool) -> None:
+def backfill(symbol: str, *, days_ohlcv: int,
+             all_timeframes: bool, skip_options: bool) -> None:
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"=== backfill_symbol  symbol={symbol}  started={started} ===")
     set_status(symbol, "running")
 
     try:
-        # 1. OHLCV
-        ohlcv_cmd = [PYTHON, script("ingest_polygon_ohlcv.py"),
+        # 1. OHLCV (Alpaca)
+        ohlcv_cmd = [PYTHON, script("ingest_alpaca_ohlcv.py"),
                      "--symbol", symbol, "--days", str(days_ohlcv)]
         if all_timeframes:
             ohlcv_cmd.append("--all-timeframes")
@@ -99,15 +99,14 @@ def backfill(symbol: str, *, days_ohlcv: int, days_iv: int,
             ohlcv_cmd.extend(["--timeframe", "1d"])
         run_step("OHLCV", ohlcv_cmd)
 
-        # 2. Options snapshot
+        # 2. Options snapshot (Alpaca)
         if not skip_options:
-            run_step("Options", [PYTHON, script("ingest_polygon_options.py"),
+            run_step("Options", [PYTHON, script("ingest_alpaca_options.py"),
                                  "--symbol", symbol])
 
-        # 3. Historical IV
-        if not skip_iv:
-            run_step("Historical IV", [PYTHON, script("backfill_historical_iv.py"),
-                                       "--symbol", symbol, "--days", str(days_iv)])
+        # 3. Fundamentals (yfinance)
+        run_step("Fundamentals", [PYTHON, script("ingest_yfinance_fundamentals.py"),
+                                  "--symbol", symbol])
 
         # 4. Realized vol
         run_step("Realized Vol", [PYTHON, script("compute_realized_vol.py"),
@@ -134,14 +133,10 @@ def main() -> int:
     parser.add_argument("symbol", help="Ticker to backfill (case-insensitive)")
     parser.add_argument("--days-ohlcv", type=int, default=730,
                         help="OHLCV backfill window in days (default 730)")
-    parser.add_argument("--days-iv", type=int, default=252,
-                        help="Historical IV backfill window in trading days (default 252)")
     parser.add_argument("--all-timeframes", action="store_true",
                         help="Also backfill 5m and 15m bars (default: 1d only)")
     parser.add_argument("--skip-options", action="store_true",
                         help="Skip options snapshot (e.g., for non-optionable underlyings)")
-    parser.add_argument("--skip-iv", action="store_true",
-                        help="Skip historical IV backfill (skip if --skip-options)")
     args = parser.parse_args()
 
     symbol = args.symbol.upper()
@@ -168,10 +163,8 @@ def main() -> int:
         backfill(
             symbol,
             days_ohlcv=args.days_ohlcv,
-            days_iv=args.days_iv,
             all_timeframes=args.all_timeframes,
             skip_options=args.skip_options,
-            skip_iv=args.skip_iv or args.skip_options,
         )
     except Exception:
         return 1

@@ -85,32 +85,32 @@ services:
 
   # Long-running daemon that long-polls Telegram getUpdates for Approve/Deny
   # button presses and writes the user's decision to market.signal_alerts.
-  # Reuses the worker image (same Python env). state/ is bind-mounted rw so
-  # the update_id offset survives restarts.
-  telegram-listener:
-    image: clawstreetbot/worker:latest
-    container_name: clawstreet-telegram-listener
-    command: ["python", "-u", "/app/scripts/telegram_callback_listener.py"]
-    env_file:
-      - .env.db
-      - .env.telegram
-    environment:
-      - POSTGRES_HOST=postgres
-      - PYTHONPATH=/app
-      - TZ=America/Los_Angeles
-    volumes:
-      - ./scripts:/app/scripts:ro
-      - ./.env.db:/app/.env.db:ro
-      - ./.env.telegram:/app/.env.telegram:ro
-      - ./state:/app/state
-    depends_on:
-      postgres:
-        condition: service_healthy
-      worker:
-        condition: service_started
-    networks:
-      - clawnet
-    restart: unless-stopped
+  # telegram-listener: archived (v1). Script moved to archive/v1-pipeline/.
+  # Will be rebuilt as part of v2 execution layer.
+  # telegram-listener:
+  #   image: clawstreetbot/worker:latest
+  #   container_name: clawstreet-telegram-listener
+  #   command: ["python", "-u", "/app/scripts/telegram_callback_listener.py"]
+  #   env_file:
+  #     - .env.db
+  #     - .env.telegram
+  #   environment:
+  #     - POSTGRES_HOST=postgres
+  #     - PYTHONPATH=/app
+  #     - TZ=America/Los_Angeles
+  #   volumes:
+  #     - ./scripts:/app/scripts:ro
+  #     - ./.env.db:/app/.env.db:ro
+  #     - ./.env.telegram:/app/.env.telegram:ro
+  #     - ./state:/app/state
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     worker:
+  #       condition: service_started
+  #   networks:
+  #     - clawnet
+  #   restart: unless-stopped
 
   # Per-endpoint allowlisting socket proxy. Unlike tecnativa's section-level
   # flags (which let CONTAINERS=1 also enable stop/kill/delete of arbitrary

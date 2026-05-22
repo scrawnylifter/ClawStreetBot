@@ -40,7 +40,7 @@ import psycopg2
 # Allow `import fetch_alpaca_snapshot` regardless of CWD (n8n runs from /).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_alpaca_snapshot import select_best_option  # noqa: E402
-from constants import MAX_SPREAD_PCT  # noqa: E402
+from constants import MAX_SPREAD_PCT, is_market_day, is_market_hours  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -524,15 +524,15 @@ def main():
                         help="Hours to look back for report (default: 24)")
     args = parser.parse_args()
 
-    # Market-hours gate: only fire during regular session (9:30–16:00 ET, weekdays).
+    # Market-hours gate: only fire during regular session (weekday + market hours via constants).
     # --report-only is exempt (read-only diagnostic).
     if not args.report_only:
         now_et = datetime.now(ET)
-        if now_et.weekday() >= 5:
-            log.info("Weekend (%s ET) — market closed, exiting silent.",
+        if not is_market_day(now_et.date()):
+            log.info("Non-market day (%s ET) — market closed, exiting silent.",
                      now_et.strftime("%a %H:%M"))
             return
-        if now_et.time() < time(9, 30) or now_et.time() >= time(16, 0):
+        if not is_market_hours(now_et.time()):
             log.info("Outside market hours (%s ET) — exiting silent.",
                      now_et.strftime("%H:%M"))
             return
