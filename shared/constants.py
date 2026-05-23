@@ -97,7 +97,7 @@ SIGNAL_TTL_MINUTES: dict[str, int] = {
     "ema_crossover": 60,       # Daily EMA cross — swing trade, more room
     "setup_scanner": 15,       # 8-gate composite with live option quotes
     "liquidity_sweep": 15,     # 5m sweep — momentum decays fast
-    "intraday_signal": 15,     # 5-min re-score — very time-sensitive
+    "daily_signal": 60,       # End-of-day composite — valid for next session
 }
 
 DEFAULT_SIGNAL_TTL_MINUTES = 15  # fallback for strategies not in the dict
