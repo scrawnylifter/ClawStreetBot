@@ -27,12 +27,16 @@ services:
     container_name: cbs-redis
     restart: unless-stopped
     command: redis-server --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env} --appendonly yes
+    environment:
+      # REDISCLI_AUTH lets redis-cli auth without leaking password in process list
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      # Use REDISCLI_AUTH env var instead of -a flag to avoid password in process list
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,20 +47,23 @@ services:
     container_name: cbs-n8n
     restart: unless-stopped
     environment:
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?Set N8N_PASSWORD in .env}
+      # n8n 2.x uses N8N_AUTH_* (N8N_BASIC_AUTH_* is deprecated)
+      N8N_AUTH_ACTIVE: "true"
+      N8N_AUTH_USERNAME: ${N8N_USER:-admin}
+      N8N_AUTH_PASSWORD: ${N8N_PASSWORD:?Set N8N_PASSWORD in .env}
       N8N_HOST: ${N8N_HOST:-localhost}
       N8N_PORT: 5678
-      N8N_PROTOCOL: https
+      N8N_PROTOCOL: http
       N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-}
       WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      # n8n uses its own database within our postgres, not shared with app data
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-clawstreetbot}
       DB_POSTGRESDB_USER: ${POSTGRES_USER:-cbs}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: n8n
       GENERIC_TIMEZONE: ${TZ:-America/Los_Angeles}
     ports:
       - "${N8N_PORT:-5678}:5678"
@@ -66,7 +73,10 @@ services:
       postgres:
         condition: service_healthy
 
-  # ── Knowledge Base ───────────────────────────────────────────
+  # ── Obsidian Knowledge Base ──────────────────────────────────
+  # NOTE: seccomp:unconfined is required for Electron apps in Docker.
+  # This container should NOT be exposed to the internet without a
+  # reverse proxy (e.g., SWAG, Caddy) with proper authentication.
   obsidian:
     image: lscr.io/linuxserver/obsidian:latest
     container_name: cbs-obsidian
@@ -85,11 +95,10 @@ services:
       - ./docs/obsidian:/config/obsidian/vaults/ClawStreetBot
     shm_size: "1gb"
     security_opt:
-      - seccomp=unconfined  # required for electron apps in Docker
+      - seccomp=unconfined
 
   # ── Layer Containers ─────────────────────────────────────────
-  # Each layer is built from the same Dockerfile template with
-  # its own requirements.txt. Add layers as they're built.
+  # Uncomment and build each layer as code is written.
 
   # 01_data:
   #   build:
