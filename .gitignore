@@ -1,37 +1,4 @@
-# Obsidian runtime / config (vault content is tracked separately if needed)
-obsidian/config/
-
-# Secrets & credentials
-.env
-.env.*
-!.env.*.example
-
-# Docker volumes (persistent DB data — managed by Docker)
-db/data/
-
-# n8n runtime state (workflows live in per-layer n8n/ dirs and ARE tracked)
-n8n/data/
-*/n8n/data/
-
-# Local listener state (Telegram update offset, etc.)
-state/
-*.key
-*.pem
-*.p12
-*.pfx
-credentials.json
-secrets.json
-secrets.yaml
-secrets.yml
-.token
-
-# API keys / tokens
-*api_key*
-*apikey*
-*access_token*
-*secret_key*
-
-# Python
+# ── Python ───────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -39,32 +6,38 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.egg
 .eggs/
-venv/
+*.egg
 .venv/
+venv/
 env/
-pip-log.txt
-pip-delete-this-directory.txt
+.env                          # NEVER commit real secrets
 
-# Jupyter Notebook
-.ipynb_checkpoints/
+# ── Docker ──────────────────────────────────────────
+# Volumes are managed by docker-compose — no local state to track
 
-# IDE / Editor
+# ── IDE / OS ─────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+Thumbs.db
 
-# Logs
-*.log
-logs/
-
-# Database
+# ── Data (large files — rescraped, not committed) ──
+*.csv
+*.parquet
 *.db
 *.sqlite3
 
-# OS
-Thumbs.db
+# ── Testing ──────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── n8n (workflows managed in UI, exported to docs/) ──
+n8n_data/
+
+# ── Obsidian workspace (personal, not shared) ───────
+docs/obsidian/.obsidian/

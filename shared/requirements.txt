@@ -1,0 +1,6 @@
+# Shared dependencies — installed in ALL layer containers
+python-dotenv>=1.0.0
+psycopg2-binary>=2.9.9
+redis>=5.0.0
+pydantic>=2.5.0
+structlog>=24.1.0

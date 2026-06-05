@@ -1,220 +1,117 @@
-services:
-  obsidian:
-    image: lscr.io/linuxserver/obsidian:latest
-    container_name: obsidian
-    env_file:
-      - .env.obsidian
-    volumes:
-      - ./obsidian/config:/config
-      - ./obsidian/vault:/vault
-    ports:
-      - "3110:3000"
-    networks:
-      - clawnet
-    restart: unless-stopped
+# ClawStreetBot v2 — Infrastructure
+# All config flows through .env (gitignored) — never hardcode credentials here.
 
+services:
+  # ── Data Layer ──────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: clawstreet-db
-    env_file:
-      - .env.db
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d
+    container_name: cbs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cbs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-clawstreetbot}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbs}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - clawnet
-    restart: unless-stopped
 
+  # ── Cache & Pub/Sub ─────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: clawstreet-redis
-    env_file:
-      - .env.db
-    command: redis-server --requirepass $$REDIS_PASSWORD --appendonly yes
-    volumes:
-      - redisdata:/data
+    container_name: cbs-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env} --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$$REDIS_PASSWORD", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - clawnet
-    restart: unless-stopped
 
-  # Idle Python container that n8n execs ingestion/compute scripts into.
-  # Project tree is bind-mounted at /app so edits land without rebuilding.
-  worker:
-    build:
-      context: .
-      dockerfile: docker/worker/Dockerfile
-    image: clawstreetbot/worker:latest
-    container_name: clawstreet-worker
-    env_file:
-      - .env.db
-      - .env.polygon
-      - .env.alpaca
-      - .env.telegram
+  # ── Workflow Engine ──────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cbs-n8n
+    restart: unless-stopped
     environment:
-      - POSTGRES_HOST=postgres
-      - PYTHONPATH=/app
-      - TZ=America/Los_Angeles
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?Set N8N_PASSWORD in .env}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-clawstreetbot}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-cbs}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      GENERIC_TIMEZONE: ${TZ:-America/Los_Angeles}
+    ports:
+      - "${N8N_PORT:-5678}:5678"
     volumes:
-      - ./01_data:/app/01_data:ro
-      - ./02_scanner:/app/02_scanner:ro
-      - ./03_alert:/app/03_alert:ro
-      - ./04_approval:/app/04_approval:ro
-      - ./05_execution:/app/05_execution:ro
-      - ./06_exit:/app/06_exit:ro
-      - ./07_reconcile:/app/07_reconcile:ro
-      - ./shared:/app/shared:ro
-      - ./admin:/app/admin:ro
-      - ./config:/app/config:ro
-      - ./db/init:/app/db/init:ro
-      - ./.env.db:/app/.env.db:ro
-      - ./.env.polygon:/app/.env.polygon:ro
-      - ./.env.alpaca:/app/.env.alpaca:ro
-      - ./.env.telegram:/app/.env.telegram:ro
+      - n8n_data:/home/node/.n8n
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - clawnet
-    restart: unless-stopped
 
-  # Long-running daemon that long-polls Telegram getUpdates for Approve/Deny
-  # button presses and writes the user's decision to market.signal_alerts.
-  # telegram-listener: archived (v1). Script moved to archive/v1-pipeline/.
-  # Will be rebuilt as part of v2 execution layer.
-  # telegram-listener:
-  #   image: clawstreetbot/worker:latest
-  #   container_name: clawstreet-telegram-listener
-  #   command: ["python", "-u", "/app/04_approval/scripts/telegram_callback_listener.py"]
-  #   env_file:
-  #     - .env.db
-  #     - .env.telegram
-  #   environment:
-  #     - POSTGRES_HOST=postgres
-  #     - PYTHONPATH=/app
-  #     - TZ=America/Los_Angeles
+  # ── Knowledge Base ───────────────────────────────────────────
+  obsidian:
+    image: lscr.io/linuxserver/obsidian:latest
+    container_name: cbs-obsidian
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1001}
+      PGID: ${PGID:-1001}
+      TZ: ${TZ:-America/Los_Angeles}
+      CUSTOM_USER: ${OBSIDIAN_USER:-cbs}
+      PASSWORD: ${OBSIDIAN_PASSWORD:?Set OBSIDIAN_PASSWORD in .env}
+    ports:
+      - "${OBSIDIAN_HTTP_PORT:-3000}:3000"
+      - "${OBSIDIAN_HTTPS_PORT:-3001}:3001"
+    volumes:
+      - obsidian_config:/config
+      - ./docs/obsidian:/config/obsidian/vaults/ClawStreetBot
+    shm_size: "1gb"
+    security_opt:
+      - seccomp=unconfined  # required for electron apps in Docker
+
+  # ── Layer Containers ─────────────────────────────────────────
+  # Each layer is built from the same Dockerfile template with
+  # its own requirements.txt. Add layers as they're built.
+
+  # 01_data:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile.layer
+  #     args:
+  #       LAYER: 01_data
+  #   container_name: cbs-01-data
+  #   restart: unless-stopped
+  #   env_file: .env
   #   volumes:
-  #     - ./04_approval:/app/04_approval:ro
+  #     - ./config:/app/config:ro
   #     - ./shared:/app/shared:ro
-  #     - ./.env.db:/app/.env.db:ro
-  #     - ./.env.telegram:/app/.env.telegram:ro
-  #     - ./state:/app/state
+  #     - ./01_data:/app/layer
   #   depends_on:
   #     postgres:
   #       condition: service_healthy
-  #     worker:
-  #       condition: service_started
-  #   networks:
-  #     - clawnet
-  #   restart: unless-stopped
-
-  # Per-endpoint allowlisting socket proxy. Unlike tecnativa's section-level
-  # flags (which let CONTAINERS=1 also enable stop/kill/delete of arbitrary
-  # containers), wollomatic/socket-proxy matches each HTTP method against a
-  # single regex. We only allow:
-  #   - GET  /_ping, /version                           (docker CLI handshake)
-  #   - GET  /containers/clawstreet-worker/json         (inspect by name)
-  #   - POST /containers/clawstreet-worker/exec         (create exec)
-  #   - POST /exec/{hex-id}/(start|resize)              (run exec)
-  # `-allowfrom` restricts the source to the n8n container by name. Every
-  # other endpoint (create, delete, stop, kill, restart, images, volumes,
-  # build, swarm, network, system, etc.) is denied.
-  docker-proxy:
-    image: wollomatic/socket-proxy:1
-    container_name: clawstreet-docker-proxy
-    command:
-      - -loglevel=info
-      - -listenip=0.0.0.0
-      - -socketpath=/var/run/docker.sock
-      - -allowfrom=clawstreet-n8n
-      # $$ is the docker-compose escape for a literal $ (regex end-anchor).
-      # Docker CLI sends HEAD /_ping during handshake; n8n's client also GETs exec/{id}/json
-      # to inspect results. Both must be allowed for `docker exec` to work end-to-end.
-      - -allowGET=^/(v[\d.]+/)?(_ping|version|containers/clawstreet-worker/json|exec/[a-f0-9]+/json)$$
-      - -allowHEAD=^/(v[\d.]+/)?(_ping|version)$$
-      - -allowPOST=^/(v[\d.]+/)?(containers/clawstreet-worker/exec|exec/[a-f0-9]+/(start|resize))$$
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    user: "65534:${DOCKER_GID:-988}"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - clawnet
-    restart: unless-stopped
-
-  # n8n reaches the Docker engine ONLY through docker-proxy. No direct
-  # /var/run/docker.sock mount, so n8n cannot spawn new containers, mount
-  # host paths, pull images, etc. — only `exec` into existing ones the
-  # proxy whitelists.
-  n8n:
-    build:
-      context: .
-      dockerfile: docker/n8n/Dockerfile
-    image: clawstreetbot/n8n:latest
-    container_name: clawstreet-n8n
-    env_file:
-      - .env.n8n
-    environment:
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - N8N_DIAGNOSTICS_ENABLED=false
-      - N8N_RUNNERS_ENABLED=true
-      - N8N_RUNNERS_GRANT_TOKEN_TTL=120
-      - N8N_SECURE_COOKIE=false
-      # Disable insights module — its compaction service contends with cron for the SQLite
-      # write lock, causing "Missed execution deadline" skips on minute-level crons.
-      - N8N_DISABLED_MODULES=insights
-      # Cap execution history pruning load (default keeps everything → unbounded WAL growth).
-      - EXECUTIONS_DATA_PRUNE=true
-      - EXECUTIONS_DATA_MAX_AGE=168
-      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
-      # Raise SQLite connection pool so cron/triggers don't starve behind background jobs.
-      - DB_SQLITE_POOL_SIZE=10
-      # Extend SQLite busy timeout (default 5s) so pruning/cron don't timeout on lock contention.
-      - DB_SQLITE_BUSY_TIMEOUT=15000
-      # Re-enable Execute Command and Local File Trigger nodes (disabled by default in n8n v2.x).
-      # Setting NODES_EXCLUDE to an empty array overrides the breaking-change rule.
-      - NODES_EXCLUDE=[]
-      # Routes the docker CLI inside this container through the proxy.
-      - DOCKER_HOST=tcp://docker-proxy:2375
-    ports:
-      - "${N8N_HOST_PORT:-5678}:5678"
-    volumes:
-      - n8n_data:/home/node/.n8n
-      - ./01_data/n8n:/workflows/01_data:ro
-      - ./02_scanner/n8n:/workflows/02_scanner:ro
-      - ./03_alert/n8n:/workflows/03_alert:ro
-      - ./04_approval/n8n:/workflows/04_approval:ro
-      - ./05_execution/n8n:/workflows/05_execution:ro
-      - ./06_exit/n8n:/workflows/06_exit:ro
-      - ./07_reconcile/n8n:/workflows/07_reconcile:ro
-    depends_on:
-      - worker
-      - docker-proxy
-    networks:
-      - clawnet
-    restart: unless-stopped
+  #     redis:
+  #       condition: service_healthy
 
 volumes:
-  pgdata:
-  redisdata:
+  postgres_data:
+  redis_data:
   n8n_data:
-
-networks:
-  clawnet:
-    driver: bridge
+  obsidian_config:

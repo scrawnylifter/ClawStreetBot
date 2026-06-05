@@ -1,0 +1,30 @@
+# ClawStreetBot v2 — Layer Container Template
+# Each layer (01_data through 07_reconcile) builds from this Dockerfile.
+# The LAYER build arg copies that layer's requirements.txt and source code.
+
+ARG LAYER
+
+FROM python:3.12-slim AS base
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps
+ARG LAYER
+COPY ${LAYER}/requirements.txt /app/layer/requirements.txt
+COPY shared/requirements.txt /app/shared/requirements.txt
+
+RUN pip install --no-cache-dir -r /app/shared/requirements.txt && \
+    pip install --no-cache-dir -r /app/layer/requirements.txt
+
+# Copy source
+COPY config/ /app/config/
+COPY shared/ /app/shared/
+COPY ${LAYER}/ /app/layer/
+
+# Default entrypoint — override in docker-compose per layer
+CMD ["python", "-m", "layer.main"]
