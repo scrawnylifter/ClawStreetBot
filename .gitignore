@@ -11,7 +11,10 @@ build/
 .venv/
 venv/
 env/
-.env                          # NEVER commit real secrets
+# NEVER commit real secrets
+.env
+.env.*
+!.env.example
 
 # ── Docker ──────────────────────────────────────────
 # Volumes are managed by docker-compose — no local state to track

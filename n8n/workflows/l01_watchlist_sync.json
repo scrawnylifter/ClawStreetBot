@@ -1,0 +1,62 @@
+{
+  "id": "l01_watchlist_sync_0001",
+  "name": "L01 Data — watchlist sync",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": [
+          {
+            "expression": "0 */1 * * * *"
+          }
+        ],
+        "timezone": "America/New_York"
+      },
+      "id": "schedule-trigger-node",
+      "name": "Every 60 seconds",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://cbs-pipeline-api:8000/run",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"module\": \"cbs.l01_data\", \"job\": \"watchlist_sync\"}",
+        "options": {
+          "timeout": 310000,
+          "response": {
+            "response": {
+              "responseFormat": "json",
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "http-request-node",
+      "name": "Run watchlist_sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Every 60 seconds": {
+      "main": [
+        [
+          {
+            "node": "Run watchlist_sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "_comment": "L01 watchlist sync — polls Alpaca watchlists every 60s and syncs to Postgres market.watchlist. Depends on cbs-pipeline-api sidecar for job execution."
+}

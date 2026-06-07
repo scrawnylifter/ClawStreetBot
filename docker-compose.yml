@@ -64,7 +64,7 @@ services:
       DB_POSTGRESDB_USER: ${POSTGRES_USER:-cbs}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_POSTGRESDB_SCHEMA: n8n
-      GENERIC_TIMEZONE: ${TZ:-America/Los_Angeles}
+      GENERIC_TIMEZONE: ${TZ:-America/New_York}
     ports:
       - "${N8N_PORT:-5678}:5678"
     volumes:
@@ -84,12 +84,18 @@ services:
     environment:
       PUID: ${PUID:-1001}
       PGID: ${PGID:-1001}
-      TZ: ${TZ:-America/Los_Angeles}
+      TZ: ${TZ:-America/New_York}
       CUSTOM_USER: ${OBSIDIAN_USER:-cbs}
       PASSWORD: ${OBSIDIAN_PASSWORD:?Set OBSIDIAN_PASSWORD in .env}
     ports:
       - "${OBSIDIAN_HTTP_PORT:-3000}:3000"
       - "${OBSIDIAN_HTTPS_PORT:-3001}:3001"
+      # Local REST API (coddingtonbear/obsidian-local-rest-api) — consumed by the
+      # Obsidian MCP server. Bound to 127.0.0.1 on the host: localhost-only, never
+      # exposed on the LAN. The plugin binds 0.0.0.0 *inside* the container so the
+      # forward works; the API key still gates every request.
+      - "127.0.0.1:${OBSIDIAN_REST_HTTP_PORT:-27123}:27123"
+      - "127.0.0.1:${OBSIDIAN_REST_HTTPS_PORT:-27124}:27124"
     volumes:
       - obsidian_config:/config
       - ./docs/obsidian:/config/obsidian/vaults/ClawStreetBot
@@ -98,26 +104,29 @@ services:
       - seccomp=unconfined
 
   # ── Layer Containers ─────────────────────────────────────────
-  # Uncomment and build each layer as code is written.
+  # Build and run each layer as code is written.
 
-  # 01_data:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile.layer
-  #     args:
-  #       LAYER: 01_data
-  #   container_name: cbs-01-data
-  #   restart: unless-stopped
-  #   env_file: .env
-  #   volumes:
-  #     - ./config:/app/config:ro
-  #     - ./shared:/app/shared:ro
-  #     - ./01_data:/app/layer
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
+  01_data:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.layer
+      args:
+        LAYER: 01_data
+    container_name: cbs-01-data
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Eastern Time across all services (matches SSOT settings.tz default)
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - ./config:/app/config:ro
+      - ./shared:/app/shared:ro
+      - ./01_data:/app/layer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
