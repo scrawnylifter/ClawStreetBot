@@ -1,0 +1,2 @@
+# L01 Data Layer — Python dependencies (installed on top of shared/)
+alpaca-py>=0.40,<1.0

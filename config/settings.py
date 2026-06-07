@@ -57,6 +57,7 @@ class Settings:
     # ── Application ──────────────────────────────────────
     log_level: str = "INFO"
     environment: str = "development"  # development | staging | production
+    tz: str = "America/New_York"
 
     @property
     def postgres_dsn(self) -> str:
@@ -125,6 +126,7 @@ class Settings:
             telegram_chat_id=require("TELEGRAM_CHAT_ID", ""),
             log_level=require("LOG_LEVEL", "INFO"),
             environment=require("ENVIRONMENT", "development"),
+            tz=require("TZ", "America/New_York"),
         )
 
         # Validate required secrets are non-empty
